@@ -51,6 +51,9 @@ public:
 
   const Eigen::Vector2d & origin() const noexcept { return origin_; }
 
+  /// Moves the window; size and resolution are unchanged, so cell indices stay valid.
+  void set_origin(const Eigen::Vector2d & origin) noexcept { origin_ = origin; }
+
   std::size_t cell_count() const noexcept
   {
     if (size_x_ <= 0 || size_y_ <= 0) {

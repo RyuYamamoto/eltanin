@@ -157,3 +157,28 @@ TEST(MapGeometry, CellCountDoesNotOverflowIntArithmetic)
   EXPECT_EQ(large.index(3999, 3999), 15999999u);
   EXPECT_EQ(large.index(0, 3999), 15996000u);
 }
+
+TEST(MapGeometry, SetOriginMovesTheWindowOnly)
+{
+  MapGeometry geometry = sample_geometry();
+  geometry.set_origin(Vector2d{3.0, -4.0});
+
+  EXPECT_EQ(geometry.origin().x(), 3.0);
+  EXPECT_EQ(geometry.origin().y(), -4.0);
+  EXPECT_EQ(geometry.size_x(), 10);
+  EXPECT_EQ(geometry.size_y(), 8);
+  EXPECT_EQ(geometry.resolution(), 0.05);
+  EXPECT_EQ(geometry, MapGeometry(10, 8, 0.05, Vector2d{3.0, -4.0}));
+}
+
+TEST(MapGeometry, SetOriginShiftsTheWorldMapping)
+{
+  MapGeometry geometry = sample_geometry();
+  geometry.set_origin(Vector2d{0.0, 0.0});
+
+  const auto index = geometry.world_to_map(Vector2d{0.025, 0.025});
+  ASSERT_TRUE(index.has_value());
+  EXPECT_EQ(index->x, 0);
+  EXPECT_EQ(index->y, 0);
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0, -2.0}).has_value());
+}

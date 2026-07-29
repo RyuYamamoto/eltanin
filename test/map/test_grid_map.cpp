@@ -138,3 +138,19 @@ TEST(GridMap, LargeMapAllocatesEveryCell)
   EXPECT_EQ(map.cell_count(), 16000000u);
   EXPECT_EQ(map(3999, 3999), eltanin::map::FREE_SPACE);
 }
+
+TEST(GridMap, SetOriginKeepsTheCellsInPlace)
+{
+  Costmap map(sample_geometry(), eltanin::map::FREE_SPACE);
+  map(2, 1) = eltanin::map::LETHAL_OBSTACLE;
+  const std::uint8_t * const before = map.data().data();
+
+  map.set_origin(Vector2d{5.0, -6.0});
+
+  EXPECT_EQ(map.data().data(), before);
+  EXPECT_EQ(map.cell_count(), 24u);
+  EXPECT_EQ(map(2, 1), eltanin::map::LETHAL_OBSTACLE);
+  EXPECT_EQ(map.geometry().origin().x(), 5.0);
+  EXPECT_EQ(map.geometry().origin().y(), -6.0);
+  EXPECT_EQ(map.geometry().resolution(), 0.1);
+}
