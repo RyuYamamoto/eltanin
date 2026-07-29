@@ -1,0 +1,105 @@
+// Copyright 2026 RyuYamamoto.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License
+
+#include <eltanin/core/geometry.hpp>
+
+#include <gtest/gtest.h>
+
+namespace
+{
+
+using eltanin::closest_point_on_segment;
+using eltanin::distance_to_segment;
+using eltanin::Vec2;
+
+constexpr double kTol = 1e-12;
+
+}  // namespace
+
+TEST(Geometry, FootInsideSegment)
+{
+  const Vec2 a{0.0, 0.0};
+  const Vec2 b{2.0, 0.0};
+  const Vec2 p{1.0, 1.5};
+
+  const Vec2 closest = closest_point_on_segment(p, a, b);
+  EXPECT_NEAR(closest.x(), 1.0, kTol);
+  EXPECT_NEAR(closest.y(), 0.0, kTol);
+  EXPECT_NEAR(distance_to_segment(p, a, b), 1.5, kTol);
+}
+
+TEST(Geometry, FootBeyondStartClampsToA)
+{
+  const Vec2 a{0.0, 0.0};
+  const Vec2 b{2.0, 0.0};
+  const Vec2 p{-3.0, 4.0};
+
+  const Vec2 closest = closest_point_on_segment(p, a, b);
+  EXPECT_NEAR(closest.x(), 0.0, kTol);
+  EXPECT_NEAR(closest.y(), 0.0, kTol);
+  EXPECT_NEAR(distance_to_segment(p, a, b), 5.0, kTol);
+}
+
+TEST(Geometry, FootBeyondEndClampsToB)
+{
+  const Vec2 a{0.0, 0.0};
+  const Vec2 b{2.0, 0.0};
+  const Vec2 p{5.0, 4.0};
+
+  const Vec2 closest = closest_point_on_segment(p, a, b);
+  EXPECT_NEAR(closest.x(), 2.0, kTol);
+  EXPECT_NEAR(closest.y(), 0.0, kTol);
+  EXPECT_NEAR(distance_to_segment(p, a, b), 5.0, kTol);
+}
+
+TEST(Geometry, DegenerateSegmentMeasuresToEndpoint)
+{
+  const Vec2 a{1.0, 1.0};
+  const Vec2 p{4.0, 5.0};
+
+  const Vec2 closest = closest_point_on_segment(p, a, a);
+  EXPECT_NEAR(closest.x(), 1.0, kTol);
+  EXPECT_NEAR(closest.y(), 1.0, kTol);
+  EXPECT_NEAR(distance_to_segment(p, a, a), 5.0, kTol);
+}
+
+TEST(Geometry, PointOnSegmentHasZeroDistance)
+{
+  const Vec2 a{-1.0, -1.0};
+  const Vec2 b{3.0, 3.0};
+  EXPECT_NEAR(distance_to_segment(Vec2{1.0, 1.0}, a, b), 0.0, kTol);
+  EXPECT_NEAR(distance_to_segment(a, a, b), 0.0, kTol);
+  EXPECT_NEAR(distance_to_segment(b, a, b), 0.0, kTol);
+}
+
+TEST(Geometry, DistanceAgreesWithClosestPoint)
+{
+  const Vec2 a{-2.0, 0.5};
+  const Vec2 b{1.5, 3.0};
+  for (int i = -20; i <= 20; ++i) {
+    for (int j = -20; j <= 20; ++j) {
+      const Vec2 p{0.4 * static_cast<double>(i), 0.3 * static_cast<double>(j)};
+      const double from_closest = (p - closest_point_on_segment(p, a, b)).norm();
+      EXPECT_NEAR(distance_to_segment(p, a, b), from_closest, kTol);
+    }
+  }
+}
+
+TEST(Geometry, ClosestPointIsSymmetricInSegmentOrientation)
+{
+  const Vec2 a{0.0, 0.0};
+  const Vec2 b{2.0, 1.0};
+  const Vec2 p{0.3, 1.7};
+  EXPECT_NEAR(distance_to_segment(p, a, b), distance_to_segment(p, b, a), kTol);
+}

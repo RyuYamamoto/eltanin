@@ -1,0 +1,3 @@
+add_executable(eltanin_load_map_summary load_map_summary.cpp)
+target_link_libraries(eltanin_load_map_summary PRIVATE eltanin::map_io)
+target_compile_options(eltanin_load_map_summary PRIVATE ${ELTANIN_WARNING_FLAGS})

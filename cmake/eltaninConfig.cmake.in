@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Eigen3 3.4 NO_MODULE)
+
+# eltanin_map_io links yaml-cpp privately; the exported target still records it via LINK_ONLY.
+find_dependency(yaml-cpp)
+
+include("${CMAKE_CURRENT_LIST_DIR}/eltaninTargets.cmake")
+
+check_required_components(eltanin)
