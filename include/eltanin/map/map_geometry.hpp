@@ -81,22 +81,14 @@ public:
                        (static_cast<double>(my) + 0.5) * resolution_};
   }
 
-  /// nullopt when the point lies outside the map.
+  /// The only world-to-cell conversion; nullopt when the point lies outside the map.
   std::optional<MapIndex> world_to_map(const Eigen::Vector2d & world) const noexcept
   {
-    const MapIndex index = world_to_map_no_bounds(world);
+    const MapIndex index = floor_to_index(world);
     if (!in_bounds(index.x, index.y)) {
       return std::nullopt;
     }
     return index;
-  }
-
-  /// Floor-based conversion without a bounds check, for deriving region borders before clamping.
-  MapIndex world_to_map_no_bounds(const Eigen::Vector2d & world) const noexcept
-  {
-    const double fx = std::floor((world.x() - origin_.x()) / resolution_);
-    const double fy = std::floor((world.y() - origin_.y()) / resolution_);
-    return MapIndex{to_int_saturating(fx), to_int_saturating(fy)};
   }
 
   bool operator==(const MapGeometry & rhs) const noexcept
@@ -108,6 +100,13 @@ public:
   bool operator!=(const MapGeometry & rhs) const noexcept { return !(*this == rhs); }
 
 private:
+  MapIndex floor_to_index(const Eigen::Vector2d & world) const noexcept
+  {
+    const double fx = std::floor((world.x() - origin_.x()) / resolution_);
+    const double fy = std::floor((world.y() - origin_.y()) / resolution_);
+    return MapIndex{to_int_saturating(fx), to_int_saturating(fy)};
+  }
+
   /// Guards against undefined behaviour when casting an out-of-int-range or NaN double.
   static int to_int_saturating(double value) noexcept
   {

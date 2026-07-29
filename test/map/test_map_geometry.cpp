@@ -24,7 +24,6 @@ namespace
 
 using Eigen::Vector2d;
 using eltanin::map::MapGeometry;
-using eltanin::map::MapIndex;
 
 constexpr double kTol = 1e-12;
 
@@ -109,24 +108,23 @@ TEST(MapGeometry, NegativeOffsetIsDetectedAsOutOfBounds)
   EXPECT_TRUE(geometry.world_to_map(Vector2d{-1.0, -2.0}).has_value());
 }
 
-TEST(MapGeometry, UnboundedConversionReturnsNegativeIndices)
+TEST(MapGeometry, PointsBeyondEitherEdgeAreOutOfBounds)
 {
   const MapGeometry geometry = sample_geometry();
-  const MapIndex index = geometry.world_to_map_no_bounds(Vector2d{-1.0 - 0.06, -2.0 - 0.11});
-  EXPECT_EQ(index.x, -2);
-  EXPECT_EQ(index.y, -3);
-
-  const MapIndex beyond = geometry.world_to_map_no_bounds(Vector2d{-1.0 + 0.57, -2.0 + 0.46});
-  EXPECT_EQ(beyond.x, 11);
-  EXPECT_EQ(beyond.y, 9);
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 - 0.06, -2.0 - 0.11}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 + 0.57, -2.0 + 0.46}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 + 0.52, -2.0 + 0.2}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 + 0.2, -2.0 + 0.43}).has_value());
+  EXPECT_TRUE(geometry.world_to_map(Vector2d{-1.0 + 0.2, -2.0 + 0.2}).has_value());
 }
 
-TEST(MapGeometry, UnboundedConversionSaturatesInsteadOfOverflowing)
+TEST(MapGeometry, ExtremeCoordinatesAreRejectedWithoutOverflow)
 {
   const MapGeometry geometry = sample_geometry();
-  const MapIndex huge = geometry.world_to_map_no_bounds(Vector2d{1e18, -1e18});
-  EXPECT_EQ(huge.x, std::numeric_limits<int>::max());
-  EXPECT_EQ(huge.y, std::numeric_limits<int>::min());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{1e18, -1e18}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1e300, 1e300}).has_value());
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{nan, nan}).has_value());
 }
 
 TEST(MapGeometry, InBoundsAtCornersAndOneCellOutside)

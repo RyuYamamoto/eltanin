@@ -323,13 +323,14 @@ navyu の衝突判定は `99 < cost` の単一しきい値 (`costmap_helper.cpp:
 | 3 値の列挙子 | nav2 の距離帯の語 `Free` / `Circumscribed` / `Inscribed` (4 章) |
 | 角度 | `angles` パッケージの `normalize_angle` / `normalize_angle_positive` / `shortest_angular_distance` |
 | マップ YAML の内容 | nav2_map_server の `LoadParameters` / `load_map_yaml()`。`MapMetadata` は使わない (ROS の `nav_msgs/MapMetaData` は幾何情報を指す語であり、うちの `MapGeometry` がそれに相当する) |
-| 範囲検査なしの座標変換 | nav2 の `Costmap2D::worldToMapNoBounds` に合わせ `world_to_map_no_bounds` |
+| クランプする座標変換を将来足す場合 | nav2 の `Costmap2D::worldToMapEnforceBounds` に合わせる (13 章 5 項) |
 
 ### 9.1 やらないこと
 
 | 禁止 | 理由 |
 |---|---|
 | 自前の数学定数を公開する (`kPi` など) | C++20 に `std::numbers::pi` がある。標準にあるものを再発明しない |
+| 範囲検査を省いた座標変換を公開する | 呼び出し側がクランプを忘れると範囲外アクセスに直行する。`world_to_map()` の `optional` か、クランプ済みを返す形にする |
 | 定数の `k` 前置 (`kInflationRadius`) | navyu を含むこのプロジェクトの既存コードに前例がない。定数は `UPPER_SNAKE` |
 | 他言語由来の API 名 (`get_or` = Rust、`make_like` = numpy) | C++ / ROS の語彙で書く。`get().value_or()` や既存コンストラクタで足りる |
 | 依存ライブラリの型に別名を付ける | `Eigen::Vector2d` はそのまま使う。`Vec2` のような短縮別名を挟むと出自が読めなくなる |
@@ -468,5 +469,9 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 2. **距離帯とコスト符号化の区別**: 3 章の表を参照。距離では「向き次第」の帯が「必ず衝突」の帯を包含するが、コスト値では 2 つの区間は互いに素である。区別せずに読むと「入れ子になっていること」を検証しようとして混乱する。
 3. **ゴールデン比較には `write_pgm()` を使える**: `map_io::write_pgm()` はセル値をそのまま書き出す debug dump であり、`load_map` の逆変換ではない。`253` / `254` / `255` がそのまま出る。膨張結果の回帰テストとデバッグ可視化に使える。読み戻しは `read_pgm()` (しきい値変換を通さない)。
 4. **単位**: `InflationCostModel::cost_at_distance()` の引数は [m]。近傍展開でセル単位のユークリッド距離を得たら `resolution` を掛けてから渡す。単位を API 境界で混ぜないこと (navyu の `inflation_layer.hpp` の失敗)。
-5. **`world_to_map_no_bounds()` を使う**: ROI 境界をセル座標で計算するとき、マップ外にはみ出した負のインデックスを一度得る必要がある。`MapGeometry::world_to_map_no_bounds()` がそれを提供する (nav2 `Costmap2D::worldToMapNoBounds` と同じ役割)。**自前で `floor` を書かないこと** (座標変換の一元化が破れる)。
+5. **ROI をセル座標で必要としたら `MapGeometry` に足す**: 公開されている world → cell 変換は `world_to_map()` (範囲外は `nullopt`) **だけ**である。範囲検査なしの生変換は公開していない。負のインデックスをそのまま返す API は、呼び出し側がクランプを忘れたときに範囲外アクセスへ直行するため、利用者が現れる前に置かない方針にした (9.2)。
+
+   T2 が「world 座標の窓をクランプ済みのセル矩形に変換する」操作を必要としたら、**`MapGeometry` にメンバとして追加する**こと。nav2 の `Costmap2D::worldToMapEnforceBounds` に相当する形 (常にマップ内へクランプして返す) か、矩形ごと返す形 (窓がマップと交差しなければ `nullopt`) のいずれかが素直である。後者の方が「クランプ忘れ」が起こりえないぶん安全。
+
+   **`MapGeometry` の外で `std::floor((wx - origin_x) / resolution)` を書かないこと。** これを許すと navyu の 5 箇所重複が再発する。変換の実装が `MapGeometry` の中にしか無い状態を維持する。
 6. **`NO_INFORMATION` の扱い**: `CostTraversabilityModel` は `unknown_is_free` フラグで分岐する。膨張処理側でも未知セルの扱いを設定として一元化し、全経路で一貫させること (navyu は内接円分岐で未知の扱いが抜けていた)。
