@@ -16,19 +16,18 @@
 #define ELTANIN__CORE__ANGLE_HPP_
 
 #include <cmath>
+#include <numbers>
 
 namespace eltanin
 {
 
-inline constexpr double kPi = 3.14159265358979323846;
-inline constexpr double kTwoPi = 2.0 * kPi;
-
 /// Normalize to (-pi, pi]. Correct in one call for any |angle|; NaN for non-finite input.
 inline double normalize_angle(double angle)
 {
-  const double r = std::remainder(angle, kTwoPi);
-  if (r <= -kPi) {
-    return r + kTwoPi;
+  constexpr double two_pi = 2.0 * std::numbers::pi;
+  const double r = std::remainder(angle, two_pi);
+  if (r <= -std::numbers::pi) {
+    return r + two_pi;
   }
   return r;
 }
@@ -36,11 +35,12 @@ inline double normalize_angle(double angle)
 /// Normalize to [0, 2*pi). NaN for non-finite input.
 inline double normalize_angle_positive(double angle)
 {
-  double r = std::fmod(angle, kTwoPi);
+  constexpr double two_pi = 2.0 * std::numbers::pi;
+  double r = std::fmod(angle, two_pi);
   if (r < 0.0) {
-    r += kTwoPi;
+    r += two_pi;
   }
-  if (r >= kTwoPi) {
+  if (r >= two_pi) {
     r = 0.0;
   }
   return r;

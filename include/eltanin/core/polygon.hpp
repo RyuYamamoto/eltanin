@@ -32,32 +32,31 @@ class Polygon2D
 public:
   Polygon2D() = default;
 
-  explicit Polygon2D(std::vector<Vec2> vertices) : vertices_(std::move(vertices)) {}
+  explicit Polygon2D(std::vector<Eigen::Vector2d> vertices) : vertices_(std::move(vertices)) {}
 
-  Polygon2D(std::initializer_list<Vec2> vertices) : vertices_(vertices) {}
+  Polygon2D(std::initializer_list<Eigen::Vector2d> vertices) : vertices_(vertices) {}
 
-  const std::vector<Vec2> & vertices() const noexcept { return vertices_; }
+  const std::vector<Eigen::Vector2d> & vertices() const noexcept { return vertices_; }
 
   std::size_t size() const noexcept { return vertices_.size(); }
 
   bool empty() const noexcept { return vertices_.empty(); }
 
-  const Vec2 & operator[](std::size_t i) const { return vertices_[i]; }
+  const Eigen::Vector2d & operator[](std::size_t i) const { return vertices_[i]; }
 
   auto begin() const noexcept { return vertices_.begin(); }
 
   auto end() const noexcept { return vertices_.end(); }
 
-  void push_back(const Vec2 & vertex) { vertices_.push_back(vertex); }
-
-  void clear() noexcept { vertices_.clear(); }
+  void push_back(const Eigen::Vector2d & vertex) { vertices_.push_back(vertex); }
 
 private:
-  std::vector<Vec2> vertices_;
+  std::vector<Eigen::Vector2d> vertices_;
 };
 
 /// Crossing-number containment, valid for convex and concave polygons and independent of winding.
-bool contains(const Polygon2D & polygon, const Vec2 & point, double edge_tolerance = 1e-9);
+bool contains(
+  const Polygon2D & polygon, const Eigen::Vector2d & point, double edge_tolerance = 1e-9);
 
 /// Shoelace signed area; positive for counter-clockwise winding.
 double signed_area(const Polygon2D & polygon);

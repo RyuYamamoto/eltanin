@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <numbers>
 #include <utility>
 #include <vector>
 
@@ -25,23 +26,23 @@ namespace
 {
 
 using eltanin::contains;
-using eltanin::kPi;
 using eltanin::Polygon2D;
 using eltanin::Pose2D;
 using eltanin::signed_area;
 using eltanin::Transform2D;
-using eltanin::Vec2;
+using Eigen::Vector2d;
 
+constexpr double kPi = std::numbers::pi;
 constexpr double kTol = 1e-12;
 
 Polygon2D unit_square_ccw()
 {
-  return Polygon2D{Vec2{0.0, 0.0}, Vec2{1.0, 0.0}, Vec2{1.0, 1.0}, Vec2{0.0, 1.0}};
+  return Polygon2D{Vector2d{0.0, 0.0}, Vector2d{1.0, 0.0}, Vector2d{1.0, 1.0}, Vector2d{0.0, 1.0}};
 }
 
 Polygon2D reversed(const Polygon2D & polygon)
 {
-  std::vector<Vec2> vertices = polygon.vertices();
+  std::vector<Vector2d> vertices = polygon.vertices();
   std::reverse(vertices.begin(), vertices.end());
   return Polygon2D(std::move(vertices));
 }
@@ -50,47 +51,47 @@ Polygon2D reversed(const Polygon2D & polygon)
 Polygon2D l_shape()
 {
   return Polygon2D{
-    Vec2{0.0, 0.0}, Vec2{2.0, 0.0}, Vec2{2.0, 1.0},
-    Vec2{1.0, 1.0}, Vec2{1.0, 2.0}, Vec2{0.0, 2.0}};
+    Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{2.0, 1.0},
+    Vector2d{1.0, 1.0}, Vector2d{1.0, 2.0}, Vector2d{0.0, 2.0}};
 }
 
 }  // namespace
 
 TEST(Polygon, DegeneratePolygonNeverContains)
 {
-  EXPECT_FALSE(contains(Polygon2D{}, Vec2{0.0, 0.0}));
-  EXPECT_FALSE(contains(Polygon2D{Vec2{0.0, 0.0}}, Vec2{0.0, 0.0}));
-  EXPECT_FALSE(contains(Polygon2D{Vec2{0.0, 0.0}, Vec2{1.0, 0.0}}, Vec2{0.5, 0.0}));
+  EXPECT_FALSE(contains(Polygon2D{}, Vector2d{0.0, 0.0}));
+  EXPECT_FALSE(contains(Polygon2D{Vector2d{0.0, 0.0}}, Vector2d{0.0, 0.0}));
+  EXPECT_FALSE(contains(Polygon2D{Vector2d{0.0, 0.0}, Vector2d{1.0, 0.0}}, Vector2d{0.5, 0.0}));
 }
 
 TEST(Polygon, ConvexContainment)
 {
   const Polygon2D square = unit_square_ccw();
-  EXPECT_TRUE(contains(square, Vec2{0.5, 0.5}));
-  EXPECT_FALSE(contains(square, Vec2{1.5, 0.5}));
-  EXPECT_FALSE(contains(square, Vec2{-0.1, 0.5}));
-  EXPECT_FALSE(contains(square, Vec2{0.5, 1.0001}));
+  EXPECT_TRUE(contains(square, Vector2d{0.5, 0.5}));
+  EXPECT_FALSE(contains(square, Vector2d{1.5, 0.5}));
+  EXPECT_FALSE(contains(square, Vector2d{-0.1, 0.5}));
+  EXPECT_FALSE(contains(square, Vector2d{0.5, 1.0001}));
 }
 
 TEST(Polygon, BoundaryAndVerticesAreInside)
 {
   const Polygon2D square = unit_square_ccw();
-  EXPECT_TRUE(contains(square, Vec2{0.0, 0.5}));
-  EXPECT_TRUE(contains(square, Vec2{0.5, 0.0}));
-  EXPECT_TRUE(contains(square, Vec2{1.0, 0.5}));
-  EXPECT_TRUE(contains(square, Vec2{0.5, 1.0}));
-  EXPECT_TRUE(contains(square, Vec2{0.0, 0.0}));
-  EXPECT_TRUE(contains(square, Vec2{1.0, 1.0}));
+  EXPECT_TRUE(contains(square, Vector2d{0.0, 0.5}));
+  EXPECT_TRUE(contains(square, Vector2d{0.5, 0.0}));
+  EXPECT_TRUE(contains(square, Vector2d{1.0, 0.5}));
+  EXPECT_TRUE(contains(square, Vector2d{0.5, 1.0}));
+  EXPECT_TRUE(contains(square, Vector2d{0.0, 0.0}));
+  EXPECT_TRUE(contains(square, Vector2d{1.0, 1.0}));
 }
 
 TEST(Polygon, ConcaveContainment)
 {
   const Polygon2D shape = l_shape();
-  EXPECT_TRUE(contains(shape, Vec2{0.5, 0.5}));
-  EXPECT_TRUE(contains(shape, Vec2{1.5, 0.5}));
-  EXPECT_TRUE(contains(shape, Vec2{0.5, 1.5}));
-  EXPECT_FALSE(contains(shape, Vec2{1.5, 1.5}));
-  EXPECT_TRUE(contains(shape, Vec2{1.0, 1.0}));
+  EXPECT_TRUE(contains(shape, Vector2d{0.5, 0.5}));
+  EXPECT_TRUE(contains(shape, Vector2d{1.5, 0.5}));
+  EXPECT_TRUE(contains(shape, Vector2d{0.5, 1.5}));
+  EXPECT_FALSE(contains(shape, Vector2d{1.5, 1.5}));
+  EXPECT_TRUE(contains(shape, Vector2d{1.0, 1.0}));
 }
 
 TEST(Polygon, ContainmentIsIndependentOfWinding)
@@ -100,7 +101,7 @@ TEST(Polygon, ContainmentIsIndependentOfWinding)
     const Polygon2D flipped = reversed(shape);
     for (int i = -5; i <= 25; ++i) {
       for (int j = -5; j <= 25; ++j) {
-        const Vec2 p{0.1 * static_cast<double>(i), 0.1 * static_cast<double>(j)};
+        const Vector2d p{0.1 * static_cast<double>(i), 0.1 * static_cast<double>(j)};
         EXPECT_EQ(contains(shape, p), contains(flipped, p)) << "p=" << p.transpose();
       }
     }
@@ -109,12 +110,13 @@ TEST(Polygon, ContainmentIsIndependentOfWinding)
 
 TEST(Polygon, HorizontalRayThroughVerticesIsNotDoubleCounted)
 {
-  const Polygon2D diamond{Vec2{-1.0, 0.0}, Vec2{0.0, -1.0}, Vec2{1.0, 0.0}, Vec2{0.0, 1.0}};
-  EXPECT_TRUE(contains(diamond, Vec2{0.0, 0.0}));
-  EXPECT_FALSE(contains(diamond, Vec2{2.0, 0.0}));
-  EXPECT_FALSE(contains(diamond, Vec2{-2.0, 0.0}));
-  EXPECT_TRUE(contains(diamond, Vec2{-1.0, 0.0}));
-  EXPECT_TRUE(contains(diamond, Vec2{1.0, 0.0}));
+  const Polygon2D diamond{
+    Vector2d{-1.0, 0.0}, Vector2d{0.0, -1.0}, Vector2d{1.0, 0.0}, Vector2d{0.0, 1.0}};
+  EXPECT_TRUE(contains(diamond, Vector2d{0.0, 0.0}));
+  EXPECT_FALSE(contains(diamond, Vector2d{2.0, 0.0}));
+  EXPECT_FALSE(contains(diamond, Vector2d{-2.0, 0.0}));
+  EXPECT_TRUE(contains(diamond, Vector2d{-1.0, 0.0}));
+  EXPECT_TRUE(contains(diamond, Vector2d{1.0, 0.0}));
 }
 
 TEST(Polygon, SignedAreaSignFollowsWinding)
@@ -128,8 +130,8 @@ TEST(Polygon, SignedAreaSignFollowsWinding)
 TEST(Polygon, SignedAreaOfDegenerateIsZero)
 {
   EXPECT_NEAR(signed_area(Polygon2D{}), 0.0, kTol);
-  EXPECT_NEAR(signed_area(Polygon2D{Vec2{0.0, 0.0}, Vec2{1.0, 1.0}}), 0.0, kTol);
-  const Polygon2D collinear{Vec2{0.0, 0.0}, Vec2{1.0, 0.0}, Vec2{2.0, 0.0}};
+  EXPECT_NEAR(signed_area(Polygon2D{Vector2d{0.0, 0.0}, Vector2d{1.0, 1.0}}), 0.0, kTol);
+  const Polygon2D collinear{Vector2d{0.0, 0.0}, Vector2d{1.0, 0.0}, Vector2d{2.0, 0.0}};
   EXPECT_NEAR(signed_area(collinear), 0.0, kTol);
 }
 
@@ -145,8 +147,9 @@ TEST(Polygon, TransformByIdentityIsUnchanged)
 
 TEST(Polygon, TransformMovesAndRotates)
 {
-  const Polygon2D footprint{Vec2{-0.5, -0.3}, Vec2{0.5, -0.3}, Vec2{0.5, 0.3}, Vec2{-0.5, 0.3}};
-  const Pose2D pose{Vec2{2.0, 1.0}, 0.5 * kPi};
+  const Polygon2D footprint{
+    Vector2d{-0.5, -0.3}, Vector2d{0.5, -0.3}, Vector2d{0.5, 0.3}, Vector2d{-0.5, 0.3}};
+  const Pose2D pose{Vector2d{2.0, 1.0}, 0.5 * kPi};
   const Polygon2D world = eltanin::transform(footprint, pose);
 
   ASSERT_EQ(world.size(), 4u);
@@ -158,7 +161,7 @@ TEST(Polygon, TransformMovesAndRotates)
 TEST(Polygon, TransformByPoseAndTransformAgree)
 {
   const Polygon2D square = unit_square_ccw();
-  const Pose2D pose{Vec2{1.0, -2.0}, 0.7};
+  const Pose2D pose{Vector2d{1.0, -2.0}, 0.7};
   const Polygon2D from_pose = eltanin::transform(square, pose);
   const Polygon2D from_tf = eltanin::transform(square, Transform2D::from_pose(pose));
   ASSERT_EQ(from_pose.size(), from_tf.size());

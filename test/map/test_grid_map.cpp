@@ -24,14 +24,14 @@
 namespace
 {
 
-using eltanin::Vec2;
+using Eigen::Vector2d;
 using eltanin::map::Costmap;
 using eltanin::map::GridMap;
 using eltanin::map::MapGeometry;
 
 MapGeometry sample_geometry()
 {
-  return MapGeometry(6, 4, 0.1, Vec2{0.0, 0.0});
+  return MapGeometry(6, 4, 0.1, Vector2d{0.0, 0.0});
 }
 
 }  // namespace
@@ -75,8 +75,8 @@ TEST(GridMap, SafeAccessorsHandleOutOfBounds)
   ASSERT_TRUE(value.has_value());
   EXPECT_EQ(*value, 42);
   EXPECT_FALSE(map.get(-1, -1).has_value());
-  EXPECT_EQ(map.get_or(-1, -1, eltanin::map::NO_INFORMATION), eltanin::map::NO_INFORMATION);
-  EXPECT_EQ(map.get_or(0, 0, eltanin::map::NO_INFORMATION), 42);
+  EXPECT_FALSE(map.get(6, 0).has_value());
+  EXPECT_FALSE(map.get(0, 4).has_value());
 }
 
 TEST(GridMap, FillOverwritesEveryCell)
@@ -97,10 +97,10 @@ TEST(GridMap, DataGivesRawAccess)
   EXPECT_EQ(map.data().size(), map.cell_count());
 }
 
-TEST(GridMap, MakeLikeKeepsGeometryAndChangesCellType)
+TEST(GridMap, GeometryCanBeReusedForAnotherCellType)
 {
   const Costmap map(sample_geometry(), eltanin::map::FREE_SPACE);
-  const GridMap<float> distances = map.make_like<float>(-1.0F);
+  const GridMap<float> distances(map.geometry(), -1.0F);
   EXPECT_EQ(distances.geometry(), map.geometry());
   EXPECT_EQ(distances.cell_count(), map.cell_count());
   EXPECT_FLOAT_EQ(distances[0], -1.0F);
@@ -133,7 +133,8 @@ TEST(GridMap, CopyAndMoveArePermitted)
 
 TEST(GridMap, LargeMapAllocatesEveryCell)
 {
-  const Costmap map(MapGeometry(4000, 4000, 0.05, Vec2{-100.0, -100.0}), eltanin::map::FREE_SPACE);
+  const MapGeometry large(4000, 4000, 0.05, Vector2d{-100.0, -100.0});
+  const Costmap map(large, eltanin::map::FREE_SPACE);
   EXPECT_EQ(map.cell_count(), 16000000u);
   EXPECT_EQ(map(3999, 3999), eltanin::map::FREE_SPACE);
 }

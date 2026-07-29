@@ -29,7 +29,7 @@ std::optional<double> inscribed_radius(const Polygon2D & footprint);
 /// Maximum distance [m] from the robot origin to any vertex; nullopt for a degenerate polygon.
 std::optional<double> circumscribed_radius(const Polygon2D & footprint);
 
-/// Collision radii in [m]. A constructed value always satisfies 0 <= inscribed <= circumscribed <= inflation.
+/// Radii in [m]. A constructed value always satisfies 0 <= inscribed <= circumscribed <= inflation.
 class CollisionRadii
 {
 public:
@@ -49,10 +49,10 @@ public:
   Traversability classify(double distance) const noexcept
   {
     if (distance < inscribed_) {
-      return Traversability::AlwaysColliding;
+      return Traversability::Inscribed;
     }
     if (distance < circumscribed_) {
-      return Traversability::OrientationDependent;
+      return Traversability::Circumscribed;
     }
     return Traversability::Free;
   }

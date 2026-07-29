@@ -17,7 +17,7 @@
 
 #include <eltanin/core/types.hpp>
 #include <eltanin/map/grid_map.hpp>
-#include <eltanin/map_io/load_error.hpp>
+#include <eltanin/map_io/error.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -25,25 +25,30 @@
 namespace eltanin::map_io
 {
 
-/// ROS map_server style metadata. No yaml-cpp type appears in this interface.
-struct MapMetadata
+/// Contents of a ROS map_server map YAML. No yaml-cpp type appears in this interface.
+struct LoadParameters
 {
   std::filesystem::path image_path;
   double resolution{0.0};
-  Vec2 origin{Vec2::Zero()};
+  Eigen::Vector2d origin{Eigen::Vector2d::Zero()};
   bool negate{false};
   double occupied_thresh{0.65};
   double free_thresh{0.196};
 };
 
-/// Reads and validates the YAML alone. Throws LoadError.
-MapMetadata load_map_metadata(const std::filesystem::path & yaml_path);
+/// Reads and validates the YAML alone. Throws MapIoError.
+LoadParameters load_map_yaml(const std::filesystem::path & yaml_path);
 
-/// Reads YAML plus PGM into a costmap, flipping rows so that my = 0 is the bottom. Throws LoadError.
+/// Reads YAML plus PGM into a costmap, flipping rows so my = 0 is the bottom. Throws MapIoError.
 map::Costmap load_map(const std::filesystem::path & yaml_path);
 
-/// Applies the ROS map_server occupancy thresholds to one pixel value.
-std::uint8_t occupancy_cost(std::uint8_t pixel, const MapMetadata & metadata) noexcept;
+namespace detail
+{
+
+/// Not part of the public API; exposed so that the threshold boundaries can be pinned by tests.
+std::uint8_t occupancy_cost(std::uint8_t pixel, const LoadParameters & parameters) noexcept;
+
+}  // namespace detail
 
 }  // namespace eltanin::map_io
 

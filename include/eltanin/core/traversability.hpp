@@ -20,12 +20,12 @@
 namespace eltanin
 {
 
-/// Three-valued traversability; the middle value keeps a future two-pass search non-breaking.
+/// Named after the nav2 distance bands the cell falls into.
 enum class Traversability
 {
-  Free,
-  OrientationDependent,
-  AlwaysColliding
+  Free,           ///< no collision at any heading
+  Circumscribed,  ///< a collision is possible depending on the heading
+  Inscribed       ///< a collision at every heading
 };
 
 /// Contract shared by every traversability model: classify one cell value.

@@ -105,11 +105,13 @@ nav2 準拠の `uint8_t` スケールを用いる。
 
 通行可否は**3 値の列挙型**で表す。
 
-| 値 | 意味 |
+列挙子名は nav2 の距離帯の語をそのまま使う。造語を作らない。
+
+| 列挙子 | 意味 |
 |---|---|
-| 通行可 | どの向きでも衝突しない |
-| 向き次第で衝突しうる | 外接円帯のうち内接円帯外 |
-| 必ず衝突 | 内接円帯または障害物セル |
+| `Traversability::Free` | どの向きでも衝突しない |
+| `Traversability::Circumscribed` | 外接円帯のうち内接円帯外。向き次第で衝突しうる |
+| `Traversability::Inscribed` | 内接円帯または障害物セル。必ず衝突 |
 
 第一段階では「向き次第」も通行不可として扱うが、**2 値 (通行可 / 不可) にはしない**。2 値にすると将来「向き次第」を足すのが破壊的変更になる。
 
@@ -165,7 +167,7 @@ classify(セル値) -> 3 値
 **確定: C++20 concept で表現する。** `include/eltanin/core/traversability.hpp` に置く。
 
 ```cpp
-enum class Traversability { Free, OrientationDependent, AlwaysColliding };
+enum class Traversability { Free, Circumscribed, Inscribed };
 
 template <class Model, class Cell>
 concept TraversabilityModel = requires(const Model & model, Cell cell) {
@@ -318,6 +320,31 @@ navyu の衝突判定は `99 < cost` の単一しきい値 (`costmap_helper.cpp:
 | コスト定数 | nav2 の `FREE_SPACE` / `MAX_NON_OBSTACLE` / `INSCRIBED_INFLATED_OBSTACLE` / `LETHAL_OBSTACLE` / `NO_INFORMATION` を**そのまま採用**する。本文中の `INSCRIBED` / `LETHAL` / `UNKNOWN` は説明上の短縮表記 |
 | フットプリント近似 | 種類を将来増やす場合は teb_local_planner の `CircularRobotFootprint` / `TwoCirclesRobotFootprint` / `PolygonRobotFootprint` に寄せる |
 | レイヤ | nav2 の `StaticLayer` / `ObstacleLayer` / `InflationLayer` / `LayeredCostmap` に寄せる |
+| 3 値の列挙子 | nav2 の距離帯の語 `Free` / `Circumscribed` / `Inscribed` (4 章) |
+| 角度 | `angles` パッケージの `normalize_angle` / `normalize_angle_positive` / `shortest_angular_distance` |
+| マップ YAML の内容 | nav2_map_server の `LoadParameters` / `load_map_yaml()`。`MapMetadata` は使わない (ROS の `nav_msgs/MapMetaData` は幾何情報を指す語であり、うちの `MapGeometry` がそれに相当する) |
+| 範囲検査なしの座標変換 | nav2 の `Costmap2D::worldToMapNoBounds` に合わせ `world_to_map_no_bounds` |
+
+### 9.1 やらないこと
+
+| 禁止 | 理由 |
+|---|---|
+| 自前の数学定数を公開する (`kPi` など) | C++20 に `std::numbers::pi` がある。標準にあるものを再発明しない |
+| 定数の `k` 前置 (`kInflationRadius`) | navyu を含むこのプロジェクトの既存コードに前例がない。定数は `UPPER_SNAKE` |
+| 他言語由来の API 名 (`get_or` = Rust、`make_like` = numpy) | C++ / ROS の語彙で書く。`get().value_or()` や既存コンストラクタで足りる |
+| 依存ライブラリの型に別名を付ける | `Eigen::Vector2d` はそのまま使う。`Vec2` のような短縮別名を挟むと出自が読めなくなる |
+
+### 9.2 公開範囲の規約
+
+**利用者が現に存在しないものを public にしない。** 「T2 が使うかもしれない」で API を先に生やさない。必要になったタスクが足す。
+
+| 状況 | 置き場所 |
+|---|---|
+| 外部から呼ぶもの | `include/eltanin/<module>/` の公開名前空間 |
+| テストのためだけに見せる必要があるもの | 同じヘッダの `detail` 名前空間 (例 `map_io::detail::occupancy_cost`) |
+| 実装専用 | `.cpp` 内の無名名前空間 |
+
+`operator()` / `operator[]` のように危険だが利益が明確なものは公開する (10 章の方式 A)。利益の説明ができないものは公開しない。
 
 ---
 
@@ -329,32 +356,32 @@ navyu の衝突判定は `99 < cost` の単一しきい値 (`costmap_helper.cpp:
 |---|---|---|
 | A. 前提条件違反 (呼び出し側のプログラミングエラー) | `assert` + 未定義動作。戻り値で表現しない | `GridMap::operator()` / `operator[]`、`MapGeometry::index()` / `map_to_world()` |
 | B. 正常系の一部としての「該当なし」 | `std::optional` | `MapGeometry::world_to_map()`、`inscribed_radius()` / `circumscribed_radius()`、`CollisionRadii::from_*()`、`InflationCostModel::create()`、`GridMap::get()` |
-| C. 外部入力・設定の不正 | 例外 (`map_io::LoadError`) | `map_io::read_pgm()` / `write_pgm()` / `load_map_metadata()` / `load_map()` |
+| C. 外部入力・設定の不正 | 例外 (`map_io::MapIoError`) | `map_io::read_pgm()` / `write_pgm()` / `load_map_yaml()` / `load_map()` |
 
 理由:
 
-- **A**: セルアクセスは 4000×4000 = 1.6e7 セルのホットループで呼ばれる。`optional` や例外を毎セル通すのは無駄で、範囲検査は呼び出し側がループ境界で一度行うのが自然 (nav2 の `Costmap2D::getCost` も同じ立場)。既定ビルドでは `CMAKE_BUILD_TYPE` を空にしてあるため `NDEBUG` が定義されず、開発中は `assert` が実際に発火する。安全版として `get()` / `get_or()` / `set()` を併設する。
+- **A**: セルアクセスは 4000×4000 = 1.6e7 セルのホットループで呼ばれる。`optional` や例外を毎セル通すのは無駄で、範囲検査は呼び出し側がループ境界で一度行うのが自然 (nav2 の `Costmap2D::getCost` も同じ立場)。既定ビルドでは `CMAKE_BUILD_TYPE` を空にしてあるため `NDEBUG` が定義されず、開発中は `assert` が実際に発火する。安全版として `get()` / `set()` を併設する。
 - **B**: 「world 座標がマップ外」「ロボット原点が多角形外なので内接円半径が定義できない」は異常ではなく問い合わせの答えである。`optional` なら呼び出し側が無視できない。
 - **C**: マップ読み込みは起動時 1 回でホットパスでない。失敗理由を伝える必要があり `optional` では落ちる。`std::expected` は C++23 のため使えない。
 
 **例外を投げるのは `map_io` のみ。`eltanin_core` / `eltanin_map` は例外を投げない。**
 
-`LoadError` は理由を機械可読にするため列挙型を持つ。
+`MapIoError` は理由を機械可読にするため列挙型を持つ。`include/eltanin/map_io/error.hpp` に置く。
 
 ```cpp
-enum class LoadErrorKind {
+enum class MapIoErrorKind {
   FileNotFound, YamlParseError, MissingKey, InvalidValue, UnsupportedMode,
   UnsupportedOriginYaw, PgmBadMagic, PgmBadMaxval, PgmSizeMismatch, PgmTruncated, WriteFailed
 };
-class LoadError : public std::runtime_error {
+class MapIoError : public std::runtime_error {
 public:
-  LoadErrorKind kind() const noexcept;
+  MapIoErrorKind kind() const noexcept;
 };
 ```
 
 ### 10.1 命名の規約: `at()` を使わない
 
-標準ライブラリの `at()` は例外を投げる契約なので、前提条件版 (方式 A) に使うと期待を裏切る。前提条件版は `operator()` / `operator[]`、安全版 (方式 B) は `get()` / `get_or()` / `set()` と名前で区別する。
+標準ライブラリの `at()` は例外を投げる契約なので、前提条件版 (方式 A) に使うと期待を裏切る。前提条件版は `operator()` / `operator[]`、安全版 (方式 B) は `get()` / `set()` と名前で区別する。
 
 ---
 
@@ -441,5 +468,5 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 2. **距離帯とコスト符号化の区別**: 3 章の表を参照。距離では「向き次第」の帯が「必ず衝突」の帯を包含するが、コスト値では 2 つの区間は互いに素である。区別せずに読むと「入れ子になっていること」を検証しようとして混乱する。
 3. **ゴールデン比較には `write_pgm()` を使える**: `map_io::write_pgm()` はセル値をそのまま書き出す debug dump であり、`load_map` の逆変換ではない。`253` / `254` / `255` がそのまま出る。膨張結果の回帰テストとデバッグ可視化に使える。読み戻しは `read_pgm()` (しきい値変換を通さない)。
 4. **単位**: `InflationCostModel::cost_at_distance()` の引数は [m]。近傍展開でセル単位のユークリッド距離を得たら `resolution` を掛けてから渡す。単位を API 境界で混ぜないこと (navyu の `inflation_layer.hpp` の失敗)。
-5. **`world_to_map_unbounded()` を使う**: ROI 境界をセル座標で計算するとき、マップ外にはみ出した負のインデックスを一度得る必要がある。`MapGeometry::world_to_map_unbounded()` がそれを提供する。**自前で `floor` を書かないこと** (座標変換の一元化が破れる)。
-6. **`NO_INFORMATION` の扱い**: `CostTraversabilityModel` は `unknown_is_traversable` フラグで分岐する。膨張処理側でも未知セルの扱いを設定として一元化し、全経路で一貫させること (navyu は内接円分岐で未知の扱いが抜けていた)。
+5. **`world_to_map_no_bounds()` を使う**: ROI 境界をセル座標で計算するとき、マップ外にはみ出した負のインデックスを一度得る必要がある。`MapGeometry::world_to_map_no_bounds()` がそれを提供する (nav2 `Costmap2D::worldToMapNoBounds` と同じ役割)。**自前で `floor` を書かないこと** (座標変換の一元化が破れる)。
+6. **`NO_INFORMATION` の扱い**: `CostTraversabilityModel` は `unknown_is_free` フラグで分岐する。膨張処理側でも未知セルの扱いを設定として一元化し、全経路で一貫させること (navyu は内接円分岐で未知の扱いが抜けていた)。

@@ -140,11 +140,11 @@ TEST(CostModel, CostModelBoundaries)
   ASSERT_LT(threshold, MAX_NON_OBSTACLE);
   const CostTraversabilityModel traversability(threshold);
 
-  EXPECT_EQ(traversability.classify(LETHAL_OBSTACLE), Traversability::AlwaysColliding);
-  EXPECT_EQ(traversability.classify(INSCRIBED_INFLATED_OBSTACLE), Traversability::AlwaysColliding);
+  EXPECT_EQ(traversability.classify(LETHAL_OBSTACLE), Traversability::Inscribed);
+  EXPECT_EQ(traversability.classify(INSCRIBED_INFLATED_OBSTACLE), Traversability::Inscribed);
   EXPECT_EQ(
-    traversability.classify(INSCRIBED_INFLATED_OBSTACLE - 1), Traversability::OrientationDependent);
-  EXPECT_EQ(traversability.classify(threshold), Traversability::OrientationDependent);
+    traversability.classify(INSCRIBED_INFLATED_OBSTACLE - 1), Traversability::Circumscribed);
+  EXPECT_EQ(traversability.classify(threshold), Traversability::Circumscribed);
   EXPECT_EQ(
     traversability.classify(static_cast<std::uint8_t>(threshold - 1)), Traversability::Free);
   EXPECT_EQ(traversability.classify(FREE_SPACE), Traversability::Free);
@@ -155,7 +155,7 @@ TEST(CostModel, UnknownHandlingIsConfigurable)
   const std::uint8_t threshold = model().circumscribed_cost();
   const CostTraversabilityModel blocking(threshold, false);
   const CostTraversabilityModel permissive(threshold, true);
-  EXPECT_EQ(blocking.classify(NO_INFORMATION), Traversability::AlwaysColliding);
+  EXPECT_EQ(blocking.classify(NO_INFORMATION), Traversability::Inscribed);
   EXPECT_EQ(permissive.classify(NO_INFORMATION), Traversability::Free);
-  EXPECT_EQ(permissive.classify(LETHAL_OBSTACLE), Traversability::AlwaysColliding);
+  EXPECT_EQ(permissive.classify(LETHAL_OBSTACLE), Traversability::Inscribed);
 }

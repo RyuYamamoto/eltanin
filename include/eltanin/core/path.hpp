@@ -25,7 +25,7 @@
 namespace eltanin
 {
 
-/// Sequence of poses. Ownership and basic operations only; interpolation and resampling are free functions.
+/// Sequence of poses. Ownership and basic operations only; resampling belongs in free functions.
 class Path
 {
 public:

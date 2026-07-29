@@ -30,7 +30,7 @@ constexpr double kDegenerateAreaTolerance = 1e-12;
 
 std::optional<double> inscribed_radius(const Polygon2D & footprint)
 {
-  const std::vector<Vec2> & v = footprint.vertices();
+  const std::vector<Eigen::Vector2d> & v = footprint.vertices();
   const std::size_t n = v.size();
   if (n < 3) {
     return std::nullopt;
@@ -38,13 +38,13 @@ std::optional<double> inscribed_radius(const Polygon2D & footprint)
   if (std::abs(signed_area(footprint)) <= kDegenerateAreaTolerance) {
     return std::nullopt;
   }
-  if (!contains(footprint, Vec2::Zero())) {
+  if (!contains(footprint, Eigen::Vector2d::Zero())) {
     return std::nullopt;
   }
 
   double minimum = std::numeric_limits<double>::infinity();
   for (std::size_t i = 0, j = n - 1; i < n; j = i++) {
-    const double distance = distance_to_segment(Vec2::Zero(), v[j], v[i]);
+    const double distance = distance_to_segment(Eigen::Vector2d::Zero(), v[j], v[i]);
     if (distance < minimum) {
       minimum = distance;
     }
@@ -54,12 +54,12 @@ std::optional<double> inscribed_radius(const Polygon2D & footprint)
 
 std::optional<double> circumscribed_radius(const Polygon2D & footprint)
 {
-  const std::vector<Vec2> & v = footprint.vertices();
+  const std::vector<Eigen::Vector2d> & v = footprint.vertices();
   if (v.size() < 3) {
     return std::nullopt;
   }
   double maximum = 0.0;
-  for (const Vec2 & vertex : v) {
+  for (const Eigen::Vector2d & vertex : v) {
     const double norm = vertex.norm();
     if (norm > maximum) {
       maximum = norm;

@@ -23,16 +23,16 @@
 
 int main()
 {
-  const eltanin::map::MapGeometry geometry(20, 10, 0.05, eltanin::Vec2{-1.0, -0.5});
+  const eltanin::map::MapGeometry geometry(20, 10, 0.05, Eigen::Vector2d{-1.0, -0.5});
   eltanin::map::Costmap costmap(geometry, eltanin::map::FREE_SPACE);
   costmap.fill(eltanin::map::LETHAL_OBSTACLE);
 
-  const auto index = geometry.world_to_map(eltanin::Vec2{-0.5, -0.25});
+  const auto index = geometry.world_to_map(Eigen::Vector2d{-0.5, -0.25});
   if (!index.has_value()) {
     std::cerr << "world_to_map unexpectedly failed\n";
     return EXIT_FAILURE;
   }
-  const eltanin::Vec2 center = geometry.map_to_world(index->x, index->y);
+  const Eigen::Vector2d center = geometry.map_to_world(index->x, index->y);
 
   const auto radii = eltanin::CollisionRadii::from_radii(0.3, 0.5, 1.0);
   const auto model = eltanin::map::InflationCostModel::create(*radii, 3.0);
@@ -43,6 +43,6 @@ int main()
             << " normalized angle " << eltanin::normalize_angle(7.0)
             << " classification " << static_cast<int>(traversability.classify(costmap[0]))
             << " error kind count "
-            << static_cast<int>(eltanin::map_io::LoadErrorKind::WriteFailed) << '\n';
+            << static_cast<int>(eltanin::map_io::MapIoErrorKind::WriteFailed) << '\n';
   return EXIT_SUCCESS;
 }

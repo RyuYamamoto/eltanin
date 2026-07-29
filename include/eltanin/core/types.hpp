@@ -24,19 +24,17 @@
 namespace eltanin
 {
 
-using Vec2 = Eigen::Vector2d;
-
 /// Planar state. Orientation is a yaw angle; this library never carries quaternions in 2D.
 struct Pose2D
 {
-  Vec2 position{Vec2::Zero()};
+  Eigen::Vector2d position{Eigen::Vector2d::Zero()};
   double yaw{0.0};
 };
 
 /// Planar velocity. `linear` is 2D so that omnidirectional motion stays representable.
 struct Twist2D
 {
-  Vec2 linear{Vec2::Zero()};
+  Eigen::Vector2d linear{Eigen::Vector2d::Zero()};
   double angular{0.0};
 };
 
@@ -46,12 +44,12 @@ class Transform2D
 public:
   Transform2D() = default;
 
-  Transform2D(const Vec2 & translation, double rotation)
+  Transform2D(const Eigen::Vector2d & translation, double rotation)
   : translation_(translation), rotation_(normalize_angle(rotation))
   {
   }
 
-  const Vec2 & translation() const noexcept { return translation_; }
+  const Eigen::Vector2d & translation() const noexcept { return translation_; }
 
   /// Always in (-pi, pi]: repeated composition cannot let the angle drift.
   double rotation() const noexcept { return rotation_; }
@@ -60,17 +58,17 @@ public:
   {
     const double c = std::cos(rotation_);
     const double s = std::sin(rotation_);
-    const Vec2 t{
+    const Eigen::Vector2d t{
       -(c * translation_.x() + s * translation_.y()),
       -(-s * translation_.x() + c * translation_.y())};
     return Transform2D(t, -rotation_);
   }
 
-  Vec2 operator*(const Vec2 & point) const
+  Eigen::Vector2d operator*(const Eigen::Vector2d & point) const
   {
     const double c = std::cos(rotation_);
     const double s = std::sin(rotation_);
-    return Vec2{
+    return Eigen::Vector2d{
       c * point.x() - s * point.y() + translation_.x(),
       s * point.x() + c * point.y() + translation_.y()};
   }
@@ -94,7 +92,7 @@ public:
   Pose2D to_pose() const { return Pose2D{translation_, rotation_}; }
 
 private:
-  Vec2 translation_{Vec2::Zero()};
+  Eigen::Vector2d translation_{Eigen::Vector2d::Zero()};
   double rotation_{0.0};
 };
 

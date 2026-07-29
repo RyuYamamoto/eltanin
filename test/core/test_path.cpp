@@ -25,7 +25,7 @@ namespace
 using eltanin::Path;
 using eltanin::path_length;
 using eltanin::Pose2D;
-using eltanin::Vec2;
+using Eigen::Vector2d;
 
 constexpr double kTol = 1e-12;
 
@@ -41,7 +41,7 @@ TEST(Path, DefaultIsEmpty)
 
 TEST(Path, SinglePoseHasZeroLength)
 {
-  const Path path{Pose2D{Vec2{1.0, 2.0}, 0.5}};
+  const Path path{Pose2D{Vector2d{1.0, 2.0}, 0.5}};
   EXPECT_FALSE(path.empty());
   EXPECT_EQ(path.size(), 1u);
   EXPECT_NEAR(path_length(path), 0.0, kTol);
@@ -50,22 +50,24 @@ TEST(Path, SinglePoseHasZeroLength)
 TEST(Path, StraightLineLength)
 {
   const Path path{
-    Pose2D{Vec2{0.0, 0.0}, 0.0}, Pose2D{Vec2{3.0, 0.0}, 0.0}, Pose2D{Vec2{5.0, 0.0}, 0.0}};
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{3.0, 0.0}, 0.0},
+    Pose2D{Vector2d{5.0, 0.0}, 0.0}};
   EXPECT_NEAR(path_length(path), 5.0, kTol);
 }
 
 TEST(Path, PolylineLength)
 {
   const Path path{
-    Pose2D{Vec2{0.0, 0.0}, 0.0}, Pose2D{Vec2{3.0, 4.0}, 0.0}, Pose2D{Vec2{3.0, 0.0}, 0.0}};
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{3.0, 4.0}, 0.0},
+    Pose2D{Vector2d{3.0, 0.0}, 0.0}};
   EXPECT_NEAR(path_length(path), 9.0, kTol);
 }
 
 TEST(Path, PushBackAndIndexing)
 {
   Path path;
-  path.push_back(Pose2D{Vec2{0.0, 0.0}, 0.0});
-  path.push_back(Pose2D{Vec2{1.0, 0.0}, 0.25});
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  path.push_back(Pose2D{Vector2d{1.0, 0.0}, 0.25});
   ASSERT_EQ(path.size(), 2u);
   EXPECT_NEAR(path[1].position.x(), 1.0, kTol);
   EXPECT_NEAR(path[1].yaw, 0.25, kTol);
@@ -80,7 +82,8 @@ TEST(Path, PushBackAndIndexing)
 TEST(Path, IterationVisitsEveryPose)
 {
   const Path path{
-    Pose2D{Vec2{0.0, 0.0}, 0.0}, Pose2D{Vec2{1.0, 0.0}, 0.0}, Pose2D{Vec2{2.0, 0.0}, 0.0}};
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}};
   double sum_x = 0.0;
   for (const Pose2D & pose : path) {
     sum_x += pose.position.x();
@@ -90,7 +93,7 @@ TEST(Path, IterationVisitsEveryPose)
 
 TEST(Path, ConstructionFromVector)
 {
-  std::vector<Pose2D> poses{Pose2D{Vec2{0.0, 0.0}, 0.0}, Pose2D{Vec2{0.0, 2.0}, 0.0}};
+  std::vector<Pose2D> poses{Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{0.0, 2.0}, 0.0}};
   const Path path(std::move(poses));
   EXPECT_EQ(path.size(), 2u);
   EXPECT_NEAR(path_length(path), 2.0, kTol);

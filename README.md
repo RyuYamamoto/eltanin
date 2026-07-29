@@ -9,7 +9,7 @@ that needs ROS 2, visualization or file I/O lives in a separate target.
 
 | Target | Alias | Depends on | Contents |
 |---|---|---|---|
-| `eltanin_core` | `eltanin::core` | Eigen | `Vec2` / `Pose2D` / `Twist2D` / `Transform2D`, angle normalization, point-segment geometry, `Polygon2D`, footprint radii, `Traversability`, `Path` |
+| `eltanin_core` | `eltanin::core` | Eigen | `Pose2D` / `Twist2D` / `Transform2D`, angle normalization, point-segment geometry, `Polygon2D`, footprint radii, `Traversability`, `Path` |
 | `eltanin_map` | `eltanin::map` | `eltanin::core` | `MapGeometry` (the only world/map conversion), `GridMap<T>`, nav2-scale cost constants, cost model |
 | `eltanin_map_io` | `eltanin::map_io` | `eltanin::map`, yaml-cpp | PGM + YAML map loading, PGM debug dump |
 

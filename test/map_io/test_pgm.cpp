@@ -25,11 +25,11 @@
 namespace
 {
 
-using eltanin::Vec2;
+using Eigen::Vector2d;
 using eltanin::map::Costmap;
 using eltanin::map::MapGeometry;
-using eltanin::map_io::LoadError;
-using eltanin::map_io::LoadErrorKind;
+using eltanin::map_io::MapIoError;
+using eltanin::map_io::MapIoErrorKind;
 using eltanin::map_io::PgmImage;
 using eltanin::map_io::read_pgm;
 using eltanin::map_io::write_pgm;
@@ -55,8 +55,8 @@ TEST(Pgm, SkipsCommentsAnywhereInHeader)
 {
   const std::vector<std::uint8_t> pixels{1, 2, 3, 4};
   const auto path = write_binary(
-    "comments.pgm", "P5\n# CREATOR: map_saver.cpp 0.050 m/pix\n2 # inline\n2\n# before maxval\n255\n",
-    pixels);
+    "comments.pgm",
+    "P5\n# CREATOR: map_saver.cpp 0.050 m/pix\n2 # inline\n2\n# before maxval\n255\n", pixels);
 
   const PgmImage image = read_pgm(path);
   EXPECT_EQ(image.width, 2);
@@ -70,9 +70,9 @@ TEST(Pgm, MissingFileReportsFileNotFound)
 {
   try {
     read_pgm(eltanin_test::fixture_dir() / "does_not_exist.pgm");
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::FileNotFound);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::FileNotFound);
   }
 }
 
@@ -81,9 +81,9 @@ TEST(Pgm, WrongMagicIsRejected)
   const auto path = write_binary("ascii.pgm", "P2\n2 2\n255\n1 2 3 4\n", {});
   try {
     read_pgm(path);
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::PgmBadMagic);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::PgmBadMagic);
   }
 }
 
@@ -92,9 +92,9 @@ TEST(Pgm, WrongMaxvalIsRejected)
   const auto path = write_binary("maxval.pgm", "P5\n2 2\n65535\n", {1, 2, 3, 4});
   try {
     read_pgm(path);
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::PgmBadMaxval);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::PgmBadMaxval);
   }
 }
 
@@ -103,9 +103,9 @@ TEST(Pgm, TruncatedPixelDataIsRejected)
   const auto path = write_binary("truncated.pgm", "P5\n4 4\n255\n", {1, 2, 3});
   try {
     read_pgm(path);
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::PgmTruncated);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::PgmTruncated);
   }
 }
 
@@ -114,15 +114,15 @@ TEST(Pgm, NonPositiveDimensionsAreRejected)
   const auto path = write_binary("zero.pgm", "P5\n0 4\n255\n", {});
   try {
     read_pgm(path);
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::PgmSizeMismatch);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::PgmSizeMismatch);
   }
 }
 
 TEST(Pgm, WriteFlipsRowsAndPreservesRawCellValues)
 {
-  Costmap costmap(MapGeometry(3, 2, 0.1, Vec2{-1.0, -1.0}), eltanin::map::FREE_SPACE);
+  Costmap costmap(MapGeometry(3, 2, 0.1, Vector2d{-1.0, -1.0}), eltanin::map::FREE_SPACE);
   costmap(0, 0) = 253;
   costmap(1, 0) = 254;
   costmap(2, 0) = 255;
@@ -149,7 +149,7 @@ TEST(Pgm, WriteFlipsRowsAndPreservesRawCellValues)
 
 TEST(Pgm, WriteThenReadRoundTripsEveryCell)
 {
-  Costmap costmap(MapGeometry(5, 4, 0.05, Vec2{2.0, 3.0}), eltanin::map::FREE_SPACE);
+  Costmap costmap(MapGeometry(5, 4, 0.05, Vector2d{2.0, 3.0}), eltanin::map::FREE_SPACE);
   std::uint8_t value = 0;
   for (int my = 0; my < costmap.size_y(); ++my) {
     for (int mx = 0; mx < costmap.size_x(); ++mx) {
@@ -180,8 +180,8 @@ TEST(Pgm, WritingAnEmptyMapIsRejected)
   const Costmap empty;
   try {
     write_pgm(eltanin_test::fixture_dir() / "empty.pgm", empty);
-    FAIL() << "expected LoadError";
-  } catch (const LoadError & error) {
-    EXPECT_EQ(error.kind(), LoadErrorKind::PgmSizeMismatch);
+    FAIL() << "expected MapIoError";
+  } catch (const MapIoError & error) {
+    EXPECT_EQ(error.kind(), MapIoErrorKind::PgmSizeMismatch);
   }
 }

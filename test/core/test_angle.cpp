@@ -18,16 +18,17 @@
 
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 namespace
 {
 
-using eltanin::kPi;
-using eltanin::kTwoPi;
 using eltanin::normalize_angle;
 using eltanin::normalize_angle_positive;
 using eltanin::shortest_angular_distance;
 
+constexpr double kPi = std::numbers::pi;
+constexpr double kTwoPi = 2.0 * kPi;
 constexpr double kTol = 1e-12;
 
 bool in_normalized_range(double angle)

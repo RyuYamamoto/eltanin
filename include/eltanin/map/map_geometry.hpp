@@ -32,23 +32,13 @@ struct MapIndex
   int y{0};
 };
 
-inline bool operator==(const MapIndex & lhs, const MapIndex & rhs) noexcept
-{
-  return lhs.x == rhs.x && lhs.y == rhs.y;
-}
-
-inline bool operator!=(const MapIndex & lhs, const MapIndex & rhs) noexcept
-{
-  return !(lhs == rhs);
-}
-
 /// The single place in this library that converts between world and map coordinates.
 class MapGeometry
 {
 public:
   MapGeometry() = default;
 
-  MapGeometry(int size_x, int size_y, double resolution, const Vec2 & origin)
+  MapGeometry(int size_x, int size_y, double resolution, const Eigen::Vector2d & origin)
   : size_x_(size_x), size_y_(size_y), resolution_(resolution), origin_(origin)
   {
   }
@@ -59,7 +49,7 @@ public:
 
   double resolution() const noexcept { return resolution_; }
 
-  const Vec2 & origin() const noexcept { return origin_; }
+  const Eigen::Vector2d & origin() const noexcept { return origin_; }
 
   std::size_t cell_count() const noexcept
   {
@@ -83,31 +73,26 @@ public:
   }
 
   /// Center of the cell, not its corner. Precondition: in_bounds(mx, my).
-  Vec2 map_to_world(int mx, int my) const noexcept
+  Eigen::Vector2d map_to_world(int mx, int my) const noexcept
   {
     assert(in_bounds(mx, my));
-    return map_to_world_unbounded(mx, my);
-  }
-
-  Vec2 map_to_world_unbounded(int mx, int my) const noexcept
-  {
-    return origin_ + Vec2{
+    return origin_ + Eigen::Vector2d{
                        (static_cast<double>(mx) + 0.5) * resolution_,
                        (static_cast<double>(my) + 0.5) * resolution_};
   }
 
   /// nullopt when the point lies outside the map.
-  std::optional<MapIndex> world_to_map(const Vec2 & world) const noexcept
+  std::optional<MapIndex> world_to_map(const Eigen::Vector2d & world) const noexcept
   {
-    const MapIndex index = world_to_map_unbounded(world);
+    const MapIndex index = world_to_map_no_bounds(world);
     if (!in_bounds(index.x, index.y)) {
       return std::nullopt;
     }
     return index;
   }
 
-  /// Floor-based conversion without a bounds check; used to derive clamped region borders.
-  MapIndex world_to_map_unbounded(const Vec2 & world) const noexcept
+  /// Floor-based conversion without a bounds check, for deriving region borders before clamping.
+  MapIndex world_to_map_no_bounds(const Eigen::Vector2d & world) const noexcept
   {
     const double fx = std::floor((world.x() - origin_.x()) / resolution_);
     const double fy = std::floor((world.y() - origin_.y()) / resolution_);
@@ -140,7 +125,7 @@ private:
   int size_x_{0};
   int size_y_{0};
   double resolution_{0.0};
-  Vec2 origin_{Vec2::Zero()};
+  Eigen::Vector2d origin_{Eigen::Vector2d::Zero()};
 };
 
 }  // namespace eltanin::map

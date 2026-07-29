@@ -22,7 +22,7 @@
 namespace
 {
 
-using eltanin::Vec2;
+using Eigen::Vector2d;
 using eltanin::map::MapGeometry;
 using eltanin::map::MapIndex;
 
@@ -30,7 +30,7 @@ constexpr double kTol = 1e-12;
 
 MapGeometry sample_geometry()
 {
-  return MapGeometry(10, 8, 0.05, Vec2{-1.0, -2.0});
+  return MapGeometry(10, 8, 0.05, Vector2d{-1.0, -2.0});
 }
 
 }  // namespace
@@ -47,11 +47,11 @@ TEST(MapGeometry, DefaultIsEmpty)
 TEST(MapGeometry, MapToWorldUsesCellCenter)
 {
   const MapGeometry geometry = sample_geometry();
-  const Vec2 center = geometry.map_to_world(0, 0);
+  const Vector2d center = geometry.map_to_world(0, 0);
   EXPECT_NEAR(center.x(), -1.0 + 0.025, kTol);
   EXPECT_NEAR(center.y(), -2.0 + 0.025, kTol);
 
-  const Vec2 other = geometry.map_to_world(3, 2);
+  const Vector2d other = geometry.map_to_world(3, 2);
   EXPECT_NEAR(other.x(), -1.0 + 3.5 * 0.05, kTol);
   EXPECT_NEAR(other.y(), -2.0 + 2.5 * 0.05, kTol);
 }
@@ -75,10 +75,11 @@ TEST(MapGeometry, WorldToMapToWorldRoundTrip)
 {
   const MapGeometry geometry = sample_geometry();
   for (int i = 0; i < 40; ++i) {
-    const Vec2 world{-1.0 + 0.0123 * static_cast<double>(i), -2.0 + 0.0091 * static_cast<double>(i)};
+    const double t = static_cast<double>(i);
+    const Vector2d world{-1.0 + 0.0123 * t, -2.0 + 0.0091 * t};
     const auto index = geometry.world_to_map(world);
     ASSERT_TRUE(index.has_value()) << "i=" << i;
-    const Vec2 recovered = geometry.map_to_world(index->x, index->y);
+    const Vector2d recovered = geometry.map_to_world(index->x, index->y);
     const double bound = 0.5 * geometry.resolution() + 1e-12;
     EXPECT_LE(std::abs(recovered.x() - world.x()), bound);
     EXPECT_LE(std::abs(recovered.y() - world.y()), bound);
@@ -102,20 +103,20 @@ TEST(MapGeometry, NegativeOffsetIsDetectedAsOutOfBounds)
 {
   const MapGeometry geometry = sample_geometry();
   // A truncating cast would map this to 0 and wrongly report it in bounds.
-  EXPECT_FALSE(geometry.world_to_map(Vec2{-1.0 - 0.025, -2.0 + 0.025}).has_value());
-  EXPECT_FALSE(geometry.world_to_map(Vec2{-1.0 + 0.025, -2.0 - 0.025}).has_value());
-  EXPECT_FALSE(geometry.world_to_map(Vec2{-1.0 - 1e-9, -2.0 + 0.025}).has_value());
-  EXPECT_TRUE(geometry.world_to_map(Vec2{-1.0, -2.0}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 - 0.025, -2.0 + 0.025}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 + 0.025, -2.0 - 0.025}).has_value());
+  EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0 - 1e-9, -2.0 + 0.025}).has_value());
+  EXPECT_TRUE(geometry.world_to_map(Vector2d{-1.0, -2.0}).has_value());
 }
 
 TEST(MapGeometry, UnboundedConversionReturnsNegativeIndices)
 {
   const MapGeometry geometry = sample_geometry();
-  const MapIndex index = geometry.world_to_map_unbounded(Vec2{-1.0 - 0.06, -2.0 - 0.11});
+  const MapIndex index = geometry.world_to_map_no_bounds(Vector2d{-1.0 - 0.06, -2.0 - 0.11});
   EXPECT_EQ(index.x, -2);
   EXPECT_EQ(index.y, -3);
 
-  const MapIndex beyond = geometry.world_to_map_unbounded(Vec2{-1.0 + 0.57, -2.0 + 0.46});
+  const MapIndex beyond = geometry.world_to_map_no_bounds(Vector2d{-1.0 + 0.57, -2.0 + 0.46});
   EXPECT_EQ(beyond.x, 11);
   EXPECT_EQ(beyond.y, 9);
 }
@@ -123,7 +124,7 @@ TEST(MapGeometry, UnboundedConversionReturnsNegativeIndices)
 TEST(MapGeometry, UnboundedConversionSaturatesInsteadOfOverflowing)
 {
   const MapGeometry geometry = sample_geometry();
-  const MapIndex huge = geometry.world_to_map_unbounded(Vec2{1e18, -1e18});
+  const MapIndex huge = geometry.world_to_map_no_bounds(Vector2d{1e18, -1e18});
   EXPECT_EQ(huge.x, std::numeric_limits<int>::max());
   EXPECT_EQ(huge.y, std::numeric_limits<int>::min());
 }
@@ -144,16 +145,16 @@ TEST(MapGeometry, InBoundsAtCornersAndOneCellOutside)
 TEST(MapGeometry, EqualityIsExact)
 {
   const MapGeometry geometry = sample_geometry();
-  EXPECT_EQ(geometry, MapGeometry(10, 8, 0.05, Vec2{-1.0, -2.0}));
-  EXPECT_NE(geometry, MapGeometry(11, 8, 0.05, Vec2{-1.0, -2.0}));
-  EXPECT_NE(geometry, MapGeometry(10, 9, 0.05, Vec2{-1.0, -2.0}));
-  EXPECT_NE(geometry, MapGeometry(10, 8, 0.0500001, Vec2{-1.0, -2.0}));
-  EXPECT_NE(geometry, MapGeometry(10, 8, 0.05, Vec2{-1.0, -2.0000001}));
+  EXPECT_EQ(geometry, MapGeometry(10, 8, 0.05, Vector2d{-1.0, -2.0}));
+  EXPECT_NE(geometry, MapGeometry(11, 8, 0.05, Vector2d{-1.0, -2.0}));
+  EXPECT_NE(geometry, MapGeometry(10, 9, 0.05, Vector2d{-1.0, -2.0}));
+  EXPECT_NE(geometry, MapGeometry(10, 8, 0.0500001, Vector2d{-1.0, -2.0}));
+  EXPECT_NE(geometry, MapGeometry(10, 8, 0.05, Vector2d{-1.0, -2.0000001}));
 }
 
 TEST(MapGeometry, CellCountDoesNotOverflowIntArithmetic)
 {
-  const MapGeometry large(4000, 4000, 0.05, Vec2{-100.0, -100.0});
+  const MapGeometry large(4000, 4000, 0.05, Vector2d{-100.0, -100.0});
   EXPECT_EQ(large.cell_count(), 16000000u);
   EXPECT_EQ(large.index(3999, 3999), 15999999u);
   EXPECT_EQ(large.index(0, 3999), 15996000u);

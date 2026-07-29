@@ -19,9 +19,10 @@
 namespace eltanin
 {
 
-Vec2 closest_point_on_segment(const Vec2 & p, const Vec2 & a, const Vec2 & b)
+Eigen::Vector2d closest_point_on_segment(
+  const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b)
 {
-  const Vec2 ab = b - a;
+  const Eigen::Vector2d ab = b - a;
   const double length_squared = ab.squaredNorm();
   if (length_squared <= 0.0) {
     return a;
@@ -30,7 +31,8 @@ Vec2 closest_point_on_segment(const Vec2 & p, const Vec2 & a, const Vec2 & b)
   return a + t * ab;
 }
 
-double distance_to_segment(const Vec2 & p, const Vec2 & a, const Vec2 & b)
+double distance_to_segment(
+  const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b)
 {
   return (p - closest_point_on_segment(p, a, b)).norm();
 }

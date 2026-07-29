@@ -16,7 +16,7 @@
 #define ELTANIN__MAP_IO__PGM_HPP_
 
 #include <eltanin/map/grid_map.hpp>
-#include <eltanin/map_io/load_error.hpp>
+#include <eltanin/map_io/error.hpp>
 
 #include <cstdint>
 #include <filesystem>

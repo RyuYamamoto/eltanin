@@ -21,7 +21,7 @@ namespace
 
 using eltanin::closest_point_on_segment;
 using eltanin::distance_to_segment;
-using eltanin::Vec2;
+using Eigen::Vector2d;
 
 constexpr double kTol = 1e-12;
 
@@ -29,11 +29,11 @@ constexpr double kTol = 1e-12;
 
 TEST(Geometry, FootInsideSegment)
 {
-  const Vec2 a{0.0, 0.0};
-  const Vec2 b{2.0, 0.0};
-  const Vec2 p{1.0, 1.5};
+  const Vector2d a{0.0, 0.0};
+  const Vector2d b{2.0, 0.0};
+  const Vector2d p{1.0, 1.5};
 
-  const Vec2 closest = closest_point_on_segment(p, a, b);
+  const Vector2d closest = closest_point_on_segment(p, a, b);
   EXPECT_NEAR(closest.x(), 1.0, kTol);
   EXPECT_NEAR(closest.y(), 0.0, kTol);
   EXPECT_NEAR(distance_to_segment(p, a, b), 1.5, kTol);
@@ -41,11 +41,11 @@ TEST(Geometry, FootInsideSegment)
 
 TEST(Geometry, FootBeyondStartClampsToA)
 {
-  const Vec2 a{0.0, 0.0};
-  const Vec2 b{2.0, 0.0};
-  const Vec2 p{-3.0, 4.0};
+  const Vector2d a{0.0, 0.0};
+  const Vector2d b{2.0, 0.0};
+  const Vector2d p{-3.0, 4.0};
 
-  const Vec2 closest = closest_point_on_segment(p, a, b);
+  const Vector2d closest = closest_point_on_segment(p, a, b);
   EXPECT_NEAR(closest.x(), 0.0, kTol);
   EXPECT_NEAR(closest.y(), 0.0, kTol);
   EXPECT_NEAR(distance_to_segment(p, a, b), 5.0, kTol);
@@ -53,11 +53,11 @@ TEST(Geometry, FootBeyondStartClampsToA)
 
 TEST(Geometry, FootBeyondEndClampsToB)
 {
-  const Vec2 a{0.0, 0.0};
-  const Vec2 b{2.0, 0.0};
-  const Vec2 p{5.0, 4.0};
+  const Vector2d a{0.0, 0.0};
+  const Vector2d b{2.0, 0.0};
+  const Vector2d p{5.0, 4.0};
 
-  const Vec2 closest = closest_point_on_segment(p, a, b);
+  const Vector2d closest = closest_point_on_segment(p, a, b);
   EXPECT_NEAR(closest.x(), 2.0, kTol);
   EXPECT_NEAR(closest.y(), 0.0, kTol);
   EXPECT_NEAR(distance_to_segment(p, a, b), 5.0, kTol);
@@ -65,10 +65,10 @@ TEST(Geometry, FootBeyondEndClampsToB)
 
 TEST(Geometry, DegenerateSegmentMeasuresToEndpoint)
 {
-  const Vec2 a{1.0, 1.0};
-  const Vec2 p{4.0, 5.0};
+  const Vector2d a{1.0, 1.0};
+  const Vector2d p{4.0, 5.0};
 
-  const Vec2 closest = closest_point_on_segment(p, a, a);
+  const Vector2d closest = closest_point_on_segment(p, a, a);
   EXPECT_NEAR(closest.x(), 1.0, kTol);
   EXPECT_NEAR(closest.y(), 1.0, kTol);
   EXPECT_NEAR(distance_to_segment(p, a, a), 5.0, kTol);
@@ -76,20 +76,20 @@ TEST(Geometry, DegenerateSegmentMeasuresToEndpoint)
 
 TEST(Geometry, PointOnSegmentHasZeroDistance)
 {
-  const Vec2 a{-1.0, -1.0};
-  const Vec2 b{3.0, 3.0};
-  EXPECT_NEAR(distance_to_segment(Vec2{1.0, 1.0}, a, b), 0.0, kTol);
+  const Vector2d a{-1.0, -1.0};
+  const Vector2d b{3.0, 3.0};
+  EXPECT_NEAR(distance_to_segment(Vector2d{1.0, 1.0}, a, b), 0.0, kTol);
   EXPECT_NEAR(distance_to_segment(a, a, b), 0.0, kTol);
   EXPECT_NEAR(distance_to_segment(b, a, b), 0.0, kTol);
 }
 
 TEST(Geometry, DistanceAgreesWithClosestPoint)
 {
-  const Vec2 a{-2.0, 0.5};
-  const Vec2 b{1.5, 3.0};
+  const Vector2d a{-2.0, 0.5};
+  const Vector2d b{1.5, 3.0};
   for (int i = -20; i <= 20; ++i) {
     for (int j = -20; j <= 20; ++j) {
-      const Vec2 p{0.4 * static_cast<double>(i), 0.3 * static_cast<double>(j)};
+      const Vector2d p{0.4 * static_cast<double>(i), 0.3 * static_cast<double>(j)};
       const double from_closest = (p - closest_point_on_segment(p, a, b)).norm();
       EXPECT_NEAR(distance_to_segment(p, a, b), from_closest, kTol);
     }
@@ -98,8 +98,8 @@ TEST(Geometry, DistanceAgreesWithClosestPoint)
 
 TEST(Geometry, ClosestPointIsSymmetricInSegmentOrientation)
 {
-  const Vec2 a{0.0, 0.0};
-  const Vec2 b{2.0, 1.0};
-  const Vec2 p{0.3, 1.7};
+  const Vector2d a{0.0, 0.0};
+  const Vector2d b{2.0, 1.0};
+  const Vector2d p{0.3, 1.7};
   EXPECT_NEAR(distance_to_segment(p, a, b), distance_to_segment(p, b, a), kTol);
 }

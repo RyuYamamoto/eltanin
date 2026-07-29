@@ -67,19 +67,19 @@ int read_int_token(std::istream & in, const std::string & what)
 {
   const std::string token = read_token(in);
   if (token.empty()) {
-    throw LoadError(LoadErrorKind::PgmSizeMismatch, "PGM header ended before " + what);
+    throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "PGM header ended before " + what);
   }
   try {
     std::size_t consumed = 0;
     const int value = std::stoi(token, &consumed);
     if (consumed != token.size()) {
-      throw LoadError(LoadErrorKind::PgmSizeMismatch, "PGM " + what + " is not an integer");
+      throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "PGM " + what + " is not an integer");
     }
     return value;
   } catch (const std::invalid_argument &) {
-    throw LoadError(LoadErrorKind::PgmSizeMismatch, "PGM " + what + " is not an integer");
+    throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "PGM " + what + " is not an integer");
   } catch (const std::out_of_range &) {
-    throw LoadError(LoadErrorKind::PgmSizeMismatch, "PGM " + what + " is out of range");
+    throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "PGM " + what + " is out of range");
   }
 }
 
@@ -89,29 +89,29 @@ PgmImage read_pgm(const std::filesystem::path & path)
 {
   std::ifstream in(path, std::ios::binary);
   if (!in.is_open()) {
-    throw LoadError(LoadErrorKind::FileNotFound, "cannot open PGM file: " + path.string());
+    throw MapIoError(MapIoErrorKind::FileNotFound, "cannot open PGM file: " + path.string());
   }
 
   const std::string magic = read_token(in);
   if (magic != "P5") {
-    throw LoadError(LoadErrorKind::PgmBadMagic, "unsupported PGM magic: '" + magic + "'");
+    throw MapIoError(MapIoErrorKind::PgmBadMagic, "unsupported PGM magic: '" + magic + "'");
   }
 
   const int width = read_int_token(in, "width");
   const int height = read_int_token(in, "height");
   if (width <= 0 || height <= 0) {
-    throw LoadError(LoadErrorKind::PgmSizeMismatch, "PGM dimensions must be positive");
+    throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "PGM dimensions must be positive");
   }
 
   const int maxval = read_int_token(in, "maxval");
   if (maxval != 255) {
-    throw LoadError(
-      LoadErrorKind::PgmBadMaxval, "only maxval 255 is supported, got " + std::to_string(maxval));
+    throw MapIoError(
+      MapIoErrorKind::PgmBadMaxval, "only maxval 255 is supported, got " + std::to_string(maxval));
   }
 
   // Exactly one whitespace character separates the header from the pixel data.
   if (!is_pgm_space(in.peek())) {
-    throw LoadError(LoadErrorKind::PgmTruncated, "PGM header is not terminated by whitespace");
+    throw MapIoError(MapIoErrorKind::PgmTruncated, "PGM header is not terminated by whitespace");
   }
   in.get();
 
@@ -123,8 +123,8 @@ PgmImage read_pgm(const std::filesystem::path & path)
   image.pixels.resize(pixel_count);
   in.read(reinterpret_cast<char *>(image.pixels.data()), static_cast<std::streamsize>(pixel_count));
   if (static_cast<std::size_t>(in.gcount()) != pixel_count) {
-    throw LoadError(
-      LoadErrorKind::PgmTruncated, "PGM pixel data is shorter than the declared size");
+    throw MapIoError(
+      MapIoErrorKind::PgmTruncated, "PGM pixel data is shorter than the declared size");
   }
   return image;
 }
@@ -134,12 +134,13 @@ void write_pgm(const std::filesystem::path & path, const map::Costmap & costmap)
   const int width = costmap.size_x();
   const int height = costmap.size_y();
   if (width <= 0 || height <= 0) {
-    throw LoadError(LoadErrorKind::PgmSizeMismatch, "cannot write a PGM for an empty map");
+    throw MapIoError(MapIoErrorKind::PgmSizeMismatch, "cannot write a PGM for an empty map");
   }
 
   std::ofstream out(path, std::ios::binary);
   if (!out.is_open()) {
-    throw LoadError(LoadErrorKind::WriteFailed, "cannot open PGM file for writing: " + path.string());
+    throw MapIoError(
+      MapIoErrorKind::WriteFailed, "cannot open PGM file for writing: " + path.string());
   }
 
   out << "P5\n" << width << " " << height << "\n255\n";
@@ -152,7 +153,7 @@ void write_pgm(const std::filesystem::path & path, const map::Costmap & costmap)
   }
   out.flush();
   if (!out) {
-    throw LoadError(LoadErrorKind::WriteFailed, "failed to write PGM file: " + path.string());
+    throw MapIoError(MapIoErrorKind::WriteFailed, "failed to write PGM file: " + path.string());
   }
 }
 

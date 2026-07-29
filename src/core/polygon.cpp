@@ -19,9 +19,9 @@
 namespace eltanin
 {
 
-bool contains(const Polygon2D & polygon, const Vec2 & point, double edge_tolerance)
+bool contains(const Polygon2D & polygon, const Eigen::Vector2d & point, double edge_tolerance)
 {
-  const std::vector<Vec2> & v = polygon.vertices();
+  const std::vector<Eigen::Vector2d> & v = polygon.vertices();
   const std::size_t n = v.size();
   if (n < 3) {
     return false;
@@ -52,7 +52,7 @@ bool contains(const Polygon2D & polygon, const Vec2 & point, double edge_toleran
 
 double signed_area(const Polygon2D & polygon)
 {
-  const std::vector<Vec2> & v = polygon.vertices();
+  const std::vector<Eigen::Vector2d> & v = polygon.vertices();
   const std::size_t n = v.size();
   if (n < 3) {
     return 0.0;
@@ -66,9 +66,9 @@ double signed_area(const Polygon2D & polygon)
 
 Polygon2D transform(const Polygon2D & polygon, const Transform2D & tf)
 {
-  std::vector<Vec2> transformed;
+  std::vector<Eigen::Vector2d> transformed;
   transformed.reserve(polygon.size());
-  for (const Vec2 & vertex : polygon) {
+  for (const Eigen::Vector2d & vertex : polygon) {
     transformed.push_back(tf * vertex);
   }
   return Polygon2D(std::move(transformed));

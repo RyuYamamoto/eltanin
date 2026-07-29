@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#ifndef ELTANIN__MAP_IO__LOAD_ERROR_HPP_
-#define ELTANIN__MAP_IO__LOAD_ERROR_HPP_
+#ifndef ELTANIN__MAP_IO__ERROR_HPP_
+#define ELTANIN__MAP_IO__ERROR_HPP_
 
 #include <stdexcept>
 #include <string>
@@ -21,7 +21,7 @@
 namespace eltanin::map_io
 {
 
-enum class LoadErrorKind
+enum class MapIoErrorKind
 {
   FileNotFound,
   YamlParseError,
@@ -37,20 +37,20 @@ enum class LoadErrorKind
 };
 
 /// Thrown by map_io only; eltanin_core and eltanin_map never throw.
-class LoadError : public std::runtime_error
+class MapIoError : public std::runtime_error
 {
 public:
-  LoadError(LoadErrorKind kind, const std::string & message)
+  MapIoError(MapIoErrorKind kind, const std::string & message)
   : std::runtime_error(message), kind_(kind)
   {
   }
 
-  LoadErrorKind kind() const noexcept { return kind_; }
+  MapIoErrorKind kind() const noexcept { return kind_; }
 
 private:
-  LoadErrorKind kind_;
+  MapIoErrorKind kind_;
 };
 
 }  // namespace eltanin::map_io
 
-#endif  // ELTANIN__MAP_IO__LOAD_ERROR_HPP_
+#endif  // ELTANIN__MAP_IO__ERROR_HPP_

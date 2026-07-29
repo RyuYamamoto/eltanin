@@ -25,7 +25,7 @@
 namespace eltanin::map
 {
 
-/// Maps an obstacle distance [m] to a nav2-scale cost using exponential decay anchored at the inscribed radius.
+/// Converts an obstacle distance [m] to a nav2-scale cost, decaying from inscribed_radius.
 class InflationCostModel
 {
 public:
@@ -34,12 +34,10 @@ public:
 
   std::uint8_t cost_at_distance(double distance) const noexcept;
 
-  /// Cost threshold for the circumscribed radius; never below 1 so that FREE_SPACE stays traversable.
+  /// Threshold for the circumscribed radius; never below 1 so FREE_SPACE stays traversable.
   std::uint8_t circumscribed_cost() const noexcept { return circumscribed_cost_; }
 
   const CollisionRadii & radii() const noexcept { return radii_; }
-
-  double cost_scaling_factor() const noexcept { return cost_scaling_factor_; }
 
 private:
   InflationCostModel(const CollisionRadii & radii, double cost_scaling_factor);
@@ -54,21 +52,21 @@ class CostTraversabilityModel
 {
 public:
   explicit CostTraversabilityModel(
-    std::uint8_t circumscribed_cost, bool unknown_is_traversable = false)
-  : circumscribed_cost_(circumscribed_cost), unknown_is_traversable_(unknown_is_traversable)
+    std::uint8_t circumscribed_cost, bool unknown_is_free = false)
+  : circumscribed_cost_(circumscribed_cost), unknown_is_traversable_(unknown_is_free)
   {
   }
 
   Traversability classify(std::uint8_t cost) const noexcept
   {
     if (cost == NO_INFORMATION) {
-      return unknown_is_traversable_ ? Traversability::Free : Traversability::AlwaysColliding;
+      return unknown_is_traversable_ ? Traversability::Free : Traversability::Inscribed;
     }
     if (cost >= INSCRIBED_INFLATED_OBSTACLE) {
-      return Traversability::AlwaysColliding;
+      return Traversability::Inscribed;
     }
     if (cost >= circumscribed_cost_) {
-      return Traversability::OrientationDependent;
+      return Traversability::Circumscribed;
     }
     return Traversability::Free;
   }

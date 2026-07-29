@@ -61,7 +61,7 @@ int main(int argc, char ** argv)
               << "inscribed   : " << inscribed_cells << '\n'
               << "lethal      : " << lethal_cells << '\n'
               << "unknown     : " << unknown_cells << '\n';
-  } catch (const eltanin::map_io::LoadError & error) {
+  } catch (const eltanin::map_io::MapIoError & error) {
     std::cerr << "failed to load map: " << error.what() << '\n';
     return 1;
   }

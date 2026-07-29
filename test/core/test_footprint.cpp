@@ -30,22 +30,22 @@ using eltanin::CollisionRadii;
 using eltanin::inscribed_radius;
 using eltanin::Polygon2D;
 using eltanin::Traversability;
-using eltanin::Vec2;
+using Eigen::Vector2d;
 
 constexpr double kTol = 1e-12;
 
 Polygon2D centered_square(double half)
 {
   return Polygon2D{
-    Vec2{-half, -half}, Vec2{half, -half}, Vec2{half, half}, Vec2{-half, half}};
+    Vector2d{-half, -half}, Vector2d{half, -half}, Vector2d{half, half}, Vector2d{-half, half}};
 }
 
 /// Concave footprint whose arm edge has its perpendicular foot outside the segment.
 Polygon2D notched_footprint()
 {
   return Polygon2D{
-    Vec2{-2.0, -2.0}, Vec2{2.0, -2.0}, Vec2{2.0, 0.5},
-    Vec2{6.0, 0.5}, Vec2{6.0, 3.0}, Vec2{-2.0, 3.0}};
+    Vector2d{-2.0, -2.0}, Vector2d{2.0, -2.0}, Vector2d{2.0, 0.5},
+    Vector2d{6.0, 0.5}, Vector2d{6.0, 3.0}, Vector2d{-2.0, 3.0}};
 }
 
 }  // namespace
@@ -67,7 +67,7 @@ TEST(Footprint, RadiiOfCenteredSquare)
 TEST(Footprint, RadiiOfRectangle)
 {
   const Polygon2D rectangle{
-    Vec2{-1.0, -0.5}, Vec2{1.0, -0.5}, Vec2{1.0, 0.5}, Vec2{-1.0, 0.5}};
+    Vector2d{-1.0, -0.5}, Vector2d{1.0, -0.5}, Vector2d{1.0, 0.5}, Vector2d{-1.0, 0.5}};
   const auto inscribed = inscribed_radius(rectangle);
   const auto circumscribed = circumscribed_radius(rectangle);
   ASSERT_TRUE(inscribed.has_value());
@@ -78,7 +78,8 @@ TEST(Footprint, RadiiOfRectangle)
 
 TEST(Footprint, RadiiWhenOriginIsNotTheCentroid)
 {
-  const Polygon2D offset{Vec2{-0.2, -0.3}, Vec2{1.8, -0.3}, Vec2{1.8, 0.3}, Vec2{-0.2, 0.3}};
+  const Polygon2D offset{
+    Vector2d{-0.2, -0.3}, Vector2d{1.8, -0.3}, Vector2d{1.8, 0.3}, Vector2d{-0.2, 0.3}};
   const auto inscribed = inscribed_radius(offset);
   const auto circumscribed = circumscribed_radius(offset);
   ASSERT_TRUE(inscribed.has_value());
@@ -100,7 +101,7 @@ TEST(Footprint, InscribedRadiusClampsToSegmentNotSupportingLine)
 TEST(Footprint, RadiiIndependentOfWinding)
 {
   const Polygon2D footprint = notched_footprint();
-  std::vector<Vec2> reversed_vertices = footprint.vertices();
+  std::vector<Vector2d> reversed_vertices = footprint.vertices();
   std::reverse(reversed_vertices.begin(), reversed_vertices.end());
   const Polygon2D flipped(std::move(reversed_vertices));
 
@@ -113,7 +114,8 @@ TEST(Footprint, RadiiIndependentOfWinding)
 
 TEST(Footprint, OriginOutsidePolygonHasNoInscribedRadius)
 {
-  const Polygon2D away{Vec2{1.0, 1.0}, Vec2{3.0, 1.0}, Vec2{3.0, 3.0}, Vec2{1.0, 3.0}};
+  const Polygon2D away{
+    Vector2d{1.0, 1.0}, Vector2d{3.0, 1.0}, Vector2d{3.0, 3.0}, Vector2d{1.0, 3.0}};
   EXPECT_FALSE(inscribed_radius(away).has_value());
   EXPECT_TRUE(circumscribed_radius(away).has_value());
 }
@@ -123,11 +125,11 @@ TEST(Footprint, DegeneratePolygonHasNoRadii)
   EXPECT_FALSE(inscribed_radius(Polygon2D{}).has_value());
   EXPECT_FALSE(circumscribed_radius(Polygon2D{}).has_value());
 
-  const Polygon2D two_points{Vec2{-1.0, 0.0}, Vec2{1.0, 0.0}};
+  const Polygon2D two_points{Vector2d{-1.0, 0.0}, Vector2d{1.0, 0.0}};
   EXPECT_FALSE(inscribed_radius(two_points).has_value());
   EXPECT_FALSE(circumscribed_radius(two_points).has_value());
 
-  const Polygon2D zero_area{Vec2{-1.0, 0.0}, Vec2{0.0, 0.0}, Vec2{1.0, 0.0}};
+  const Polygon2D zero_area{Vector2d{-1.0, 0.0}, Vector2d{0.0, 0.0}, Vector2d{1.0, 0.0}};
   EXPECT_FALSE(inscribed_radius(zero_area).has_value());
   EXPECT_TRUE(circumscribed_radius(zero_area).has_value());
 }
@@ -165,10 +167,10 @@ TEST(Footprint, DistanceModelBoundaries)
   const auto radii = CollisionRadii::from_radii(0.3, 0.5, 1.0);
   ASSERT_TRUE(radii.has_value());
 
-  EXPECT_EQ(radii->classify(0.0), Traversability::AlwaysColliding);
-  EXPECT_EQ(radii->classify(0.29), Traversability::AlwaysColliding);
-  EXPECT_EQ(radii->classify(0.3), Traversability::OrientationDependent);
-  EXPECT_EQ(radii->classify(0.49), Traversability::OrientationDependent);
+  EXPECT_EQ(radii->classify(0.0), Traversability::Inscribed);
+  EXPECT_EQ(radii->classify(0.29), Traversability::Inscribed);
+  EXPECT_EQ(radii->classify(0.3), Traversability::Circumscribed);
+  EXPECT_EQ(radii->classify(0.49), Traversability::Circumscribed);
   EXPECT_EQ(radii->classify(0.5), Traversability::Free);
   EXPECT_EQ(radii->classify(10.0), Traversability::Free);
 }

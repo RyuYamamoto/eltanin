@@ -21,10 +21,12 @@ namespace eltanin
 {
 
 /// Closest point of segment [a, b] to `p`; parameter is clamped so the result is on the segment.
-Vec2 closest_point_on_segment(const Vec2 & p, const Vec2 & a, const Vec2 & b);
+Eigen::Vector2d closest_point_on_segment(
+  const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b);
 
 /// Distance from `p` to segment [a, b]. A degenerate segment (a == b) measures to `a`.
-double distance_to_segment(const Vec2 & p, const Vec2 & a, const Vec2 & b);
+double distance_to_segment(
+  const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b);
 
 }  // namespace eltanin
 

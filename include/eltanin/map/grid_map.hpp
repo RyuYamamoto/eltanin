@@ -79,14 +79,6 @@ public:
     return cells_[geometry_.index(mx, my)];
   }
 
-  T get_or(int mx, int my, const T & fallback) const
-  {
-    if (!geometry_.in_bounds(mx, my)) {
-      return fallback;
-    }
-    return cells_[geometry_.index(mx, my)];
-  }
-
   /// Returns false when out of bounds; the map is left untouched.
   bool set(int mx, int my, const T & value)
   {
@@ -102,13 +94,6 @@ public:
   std::vector<T> & data() noexcept { return cells_; }
 
   const std::vector<T> & data() const noexcept { return cells_; }
-
-  /// New map with the same geometry but a different cell type.
-  template <class U>
-  GridMap<U> make_like(const U & initial = U{}) const
-  {
-    return GridMap<U>(geometry_, initial);
-  }
 
 private:
   MapGeometry geometry_;
