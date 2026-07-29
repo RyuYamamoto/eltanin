@@ -142,6 +142,14 @@ nav2 準拠の `uint8_t` スケールを用いる。
 - `d = inscribed_radius` で `exp(0) = 1` → `252`。`253 → 252` なので単調非増加が保たれる。
 - `d = inflation_radius` でコストは 0 にならず、そこを超えた瞬間に 0 へ落ちる。nav2 と同じ挙動 (膨張半径外は触らない) であり、単調非増加は破らない。
 
+#### 境界セルで 252 ではなく 251 になることがある (原理的なもの)
+
+膨張処理はセル距離に `resolution` を掛けて [m] に直してから `cost_at_distance()` に渡す。このとき `hypot(dx, dy) * resolution` は、たとえ数学的に `inscribed_radius` と等しくても、半径リテラルの double 表現と**ビット一致しない**ことがある。
+
+例: `resolution = 0.05`、`(dx, dy) = (3, 0)`、`inscribed_radius = 0.15` のとき `3 * 0.05 = 0.15000000000000000832...` に対し `0.15 = 0.14999999999999999444...` であり、`d < inscribed_radius` が偽になる。減衰域の式が使われ `252 * exp(-10 * 8.3e-18) = 251.99999999999997` が切り捨てられて **251** になる。
+
+これは実装バグではなく `uint8_t` 切り捨ての原理的な帰結である。251 も 252 も同じ `Circumscribed` 帯なので下流の分類には影響しない。**手書きの期待値テストを書くときは、`hypot(dx, dy) * resolution` がどのセルでも半径リテラルと一致しないフィクスチャを選ぶこと。**
+
 ### 5.2 `circumscribed_cost()` の下限クランプ (確定)
 
 **`circumscribed_cost()` は `std::max<std::uint8_t>(1, cost_at_distance(circumscribed_radius))` を返す。**
@@ -405,9 +413,8 @@ public:
 | モジュール | ターゲット | 担当 | 内容 |
 |---|---|---|---|
 | `core/` | `eltanin_core` / `eltanin::core` | T1 | 型・角度・多角形・フットプリント半径・経路 |
-| `map/` | `eltanin_map` / `eltanin::map` | T1 | グリッドマップ、幾何情報型、コスト定数、判定モデル 2 実装、距離 → コスト変換 |
+| `map/` | `eltanin_map` / `eltanin::map` | T1 / T2 | グリッドマップ、幾何情報型、コスト定数、判定モデル 2 実装、距離 → コスト変換、コストマップレイヤ (static / obstacle / inflation) と `LayeredCostmap` |
 | `map_io/` | `eltanin_map_io` / `eltanin::map_io` | T1 | PGM + YAML 読み込み、PGM 書き出し (yaml-cpp 依存) |
-| `map/layers/` | `eltanin_map_layers` | T2 | 膨張処理 (近傍展開により `uint8_t` へ書き込み)、static / obstacle レイヤ、LayeredCostmap、ROI 走査 |
 | `sensor/` | `eltanin_sensor` | T3 | Scan 投影 |
 | `planner/` | `eltanin_planner` | T4 | グローバル / ローカルプランナ (1 パス探索) |
 | `control/` | `eltanin_control` | T5 | 経路追従、`Pose2D` / 角度の補間、累積弧長、線分交差 |
@@ -415,6 +422,8 @@ public:
 | `sim/` | `eltanin_sim` | T6 | 簡易シミュレータ |
 
 統合デモ (navyu 相当の動作確認) は T7。
+
+**T2 のレイヤは独立ターゲット `eltanin_map_layers` にせず `eltanin_map` に統合した。** レイヤが使うのは `Costmap` / `MapGeometry` / `InflationCostModel` ですべて `eltanin_map` の中身であり、新ターゲットを切っても依存境界は 1 つも増えず、install / export の対象が増えるだけである。ヘッダは `include/eltanin/map/layers/`、ソースは `src/map/layers/` に置き、`src/map/CMakeLists.txt` の `add_library` に相対パスで列挙する。
 
 ### 12.1 ヘッダとソースの物理配置
 
@@ -436,7 +445,9 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 4. ルート `CMakeLists.txt` に `add_subdirectory(src/<module>)` を 1 行足す。
 5. `test/<module>/CMakeLists.txt` を作り、`test/CMakeLists.txt` に `add_subdirectory(<module>)` を 1 行足す。テストはモジュールごとに 1 実行ファイルにまとめ、`gtest_discover_tests(... PROPERTIES ENVIRONMENT "${ELTANIN_TEST_ENVIRONMENT}")` で登録する。
 
-ライブラリはすべて STATIC。ヘッダオンリー (INTERFACE) にしない — 宣言と定義の分離が実際にビルドされることを常に検証したいため。ホットループのアクセサはヘッダ内 `inline`、仮想関数は持たせない。
+ライブラリはすべて STATIC。ヘッダオンリー (INTERFACE) にしない — 宣言と定義の分離が実際にビルドされることを常に検証したいため。ホットループのアクセサはヘッダ内 `inline` とし、**そこには仮想関数を持たせない**。
+
+**モジュール境界の仮想ディスパッチは明示的に許可する。** `Layer::update_costs()` は更新周期 (1〜5 Hz) × レイヤ数 (3) しか呼ばれず、内側の約 1.2e7 回のセル書き込みは非仮想の実装内部で行われる。「仮想関数を持たせない」規約はセルアクセサ (`GridMap::operator()` / `operator[]`、`MapGeometry` の変換) に限定される。
 
 ### 12.3 ビルドオプション
 
@@ -461,9 +472,9 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 
 ---
 
-## 13. T2 への申し送り
+## 13. T2 への申し送り (T2 で決着済み)
 
-膨張処理 (近傍展開により `uint8_t` へ書き込み) を実装する際の前提。
+膨張処理 (近傍展開により `uint8_t` へ書き込み) を実装する際の前提。**6 項目すべての決着は 14 章に記す。**
 
 1. **「向き次第」の帯の検証**: 実マップの膨張結果に対し、`circumscribed_cost <= cost < 253` の帯が**空でなく、かつ有界である**ことを受け入れ条件にする。「3 値すべてが出現すること」では弱い。`circumscribed_cost()` の計算が壊れていると、この帯は空になるか逆に地図全体を覆う。
 2. **距離帯とコスト符号化の区別**: 3 章の表を参照。距離では「向き次第」の帯が「必ず衝突」の帯を包含するが、コスト値では 2 つの区間は互いに素である。区別せずに読むと「入れ子になっていること」を検証しようとして混乱する。
@@ -475,3 +486,87 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 
    **`MapGeometry` の外で `std::floor((wx - origin_x) / resolution)` を書かないこと。** これを許すと navyu の 5 箇所重複が再発する。変換の実装が `MapGeometry` の中にしか無い状態を維持する。
 6. **`NO_INFORMATION` の扱い**: `CostTraversabilityModel` は `unknown_is_free` フラグで分岐する。膨張処理側でも未知セルの扱いを設定として一元化し、全経路で一貫させること (navyu は内接円分岐で未知の扱いが抜けていた)。
+
+---
+
+## 14. T2 で確定した事項 (コストマップレイヤと膨張処理)
+
+`include/eltanin/map/layers/` の `Layer` / `StaticLayer` / `ObstacleLayer` / `InflationLayer` と `include/eltanin/map/layered_costmap.hpp` の `LayeredCostmap` に関する決定。
+
+### 14.1 レイヤ境界の規約
+
+- **レイヤは master のセル値だけを書き換える。ジオメトリを変更してはならない。** `GridMap::set_origin()` が公開されているため型システムでは防げない。規約として守り、3 レイヤすべてと `LayeredCostmap::update()` の前後で `MapGeometry::operator==` を確認するテストで固定する。
+  - レイヤに制限ビュー型 (セル書き込みのみ許し `const MapGeometry &` を返すラッパ) を渡す案は却下した。利用者が 1 つしかない型を増やすことになり 9.2 に反する。nav2 も `Layer::updateCosts(Costmap2D &, ...)` で同じ緩さを許している。
+- **origin の更新は容器 (`LayeredCostmap`) の責務であり、レイヤの責務ではない。** navyu は `dynamic_layer` の中で `master_costmap.info.origin` を書き換えていた。`LayeredCostmap` は master への非 const アクセサを公開せず、これを型で支える。
+- レイヤの適用順は登録順。**`InflationLayer` を最後に置くのは利用者の責務**であり、順序を型で強制しない。強制すると `LayeredCostmap` が膨張の存在を知る必要が生じる。
+- 3 レイヤとも公開コンストラクタ + `assert` で構築する (10 章の分類 A)。空の `Costmap` は `load_map()` の正常経路では生じず、呼び出し側のプログラミングエラーだからである。工場関数 (`create()` → `optional`) にすると `unique_ptr` 所有と噛み合わず `Costmap` のムーブが 2 回起きる。
+- レイヤは `LayeredCostmap::add_layer<LayerType>(args...)` で容器内に構築し、返された参照で毎サイクルのデータ供給 (`ObstacleLayer::set_points()`) を行う。返す参照は `unique_ptr` の指す先なので `LayeredCostmap` をムーブしても無効化せず、生存期間の規則は「`LayeredCostmap` の寿命の間有効」の 1 行で済む。
+
+### 14.2 `LayeredCostmap` のリセット値とロボット追従
+
+- **リセット値は構築時パラメータ `default_cost`。** グローバル (`StaticLayer` が全セルを書く) には `NO_INFORMATION`、ローカル (`ObstacleLayer` のみ) には `FREE_SPACE` を渡す。固定値にするとどちらかが必ず不適切になる。navyu は `data.clear()` + `resize()` のゼロ埋めに依存しており初期値が暗黙だった。
+- `update()` は ① master 全体を `default_cost` で `fill` ② 登録順に `update_costs(master)`。
+- **origin 更新でセルデータのシフトを行わない。** `update()` が master を全面再生成するため不要。
+  - **成立の前提: master に更新サイクルを跨いだ状態を持つレイヤが存在しないこと。** 将来この前提を破るレイヤ (減衰する障害物メモリ等) を足す場合はシフトが必要になる。7.3 の rolling window は保持を伴う場合の話である。
+- `center_on(robot)` は `origin = robot - (size * resolution) / 2` を計算して `set_origin()` に委譲する。navyu が `dynamic_layer` の中に持っていた計算をここ 1 箇所に置く。
+  - **origin を `resolution` の格子にスナップしない。** ロボット位置に連続追従するので、更新のたびにセル境界が微小にずれる。毎サイクル master を全面再生成する現設計では無害だが、**連続する 2 サイクルのコストマップをセル単位で比較する利用者が現れたら破綻する**。その時点で nav2 の rolling window と同様に origin を格子へ丸めること。
+
+### 14.3 `StaticLayer`
+
+- **master の `MapGeometry` を絶対に上書きしない。** navyu `static_layer.hpp` の `master_costmap = map_;` は global costmap 側で設定した width / height / resolution / origin をすべて地図側の値に置換していた。
+- ジオメトリが `operator==` で一致する場合はセル列を一括コピーする高速路を採る。
+- 一致しない場合は master の各セルについて `master.geometry().map_to_world()` → `source.geometry().world_to_map()` で最近傍セルを引く。`nullopt` (ソース地図の外) のセルは**触らない**ので `LayeredCostmap` のリセット値が残る。この経路により、ローカル / rolling なコストマップでも `StaticLayer` がそのまま使える。
+- 値は無条件コピーで、既存値との `max` 合成はしない。static は土台であり最初に適用される。
+
+**危険: 最近傍サンプリングはソース地図が master より細かいと障害物を落とす。** master の 1 セルが覆うソースセルのうち中心 1 個しか読まないためである。実測では 4×4 / `resolution 0.05` の `LETHAL` 3 セルを 2×2 / `resolution 0.1` へ写すと 2 セルしか残らない。想定用途 (グローバル = ジオメトリ一致の高速路、ローカル = 同解像度で原点だけ違う) はいずれも 1:1 対応なので発生しないが、**master をソースより粗くしてはならない**。粗い master が必要になったら、覆うソースセル群の `max` で集約する形に変えること (保守側に倒れる)。この挙動はテストで固定してある。
+
+### 14.4 `InflationLayer`
+
+- 膨張元は master の値が `LETHAL_OBSTACLE` のセルのみ。**`NO_INFORMATION` は膨張元にしない。** 実マップは 96 % が未知であり、膨張元に含めると自由空間の大半が潰れる。
+- 膨張窓は `r = ceil(inflation_radius / resolution)` セルとして `[mx - r, mx + r] × [my - r, my + r]` の**両端を含む対称窓**。マップ境界では `max` / `min` の整数クランプを行う。navyu は `for (y = min_y; y < max_y; y++)` で上端を除外し `-r 〜 +r-1` の非対称窓になっていた。
+- **窓のクランプはセル空間の整数演算であり world → cell 変換を伴わない。** したがって 13 章 5 項の「ROI をセル座標で必要としたら `MapGeometry` に足す」には該当せず、`MapGeometry` への追加は不要である。
+- **帯の分岐をレイヤ側で再実装しない。** 内接円帯 (253) も減衰域も `cost_at_distance()` の 1 回の呼び出しで得られる。navyu の unknown 欠陥は「内接円分岐と else 側で unknown の扱いが食い違った」ことなので、**分岐を 1 本に保つことが根本対策**である。
+- **「膨張半径外」の判定を `cost_at_distance()` と同一の述語に一本化する。** 距離 LUT の構築時に `distance = hypot(dx, dy) * resolution` を 1 回だけ求め、`distance > inflation_radius` を窓外判定に、同じ `distance` を `cost_at_distance()` の引数に使う。窓外は `std::int16_t` の `-1` で標識する。
+  - セル空間で `dx² + dy² <= (inflation_radius / resolution)²` を比較する形は却下した。`cost_at_distance()` 内部の `distance > inflation_radius` と**別の浮動小数点式**になり、境界セルで判定が食い違いうる。
+  - 「`cost_at_distance()` が `FREE_SPACE` を返したら窓外と見なす」形も却下した。「窓の外」と「膨張半径内だが減衰値が切り捨てで 0」を混同する。`max` 合成経路では差が出ないが、`inflate_unknown == true` の置換経路では後者が `255 → 0` の書き込みになるため差が出る。
+- 合成規則 (全経路で一貫させる):
+  - 旧値が `NO_INFORMATION` かつ `inflate_unknown == false` → **書き込まない** (`255` を保持)。
+  - 旧値が `NO_INFORMATION` かつ `inflate_unknown == true` → 算出コストで**置換**する。**算出コストが 0 でも置換する** (`cost_scaling_factor` が大きいと減衰値が切り捨てで 0 になり、未知セルが `FREE_SPACE` になる)。これは意図した挙動でありテストで固定している。
+  - それ以外 → `max(旧値, 算出コスト)`。
+  - **`255` が数値上の最大値であることに依存した暗黙の unknown 保護をしない。** `max` に任せると `inflate_unknown == true` が実装不能になり、意図がコードから読めない。明示分岐にする。
+- **単一 in-place パスで正しい。** 膨張が書く最大値は `INSCRIBED_INFLATED_OBSTACLE (253)` であり、膨張元の条件である `LETHAL_OBSTACLE (254)` より小さい。unknown 置換経路も `255 → cost (<= 253)` なので 254 を作らない。よって走査中に膨張元が破壊も新規生成もされず、16 MB のコピーを持たずに済む。
+- **結果は走査順に依存しない。** `max` は可換・結合的であり、unknown 経路も「保持」なら常に 255、「置換」なら 2 回目以降は `max` と一致するため、最終値は全膨張元にわたる `max` になる。
+- 距離 LUT は `(r+1) × (r+1)` の `std::int16_t` を持ち、**解像度が変わったときだけ再構築する**。`InflationCostModel` は構築後不変なので再構築の契機は解像度だけである。実マップの `r = 11` では 288 バイト。
+- **`resolution == 0` の入口を閉じる。** 既定構築の `MapGeometry` は `resolution_ = 0` であり、`ceil(inflation_radius / 0.0)` = `inf` を `int` にキャストすると未定義動作になる (UBSan が検出する)。`LayeredCostmap` のコンストラクタと `InflationLayer::update_costs()` の先頭で `assert` する。
+- **注意**: `inflation_radius / resolution` が極端に大きい設定 (例 `inflation_radius = 100`, `resolution = 0.05` → `r = 2000`) では LUT が 8 MB になり、内側ループが 1 膨張元あたり 1.6e7 セルになる。これは設定の妥当性の問題であり `assert` では防がない。
+
+### 14.5 `ObstacleLayer`
+
+- world 座標の点列を `std::span<const Eigen::Vector2d>` で受け、**内部の `std::vector` にコピーして保持する**。`span` はビューであり、保持するとダングリングを招く。点列未設定は正常状態 (観測前) であり、`update_costs()` は何もしない。
+- 変換は `MapGeometry::world_to_map()` のみを使う。navyu `dynamic_layer.hpp` の `static_cast<int>((x - origin_x) / resolution)` は負値をゼロ方向に切り捨てるため origin より小さい world 座標を範囲内と誤判定していたが、`floor` + 飽和キャストなので構造的に起こらない。
+- `NO_INFORMATION` のセルも無条件に `LETHAL_OBSTACLE` で上書きする。観測は未知に対する情報の増加である。
+
+### 14.6 13 章の申し送り 6 項目の決着
+
+| # | 申し送り | 決着 |
+|---|---|---|
+| 1 | 「向き次第」の帯が空でなく有界であることを受け入れ条件にする | 実マップに対し `0 < circumscribed_count < 631664` (膨張前の `FREE_SPACE` セル数) をテストで固定した。実測は 56,217 |
+| 2 | 距離帯とコスト符号化の区別 | 3 章の記述を維持。分類は `CostTraversabilityModel` に任せ、テスト側で入れ子を前提とした集計をしない |
+| 3 | ゴールデン比較に `write_pgm()` を使える | 小グリッドの膨張結果を `write_pgm()` → 独立リーダで読み戻し、期待バイト列と厳密比較する。バイナリのゴールデンファイルはコミットしない |
+| 4 | 単位: `cost_at_distance()` の引数は [m] | LUT 構築時に `* resolution` して [m] に統一 (14.4) |
+| 5 | ROI をセル座標で必要としたら `MapGeometry` に足す | **不要だった。** 膨張窓のクランプは world → cell 変換を伴わない整数演算である (14.4) |
+| 6 | `NO_INFORMATION` の扱いを膨張処理側でも設定として一元化 | `inflate_unknown` (既定 `false`) に一元化し、全経路で一貫させた (14.4) |
+
+### 14.7 実マップに対する実測値 (回帰の基準)
+
+`navyu_navigation/map/map.pgm` (4000×4000 / `resolution 0.05` / 膨張前 free 631,664・lethal 22,952・unknown 15,345,384) に対し、矩形フットプリント `(±0.22, ±0.15)` / `inflation_radius = 0.55` / `cost_scaling_factor = 10.0` / `inflate_unknown = false` / `unknown_is_free = false` で膨張した結果。
+
+| 項目 | 値 |
+|---|---|
+| 膨張窓の半径 `r` | 11 セル |
+| `circumscribed_cost()` | 78 |
+| `Traversability::Inscribed` | 15,411,582 セル |
+| `Traversability::Circumscribed` | 56,217 セル |
+| `Traversability::Free` | 532,201 セル |
+
+`Inscribed` の大半は `NO_INFORMATION` の 15,345,384 セルである。この地図は 96 % が未探索であり、`unknown_is_free = false` では未知が通行不可に分類されるため妥当な数値である。
