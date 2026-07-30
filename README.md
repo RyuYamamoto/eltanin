@@ -121,8 +121,17 @@ The first one needs no map: it runs `VelocityLimiter` on synthetic wall and sing
 writes the limited speed against the gap to the wall for a forward **and** a reverse command, next to
 what navyu's `std::min()` would have produced, plus the collision verdict over a full turn. The
 second plans and tracks on a real map, stamps an obstacle onto the planned path after planning and
-dumps the predicted poses and the world-frame footprint. What these plots show is described in
-[docs/collision-design.md](docs/collision-design.md) §11.
+dumps the predicted poses and the world-frame footprint.
+
+Both write CSV and PGM only; `examples/plot_collision_results.py` turns those into figures.
+
+```bash
+python3 examples/plot_collision_results.py --synthetic out_dir --real out_dir --out plots
+```
+
+It is a developer tool, deliberately not wired into CMake: nothing in the build refers to it, so
+Python never becomes a build dependency. It needs matplotlib and numpy. What each figure shows is
+described in [docs/collision-design.md](docs/collision-design.md) §11.
 
 ## License
 

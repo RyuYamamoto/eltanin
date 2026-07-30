@@ -341,8 +341,14 @@ T1 から移送された要件のうち**重心 / 点と多角形の符号付き
 
 ## 11. 可視化 (`examples/`)
 
-可視化はコアに入れない (`AGENTS.md` の依存規則)。`examples/` が CSV / PGM を吐き、プロットは外部で行う。
+可視化はコアに入れない (`AGENTS.md` の依存規則)。C++ の example が CSV / PGM を吐き、
+作図は `examples/plot_collision_results.py` が行う。
 単体テストが「値が合っているか」を固定するのに対し、可視化は**テストが見ていない範囲**を拾う。
+
+`AGENTS.md` の禁止条項は「core planning/control/map logic に持ち込むな」であって、
+matplotlib-cpp は optional 依存として明示的に許可されている。CSV を読むだけの Python スクリプトは
+どのターゲットにもリンクされず CMake からも参照されないため、そもそも依存に当たらない。
+ただし **CMake のカスタムターゲットにはしない** — 繋いだ時点で Python が実ビルド依存になる。
 
 ### 11.1 `eltanin_limiter_profile <output_dir>` (マップ不要)
 
@@ -408,7 +414,21 @@ navyu の実マップ (`resolution 0.05`、経路 37.3 m) での実測:
 0.719 m、フットプリント前端と障害物端の間隔は 0.30 m で、閉ループテストが固定した
 `[collision_margin, collision_margin + 2 * abs(v) * dt] = [0.2, 0.4]` の中に入る。
 
-### 11.3 `examples/real_map_fixture.hpp`
+### 11.3 `examples/plot_collision_results.py`
+
+上記 2 本の出力を PNG にする開発ツール。依存は matplotlib と numpy のみ。
+
+```bash
+./build/examples/eltanin_limiter_profile /tmp/viz
+./build/examples/eltanin_limit_on_real_map map.yaml /tmp/viz-map
+python3 examples/plot_collision_results.py --synthetic /tmp/viz --real /tmp/viz-map --out plots
+```
+
+`--synthetic` / `--real` は片方だけでもよい。入力が足りなければ「どの example を先に走らせるか」を
+示して終了する。生成した PNG はリポジトリにコミットしない (`docs/costmap-design.md` §13-3 の
+「バイナリのゴールデンファイルはコミットしない」と同じ理由)。
+
+### 11.4 `examples/real_map_fixture.hpp`
 
 実マップ example 3 本 (`plan` / `track` / `limit`) が共有する部品 (読み込み + 膨張、自動 start/goal、
 クロップ、CSV / meta 出力) をここに集約した。抽出は挙動を変えていないことを、
