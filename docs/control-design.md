@@ -405,11 +405,16 @@ cmake -B build -DELTANIN_BUILD_EXAMPLES=ON && cmake --build build -j
 |---|---|
 | `crop.pgm` | 膨張コストマップを経路と軌跡の外接矩形 + 30 セルで切り出した画像 |
 | `path.csv` | `x,y,yaw` — A* + スムーザの経路 |
-| `trajectory.csv` | `t,x,y,yaw,v,w,lateral_error,travelled` — 追従した実軌跡 |
+| `trajectory.csv` | `t,x,y,yaw,v,w,lateral_error,travelled,target_index,lookahead_x,lookahead_y` — 追従した実軌跡 |
 | `meta.txt` | crop のジオメトリ、パラメータ、誤差の要約、`Circumscribed` / `Inscribed` 侵入数 |
 
 `crop.pgm` の座標系は `meta.txt` の `origin_x` / `origin_y` / `resolution` で CSV と対応が取れる。
 `lateral_offset` は経路始点から横に robot をずらす引数で、定常誤差ではなく過渡を見たいときに使う。
+
+`trajectory.csv` は `Result` の観測用フィールド (`target_index` / `lookahead_point`) もそのまま出す。
+**角で内側を切る理由はこの 2 列を見ないと分からない。** ロボット位置から `lookahead_x` / `lookahead_y` へ
+線を引くと、曲率半径 0.133 m の折れ点に対して先行距離 0.35 m が長すぎ、目標点が角の向こう側に置かれる
+ことが見える。§5.1 の結論はこの観察から出ている。
 
 **この例は回帰テストではない。** 実マップの存在に依存し、自動選択の start / goal が地図の内容で変わるため、
 `ctest` には入れていない (実マップ依存のテストは `test/planner/test_planner_real_map.cpp` と同じく

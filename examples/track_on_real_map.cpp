@@ -83,6 +83,8 @@ struct Sample
   Twist2D command{};
   double lateral_error{0.0};
   double travelled{0.0};
+  std::size_t target_index{0};
+  Eigen::Vector2d lookahead_point{Eigen::Vector2d::Zero()};
 };
 
 std::optional<MapIndex> first_free_cell(const Costmap & map, const CostTraversabilityModel & model)
@@ -161,8 +163,9 @@ std::vector<Sample> track(PurePursuit & tracker, const Path & path, const Pose2D
     if (result.status != PurePursuit::Status::Tracking) {
       break;
     }
-    samples.push_back(
-      Sample{pose, result.command, lateral_error(path, pose.position), travelled});
+    samples.push_back(Sample{
+      pose, result.command, lateral_error(path, pose.position), travelled, result.target_index,
+      result.lookahead_point});
 
     const double v = result.command.linear.x();
     pose.position.x() += v * std::cos(pose.yaw) * CONTROL_DT;
@@ -241,12 +244,13 @@ bool write_trajectory_csv(const std::filesystem::path & file, const std::vector<
   if (!out) {
     return false;
   }
-  out << "t,x,y,yaw,v,w,lateral_error,travelled\n";
+  out << "t,x,y,yaw,v,w,lateral_error,travelled,target_index,lookahead_x,lookahead_y\n";
   double time = 0.0;
   for (const Sample & sample : samples) {
     out << time << ',' << sample.pose.position.x() << ',' << sample.pose.position.y() << ','
         << sample.pose.yaw << ',' << sample.command.linear.x() << ',' << sample.command.angular
-        << ',' << sample.lateral_error << ',' << sample.travelled << '\n';
+        << ',' << sample.lateral_error << ',' << sample.travelled << ',' << sample.target_index
+        << ',' << sample.lookahead_point.x() << ',' << sample.lookahead_point.y() << '\n';
     time += CONTROL_DT;
   }
   return static_cast<bool>(out);
