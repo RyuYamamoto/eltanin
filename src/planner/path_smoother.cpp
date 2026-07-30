@@ -1,0 +1,70 @@
+// Copyright 2026 RyuYamamoto.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License
+
+#include <eltanin/planner/path_smoother.hpp>
+
+#include <cassert>
+#include <cmath>
+
+namespace eltanin::planner::detail
+{
+
+void assign_tangent_yaw(Path & path)
+{
+  const std::size_t n = path.size();
+  if (n <= 1) {
+    return;
+  }
+
+  bool has_tangent = false;
+  double tangent_yaw = 0.0;
+  std::size_t first_tangent = n;
+  for (std::size_t i = 0; i + 1 < n; ++i) {
+    const Eigen::Vector2d delta = path[i + 1].position - path[i].position;
+    if (delta.x() != 0.0 || delta.y() != 0.0) {
+      tangent_yaw = std::atan2(delta.y(), delta.x());
+      has_tangent = true;
+      if (first_tangent == n) {
+        first_tangent = i;
+      }
+    }
+    // A coincident pair carries the previous tangent forward instead of atan2(0, 0).
+    if (has_tangent) {
+      path[i].yaw = tangent_yaw;
+    }
+  }
+
+  if (first_tangent == n) {
+    // Every point coincides, so the terminal yaw is the only orientation available.
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+      path[i].yaw = path[n - 1].yaw;
+    }
+    return;
+  }
+  for (std::size_t i = 0; i < first_tangent; ++i) {
+    path[i].yaw = path[first_tangent].yaw;
+  }
+}
+
+void assert_smoother_params(const SmootherParams & params)
+{
+  assert(params.weight_data >= 0.0);
+  assert(params.weight_smooth >= 0.0);
+  assert(params.weight_data + 4.0 * params.weight_smooth < 2.0);
+  assert(params.tolerance >= 0.0);
+  assert(params.max_iterations >= 0);
+  static_cast<void>(params);
+}
+
+}  // namespace eltanin::planner::detail

@@ -52,6 +52,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/map)
 add_subdirectory(src/map_io)
 add_subdirectory(src/sensor)
+add_subdirectory(src/planner)
 
 if(ELTANIN_BUILD_TESTS)
   enable_testing()

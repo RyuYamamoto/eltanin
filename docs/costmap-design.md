@@ -202,6 +202,12 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 
 距離入力モデルを第一段階から実装する理由は、「2 つ目の実装が現れた時点で抽象化する」という原則を第一段階の時点で満たし、将来の距離場導入が**判定モデルの差し替えのみ**で済むことを実証するため。距離場が無くても、手で与えた距離値で単体テストできる。
 
+**T4 (`eltanin_planner`) がこの縫い目の最初の利用者になり、主張が実証された。** `plan()` / `smooth()` / `find_nearest_traversable()` を `Costmap` + `CostTraversabilityModel` と `DistanceMap` + `CollisionRadii` の 2 通りで実体化し、同一の通行可否分類になるコストマップと手で作った距離場が**ビット同一の `Path` を返す**ことをテストで固定した (`test/planner/test_planner_seam.cpp`)。
+
+- `CollisionRadii::classify(double)` に `float` セルを渡す形が concept を満たすため、**`DistanceMap` 側で追加のアダプタは不要**である (`TraversabilityModel<CollisionRadii, float>` が `float → double` の暗黙変換で成立する)。
+- プランナは判定モデルの適用を探索の前に全セル 1 回の分類として前置し、探索本体を非テンプレート関数にした。**探索本体はセル型も判定モデルも見ない**ため、上記の一致は構造的に保証される。詳細は `docs/planner-design.md` §2。
+- `Map` 側の要件は `CellMap` concept (`value_type` / `geometry()` / `operator()(int, int) const`) として `include/eltanin/planner/cell_map.hpp` に置いた。**2 人目の利用者が現れた時点で `include/eltanin/map/` へ移すこと。**
+
 ### 6.3 座標変換と幾何情報の分離
 
 - 幾何情報 (`size_x` / `size_y` / `resolution` / `origin`) を独立した型に切り出す。
@@ -256,6 +262,17 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 
 - 2 パス目で得た経路が外接円帯を通ることを下流 (制御 / セーフティ) にどう伝えるか。
 - 向き付きフットプリント衝突判定をどこで行うか (プランナ内 / セーフティ / 制御)。
+
+**T4 は 1 パス探索として実装した (2 パス化は入れていない)。** `Traversability::Free` のみ通行可、`Circumscribed` / `Inscribed` はともに通行不可である。狭路が閉塞して `nullopt` になる場合があるのは第一段階の仕様である。
+
+**追加時に触る箇所は「近傍展開の通行可否述語 1 本」で足りることを確認した。** プランナは判定モデルを適用した結果を `std::vector<std::uint8_t>` に **3 値のまま**保持しており (2 値に潰していない)、探索本体で通行可否を決めているのは以下の 2 箇所だけである。
+
+| 箇所 | 内容 |
+|---|---|
+| `src/planner/astar_planner.cpp` の近傍展開 | `grid[neighbor] != FREE` |
+| 同ファイルの `free_cell()` | 角抜け判定に使う `grid[index(...)] == FREE` (`in_bounds()` の後段) |
+
+2 パス目はこの述語を「`Free` または `Circumscribed`」に緩め、`Circumscribed` の通過にペナルティを加えた `g` で再探索する分岐を 1 本足すことになる。**型もインタフェースも変わらない。** スムーザ側の通行可否判定 (`path_smoother.hpp` の `is_traversable`) も同じ規則を使っているので、緩和を入れるならここも合わせる。
 
 ### 7.3 その他
 
@@ -416,7 +433,7 @@ public:
 | `map/` | `eltanin_map` / `eltanin::map` | T1 / T2 | グリッドマップ、幾何情報型、コスト定数、判定モデル 2 実装、距離 → コスト変換、コストマップレイヤ (static / obstacle / inflation) と `LayeredCostmap` |
 | `map_io/` | `eltanin_map_io` / `eltanin::map_io` | T1 | PGM + YAML 読み込み、PGM 書き出し (yaml-cpp 依存) |
 | `sensor/` | `eltanin_sensor` / `eltanin::sensor` | T3 (完了) | Scan 投影 (`ScanData` / `ScanFilter` / `project_scan`)。**依存は `eltanin_core` のみ** (tf / laser_geometry / PCL / ROS を持たない)。設計は `docs/sensor-design.md` |
-| `planner/` | `eltanin_planner` | T4 | グローバル / ローカルプランナ (1 パス探索) |
+| `planner/` | `eltanin_planner` / `eltanin::planner` | T4 (グローバルのみ完了 / ローカルは未着手) | 8 近傍 A* グローバルプランナ (1 パス探索)、最近傍通行可セル探索、反復平滑化スムーザ。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/planner-design.md` |
 | `control/` | `eltanin_control` | T5 | 経路追従、`Pose2D` / 角度の補間、累積弧長、線分交差 |
 | `safety/` | `eltanin_safety` | T6 | セーフティリミッタ、厳密フットプリント衝突 (多角形の重心 / 凸性 / 符号付き距離 / 交差) |
 | `sim/` | `eltanin_sim` | T6 | 簡易シミュレータ |
