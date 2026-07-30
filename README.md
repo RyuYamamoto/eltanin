@@ -99,6 +99,16 @@ cmake --build build -j
 Prints the map geometry and a histogram of cost values, which is handy for checking that a map was
 loaded with the expected resolution, origin and occupancy thresholds.
 
+```bash
+./build/examples/eltanin_plan_on_real_map path/to/map.yaml out_dir
+./build/examples/eltanin_track_on_real_map path/to/map.yaml out_dir
+```
+
+Both inflate a real map and run the planner on it; the second one then tracks the resulting path with
+`PurePursuit`. They write a cropped `crop.pgm` plus CSV files and a `meta.txt` summary, so the path
+and the traced trajectory can be plotted over the costmap. The tracking measurements taken this way
+are recorded in [docs/control-design.md](docs/control-design.md) §5.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
