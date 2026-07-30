@@ -108,9 +108,8 @@ template <map::CellMap Map, class Model>
 VelocityLimiter::Result VelocityLimiter::limit(
   const Map & map, const Model & model, const Pose2D & robot, const Twist2D & cmd_in) const
 {
-  const map::MapGeometry & geometry = map.geometry();
-  assert(geometry.resolution() > 0.0);
-  assert(geometry.cell_count() > 0);
+  assert(map.geometry().resolution() > 0.0);
+  assert(map.geometry().cell_count() > 0);
 
   Result result;
   result.predicted_poses.reserve(static_cast<std::size_t>(params_.prediction_steps) + 1);

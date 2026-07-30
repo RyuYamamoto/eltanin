@@ -10,4 +10,6 @@ target_link_libraries(eltanin_package_test PRIVATE
   eltanin::map_io
   eltanin::sensor
   eltanin::planner
-  eltanin::control)
+  eltanin::control
+  eltanin::sim
+  eltanin::collision)

@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <numbers>
+#include <vector>
 
 namespace
 {
@@ -197,4 +198,88 @@ TEST(CollisionChecker, IsIndependentOfTheFootprintVertexOrder)
   EXPECT_EQ(
     check_footprint(boundary.map, boundary.model, boundary_footprint(), pose),
     check_footprint(boundary.map, boundary.model, reversed_footprint(boundary_footprint()), pose));
+}
+
+TEST(CellsCovering, ReturnsTheClampedRectangleOfTheFootprint)
+{
+  const CollisionScenario scenario = boundary_scenario(2, 0);
+  const eltanin::Polygon2D world =
+    eltanin::transform(boundary_footprint(), pose_at_cell(0, 0, 0.25, 0.0));
+
+  const auto rect = eltanin::collision::cells_covering(scenario.map.geometry(), world);
+
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 0);
+  EXPECT_EQ(rect->min_y, 0);
+  EXPECT_EQ(rect->max_x, 2);
+  EXPECT_EQ(rect->max_y, 2);
+}
+
+TEST(CellsCovering, RejectsAFootprintThatMissesTheMapAndAnEmptyPolygon)
+{
+  const CollisionScenario scenario = free_scenario();
+  const eltanin::Polygon2D far_away =
+    eltanin::transform(default_footprint(), Pose2D{Vector2d{9.0, 9.0}, 0.0});
+
+  EXPECT_FALSE(eltanin::collision::cells_covering(scenario.map.geometry(), far_away).has_value());
+  EXPECT_FALSE(
+    eltanin::collision::cells_covering(scenario.map.geometry(), eltanin::Polygon2D{}).has_value());
+}
+
+TEST(ContainsAny, FindsAPointInsideThePolygonIncludingTheBoundary)
+{
+  const eltanin::Polygon2D square = boundary_footprint();
+  const std::vector<Vector2d> outside{Vector2d{2.0, 0.0}, Vector2d{0.0, -3.0}};
+  const std::vector<Vector2d> one_inside{Vector2d{2.0, 0.0}, Vector2d{0.1, 0.1}};
+  const std::vector<Vector2d> on_the_edge{Vector2d{0.5, 0.0}};
+  const std::vector<Vector2d> on_a_vertex{Vector2d{0.5, 0.5}};
+
+  EXPECT_FALSE(eltanin::collision::contains_any(square, outside));
+  EXPECT_TRUE(eltanin::collision::contains_any(square, one_inside));
+  EXPECT_TRUE(eltanin::collision::contains_any(square, on_the_edge));
+  EXPECT_TRUE(eltanin::collision::contains_any(square, on_a_vertex));
+  EXPECT_FALSE(eltanin::collision::contains_any(square, std::vector<Vector2d>{}));
+}
+
+TEST(FootprintHitsPoints, MovesWithThePose)
+{
+  const std::vector<Vector2d> points{Vector2d{1.0, 0.0}};
+
+  EXPECT_FALSE(eltanin::collision::footprint_hits_points(
+    boundary_footprint(), Pose2D{Vector2d::Zero(), 0.0}, points));
+  EXPECT_TRUE(eltanin::collision::footprint_hits_points(
+    boundary_footprint(), Pose2D{Vector2d{0.6, 0.0}, 0.0}, points));
+}
+
+TEST(IsCellOccupied, OnlySelectsLethalCellsInsideTheMap)
+{
+  const CollisionScenario scenario = single_obstacle_scenario(5, 0);
+
+  EXPECT_TRUE(eltanin::collision::is_cell_occupied(scenario.map, scenario.model, 16, 11));
+  // The cell next to it carries an inflated cost, which is not an obstacle.
+  EXPECT_FALSE(eltanin::collision::is_cell_occupied(scenario.map, scenario.model, 15, 11));
+  EXPECT_FALSE(eltanin::collision::is_cell_occupied(scenario.map, scenario.model, 11, 11));
+  EXPECT_FALSE(eltanin::collision::is_cell_occupied(scenario.map, scenario.model, -1, 11));
+  EXPECT_FALSE(eltanin::collision::is_cell_occupied(scenario.map, scenario.model, 24, 11));
+}
+
+TEST(ContainsOccupiedCell, DependsOnTheOrientationOfTheGivenPolygon)
+{
+  const CollisionScenario scenario = single_obstacle_scenario(5, 5);
+  const eltanin::Polygon2D upright =
+    eltanin::transform(default_footprint(), pose_at_cell(11, 11, 0.05, 0.0));
+  const eltanin::Polygon2D rotated =
+    eltanin::transform(default_footprint(), pose_at_cell(11, 11, 0.05, kPi / 4.0));
+
+  EXPECT_TRUE(eltanin::collision::contains_occupied_cell(scenario.map, scenario.model, upright));
+  EXPECT_FALSE(eltanin::collision::contains_occupied_cell(scenario.map, scenario.model, rotated));
+}
+
+TEST(ContainsOccupiedCell, ReportsFreeWhenThePolygonMissesTheMap)
+{
+  const CollisionScenario scenario = single_obstacle_scenario(5, 5);
+  const eltanin::Polygon2D far_away =
+    eltanin::transform(default_footprint(), Pose2D{Vector2d{-9.0, -9.0}, 0.0});
+
+  EXPECT_FALSE(eltanin::collision::contains_occupied_cell(scenario.map, scenario.model, far_away));
 }

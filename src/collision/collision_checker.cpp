@@ -14,7 +14,10 @@
 
 #include <eltanin/collision/collision_checker.hpp>
 
-namespace eltanin::collision::detail
+namespace eltanin::collision
+{
+
+namespace detail
 {
 
 FirstStage classify_first_stage(Traversability classification) noexcept
@@ -30,4 +33,26 @@ FirstStage classify_first_stage(Traversability classification) noexcept
   return FirstStage::NeedsExactCheck;
 }
 
-}  // namespace eltanin::collision::detail
+}  // namespace detail
+
+std::optional<map::CellRect> cells_covering(
+  const map::MapGeometry & geometry, const Polygon2D & polygon)
+{
+  if (polygon.empty()) {
+    return std::nullopt;
+  }
+  const auto [min, max] = bounding_box(polygon);
+  return geometry.world_rect_to_cells(min, max);
+}
+
+bool contains_any(const Polygon2D & polygon, std::span<const Eigen::Vector2d> points)
+{
+  for (const Eigen::Vector2d & point : points) {
+    if (contains(polygon, point)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace eltanin::collision

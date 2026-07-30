@@ -22,6 +22,7 @@
 #include <eltanin/map/map_geometry.hpp>
 
 #include <optional>
+#include <span>
 
 namespace eltanin::collision
 {
@@ -45,10 +46,47 @@ enum class FirstStage
   NeedsExactCheck
 };
 
-/// Maps the centre-cell classification onto the two-stage policy of docs/safety-design.md.
+/// Maps the centre-cell classification onto the two-stage policy of docs/collision-design.md.
 FirstStage classify_first_stage(Traversability classification) noexcept;
 
 }  // namespace detail
+
+/// Clamped cell rectangle that can hold a centre inside the polygon; nullopt when it misses the map.
+std::optional<map::CellRect> cells_covering(
+  const map::MapGeometry & geometry, const Polygon2D & polygon);
+
+/// True when any point lies inside the polygon; points on the boundary count as inside.
+bool contains_any(const Polygon2D & polygon, std::span<const Eigen::Vector2d> points);
+
+/// Occupancy of one cell; a cell outside the map is reported as not occupied.
+template <map::CellMap Map, class Model>
+  requires ObstacleModel<Model, typename Map::value_type>
+bool is_cell_occupied(const Map & map, const Model & model, int mx, int my)
+{
+  const std::optional<typename Map::value_type> cell = map.get(mx, my);
+  return cell.has_value() && model.is_obstacle(*cell);
+}
+
+/// True when the centre of an occupied cell lies inside the polygon, which must be in world frame.
+template <map::CellMap Map, class Model>
+  requires ObstacleModel<Model, typename Map::value_type>
+bool contains_occupied_cell(const Map & map, const Model & model, const Polygon2D & polygon)
+{
+  const map::MapGeometry & geometry = map.geometry();
+  const std::optional<map::CellRect> rect = cells_covering(geometry, polygon);
+  if (!rect.has_value()) {
+    return false;
+  }
+  for (int my = rect->min_y; my <= rect->max_y; ++my) {
+    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
+      // The rectangle is already clamped, so the raw accessor replaces the bounds-checked one here.
+      if (model.is_obstacle(map(mx, my)) && contains(polygon, geometry.map_to_world(mx, my))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 /// Two-stage check; the cheap classification of the centre cell gates the oriented polygon test.
 template <map::CellMap Map, class Model>
@@ -57,8 +95,7 @@ template <map::CellMap Map, class Model>
 CollisionCheck check_footprint(
   const Map & map, const Model & model, const Polygon2D & footprint, const Pose2D & pose)
 {
-  const map::MapGeometry & geometry = map.geometry();
-  const std::optional<map::MapIndex> centre = geometry.world_to_map(pose.position);
+  const std::optional<map::MapIndex> centre = map.geometry().world_to_map(pose.position);
   if (!centre.has_value()) {
     return CollisionCheck::OutsideMap;
   }
@@ -71,24 +108,16 @@ CollisionCheck check_footprint(
   if (stage == detail::FirstStage::Collision) {
     return CollisionCheck::Collision;
   }
+  return contains_occupied_cell(map, model, transform(footprint, pose))
+           ? CollisionCheck::Collision
+           : CollisionCheck::Free;
+}
 
-  const Polygon2D world_footprint = transform(footprint, pose);
-  const auto [min, max] = bounding_box(world_footprint);
-  const std::optional<map::CellRect> rect = geometry.world_rect_to_cells(min, max);
-  if (!rect.has_value()) {
-    return CollisionCheck::Free;
-  }
-  for (int my = rect->min_y; my <= rect->max_y; ++my) {
-    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
-      // Cheap first: a one-byte occupancy compare gates the O(n) containment test.
-      if (
-        model.is_obstacle(map(mx, my)) &&
-        contains(world_footprint, geometry.map_to_world(mx, my))) {
-        return CollisionCheck::Collision;
-      }
-    }
-  }
-  return CollisionCheck::Free;
+/// Footprint against a point set such as a projected scan; there is no map and so no OutsideMap.
+inline bool footprint_hits_points(
+  const Polygon2D & footprint, const Pose2D & pose, std::span<const Eigen::Vector2d> points)
+{
+  return contains_any(transform(footprint, pose), points);
 }
 
 }  // namespace eltanin::collision

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
+#include <eltanin/collision/velocity_limiter.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/angle.hpp>
 #include <eltanin/core/footprint.hpp>
@@ -22,6 +23,7 @@
 #include <eltanin/planner/astar_planner.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/sensor/scan_projection.hpp>
+#include <eltanin/sim/simple_simulator.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -66,6 +68,19 @@ int main()
   }
   const eltanin::control::PurePursuit::Result command = tracker->compute(start, smoothed, 0.01);
 
+  auto limiter =
+    eltanin::collision::VelocityLimiter::create(eltanin::collision::VelocityLimiterParams{});
+  if (!limiter.has_value()) {
+    std::cerr << "VelocityLimiter::create unexpectedly failed\n";
+    return EXIT_FAILURE;
+  }
+  const eltanin::Pose2D limiter_pose{geometry.map_to_world(10, 5), 0.0};
+  const eltanin::collision::VelocityLimiter::Result limited =
+    limiter->limit(free_costmap, traversability, limiter_pose, command.command);
+
+  eltanin::sim::SimpleSimulator plant(limiter_pose);
+  plant.update(limited.command, 0.05);
+
   std::cout << "cell " << index->x << "," << index->y << " center (" << center.x() << ", "
             << center.y() << ") cost " << static_cast<int>(costmap(index->x, index->y))
             << " normalized angle " << eltanin::normalize_angle(7.0)
@@ -76,6 +91,8 @@ int main()
             << " smoothed length " << eltanin::path_length(smoothed) << " arc length back "
             << eltanin::cumulative_arc_length(smoothed).back() << " tracker status "
             << static_cast<int>(command.status) << " tracker angular "
-            << command.command.angular << '\n';
+            << command.command.angular << " limited linear " << limited.command.linear.x()
+            << " predicted poses " << limited.predicted_poses.size() << " plant yaw "
+            << plant.pose().yaw << '\n';
   return EXIT_SUCCESS;
 }
