@@ -23,6 +23,8 @@
 namespace
 {
 
+using eltanin::angle_in_range;
+using eltanin::AngleRange;
 using eltanin::normalize_angle;
 using eltanin::normalize_angle_positive;
 using eltanin::shortest_angular_distance;
@@ -145,4 +147,93 @@ TEST(Angle, ShortestAngularDistanceRange)
       EXPECT_TRUE(in_normalized_range(shortest_angular_distance(from, to)));
     }
   }
+}
+
+TEST(Angle, InRangeWithoutWrapIncludesBothEnds)
+{
+  EXPECT_TRUE(angle_in_range(0.0, 0.0, 0.5 * kPi));
+  EXPECT_TRUE(angle_in_range(0.5 * kPi, 0.0, 0.5 * kPi));
+  EXPECT_TRUE(angle_in_range(0.25 * kPi, 0.0, 0.5 * kPi));
+  EXPECT_FALSE(angle_in_range(-0.25 * kPi, 0.0, 0.5 * kPi));
+  EXPECT_FALSE(angle_in_range(0.75 * kPi, 0.0, 0.5 * kPi));
+  EXPECT_FALSE(angle_in_range(kPi, 0.0, 0.5 * kPi));
+}
+
+TEST(Angle, InRangeAcrossPi)
+{
+  const double from = 0.75 * kPi;
+  const double to = -0.75 * kPi;
+  EXPECT_TRUE(angle_in_range(kPi, from, to));
+  EXPECT_TRUE(angle_in_range(-kPi, from, to));
+  EXPECT_TRUE(angle_in_range(from, from, to));
+  EXPECT_TRUE(angle_in_range(to, from, to));
+  EXPECT_TRUE(angle_in_range(0.9 * kPi, from, to));
+  EXPECT_TRUE(angle_in_range(-0.9 * kPi, from, to));
+  EXPECT_FALSE(angle_in_range(0.0, from, to));
+  EXPECT_FALSE(angle_in_range(0.5 * kPi, from, to));
+  EXPECT_FALSE(angle_in_range(-0.5 * kPi, from, to));
+}
+
+TEST(Angle, InRangeWithEqualEndsMatchesOnlyThatAngle)
+{
+  EXPECT_TRUE(angle_in_range(0.3, 0.3, 0.3));
+  EXPECT_TRUE(angle_in_range(0.3 + kTwoPi, 0.3, 0.3));
+  EXPECT_FALSE(angle_in_range(0.3 + 1e-6, 0.3, 0.3));
+  EXPECT_FALSE(angle_in_range(0.3 - 1e-6, 0.3, 0.3));
+}
+
+TEST(Angle, InRangeIgnoresFullTurnsInTheInput)
+{
+  const double from = -0.25 * kPi;
+  const double to = 0.25 * kPi;
+  for (const double angle : {-0.5 * kPi, -0.1, 0.0, 0.1, 0.5 * kPi, 2.0}) {
+    const bool expected = angle_in_range(angle, from, to);
+    EXPECT_EQ(angle_in_range(angle + kTwoPi, from, to), expected) << "angle=" << angle;
+    EXPECT_EQ(angle_in_range(angle - 2.0 * kTwoPi, from, to), expected) << "angle=" << angle;
+    EXPECT_EQ(angle_in_range(angle, from + kTwoPi, to - kTwoPi), expected) << "angle=" << angle;
+  }
+}
+
+TEST(Angle, InRangeNonFiniteIsFalse)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  for (const double bad : {nan, inf, -inf}) {
+    EXPECT_FALSE(angle_in_range(bad, 0.0, kPi));
+    EXPECT_FALSE(angle_in_range(0.5, bad, kPi));
+    EXPECT_FALSE(angle_in_range(0.5, 0.0, bad));
+  }
+}
+
+TEST(Angle, InRangeReversedArcIsTheComplement)
+{
+  const double from = 0.6;
+  const double to = 2.4;
+  for (int k = 0; k <= 400; ++k) {
+    const double angle = -kTwoPi + 0.0157 * static_cast<double>(k);
+    const double offset_from = std::abs(shortest_angular_distance(from, angle));
+    const double offset_to = std::abs(shortest_angular_distance(to, angle));
+    if (offset_from < 1e-6 || offset_to < 1e-6) {
+      continue;
+    }
+    EXPECT_NE(angle_in_range(angle, from, to), angle_in_range(angle, to, from)) << "k=" << k;
+  }
+}
+
+TEST(Angle, InRangeFromMinusPiToPiIsNotAFullTurn)
+{
+  EXPECT_TRUE(angle_in_range(-kPi, -kPi, kPi));
+  EXPECT_TRUE(angle_in_range(kPi, -kPi, kPi));
+  EXPECT_FALSE(angle_in_range(0.0, -kPi, kPi));
+  EXPECT_FALSE(angle_in_range(0.5 * kPi, -kPi, kPi));
+  EXPECT_FALSE(angle_in_range(-0.5 * kPi, -kPi, kPi));
+}
+
+TEST(Angle, AngleRangeDefaultsToZero)
+{
+  const AngleRange range;
+  EXPECT_DOUBLE_EQ(range.from, 0.0);
+  EXPECT_DOUBLE_EQ(range.to, 0.0);
+  EXPECT_TRUE(angle_in_range(0.0, range.from, range.to));
+  EXPECT_FALSE(angle_in_range(1.0, range.from, range.to));
 }

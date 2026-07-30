@@ -17,9 +17,11 @@
 #include <eltanin/map/cost_model.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/map_io/map_loader.hpp>
+#include <eltanin/sensor/scan_projection.hpp>
 
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 int main()
 {
@@ -38,11 +40,16 @@ int main()
   const auto model = eltanin::map::InflationCostModel::create(*radii, 3.0);
   const eltanin::map::CostTraversabilityModel traversability(model->circumscribed_cost());
 
+  const eltanin::sensor::ScanData scan{0.0, 1.0, 0.1, 10.0, {1.0F, 2.0F, 3.0F}};
+  std::vector<Eigen::Vector2d> scan_points;
+  eltanin::sensor::project_scan(scan, eltanin::sensor::ScanFilter{}, scan_points);
+
   std::cout << "cell " << index->x << "," << index->y << " center (" << center.x() << ", "
             << center.y() << ") cost " << static_cast<int>(costmap(index->x, index->y))
             << " normalized angle " << eltanin::normalize_angle(7.0)
             << " classification " << static_cast<int>(traversability.classify(costmap[0]))
             << " error kind count "
-            << static_cast<int>(eltanin::map_io::MapIoErrorKind::WriteFailed) << '\n';
+            << static_cast<int>(eltanin::map_io::MapIoErrorKind::WriteFailed)
+            << " scan points " << scan_points.size() << '\n';
   return EXIT_SUCCESS;
 }

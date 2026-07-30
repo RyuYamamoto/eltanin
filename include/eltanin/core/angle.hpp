@@ -52,6 +52,19 @@ inline double shortest_angular_distance(double from, double to)
   return normalize_angle(to - from);
 }
 
+/// A closed arc traced counter-clockwise from `from` to `to`; a full turn is not representable.
+struct AngleRange
+{
+  double from{0.0};
+  double to{0.0};
+};
+
+/// True when `angle` lies on the CCW arc from `from` to `to`, both ends included.
+inline bool angle_in_range(double angle, double from, double to)
+{
+  return normalize_angle_positive(angle - from) <= normalize_angle_positive(to - from);
+}
+
 }  // namespace eltanin
 
 #endif  // ELTANIN__CORE__ANGLE_HPP_

@@ -329,7 +329,7 @@ navyu の衝突判定は `99 < cost` の単一しきい値 (`costmap_helper.cpp:
 | フットプリント近似 | 種類を将来増やす場合は teb_local_planner の `CircularRobotFootprint` / `TwoCirclesRobotFootprint` / `PolygonRobotFootprint` に寄せる |
 | レイヤ | nav2 の `StaticLayer` / `ObstacleLayer` / `InflationLayer` / `LayeredCostmap` に寄せる |
 | 3 値の列挙子 | nav2 の距離帯の語 `Free` / `Circumscribed` / `Inscribed` (4 章) |
-| 角度 | `angles` パッケージの `normalize_angle` / `normalize_angle_positive` / `shortest_angular_distance` |
+| 角度 | `angles` パッケージの `normalize_angle` / `normalize_angle_positive` / `shortest_angular_distance`。角度範囲判定 `angle_in_range(angle, from, to)` は `angles` に該当語がないため、本節冒頭の但し書き (該当する既存語がない場合のみ説明的な名前を使う) を適用した例である。範囲型 `AngleRange` も同じ理由で `core/angle.hpp` に置く (T3) |
 | マップ YAML の内容 | nav2_map_server の `LoadParameters` / `load_map_yaml()`。`MapMetadata` は使わない (ROS の `nav_msgs/MapMetaData` は幾何情報を指す語であり、うちの `MapGeometry` がそれに相当する) |
 | クランプする座標変換を将来足す場合 | nav2 の `Costmap2D::worldToMapEnforceBounds` に合わせる (13 章 5 項) |
 
@@ -415,7 +415,7 @@ public:
 | `core/` | `eltanin_core` / `eltanin::core` | T1 | 型・角度・多角形・フットプリント半径・経路 |
 | `map/` | `eltanin_map` / `eltanin::map` | T1 / T2 | グリッドマップ、幾何情報型、コスト定数、判定モデル 2 実装、距離 → コスト変換、コストマップレイヤ (static / obstacle / inflation) と `LayeredCostmap` |
 | `map_io/` | `eltanin_map_io` / `eltanin::map_io` | T1 | PGM + YAML 読み込み、PGM 書き出し (yaml-cpp 依存) |
-| `sensor/` | `eltanin_sensor` | T3 | Scan 投影 |
+| `sensor/` | `eltanin_sensor` / `eltanin::sensor` | T3 (完了) | Scan 投影 (`ScanData` / `ScanFilter` / `project_scan`)。**依存は `eltanin_core` のみ** (tf / laser_geometry / PCL / ROS を持たない)。設計は `docs/sensor-design.md` |
 | `planner/` | `eltanin_planner` | T4 | グローバル / ローカルプランナ (1 パス探索) |
 | `control/` | `eltanin_control` | T5 | 経路追従、`Pose2D` / 角度の補間、累積弧長、線分交差 |
 | `safety/` | `eltanin_safety` | T6 | セーフティリミッタ、厳密フットプリント衝突 (多角形の重心 / 凸性 / 符号付き距離 / 交差) |
@@ -570,3 +570,55 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 | `Traversability::Free` | 532,201 セル |
 
 `Inscribed` の大半は `NO_INFORMATION` の 15,345,384 セルである。この地図は 96 % が未探索であり、`unknown_is_free = false` では未知が通行不可に分類されるため妥当な数値である。
+
+---
+
+## 15. ROS ノード構成への申し送り (T3 で記録)
+
+想定している最終形は次のとおり。
+
+- `local_map_node`: ray trace により障害物セルと自由セルを計算したローカルマップを出す (必要なら距離場も同時に出す)。
+- `global_costmap_node`: 全域マップを読み込んで膨張コストマップを出す。`local_map_node` の出力を受けたら global マップに対する overlap 領域を計算し、`map_updates` として出力する。
+- 距離場は global / local を融合して出力する。
+
+**T3 の実装スコープには含めていない。** ray trace の利用者がまだ存在せず、追加は 9.2 節 (利用者が現に存在しない public API を生やさない) に反するためである。以下は次にコストマップまたは ROS 層を触るタスクへの前提であり、いずれも 14 章の決定の**成立条件**に関わる。
+
+### 15.1 ray trace を入れるとローカルの既定コストは `FREE_SPACE` ではなくなる
+
+14.2 節の「ローカル (`ObstacleLayer` のみ) には `FREE_SPACE` を渡す」は**「ray trace がない」前提付きの決定**である。ray trace で自由セルを計算するなら、ローカルマップは未観測 / 自由 / 障害物の 3 値を区別しなければならない。
+
+- 既定コストは `NO_INFORMATION` に変わり、自由空間は ray trace の結果として書かれる。
+- `FREE_SPACE` のままにすると、**global 側の overlap 合成が「センサ視野外の静的障害物」を消す**。壁の陰・センサの死角・角度フィルタで落としたセクタがすべて「観測された自由空間」として global へ伝わるためである。navyu が持っていなかった欠陥を新たに作ることになる。
+- 帰結として、ローカル側の合成規則 (`ObstacleLayer` が `NO_INFORMATION` を無条件に上書きする。14.5 節) と ray trace のクリア規則の優先順位を決める必要がある。同一セルに「あるビームの終端 (障害物)」と「別のビームの通過 (自由)」が同時に立つため、**障害物を優先する**のが保守側である。
+
+### 15.2 global を毎周期全面再生成できない → `Layer` に ROI が必要になる
+
+`Layer::update_costs(Costmap & master)` に境界引数がない。`LayeredCostmap::update()` は master 全面 `fill` + 全レイヤ適用である。4000×4000 = 1.6e7 セルをスキャンレートで回すのは成立しない。
+
+- nav2 が `updateBounds(...)` → `updateCosts(master, min_i, min_j, max_i, max_j)` の 2 段に分けているのはこの理由である。この構成を採るなら **`Layer` インタフェースへの ROI 引数の追加**が必要になる。T2 が意図的に持たなかった API なので、変更する場合は 14.1 節のレイヤ境界の規約と併せて再検討する。
+- ROI は**前サイクルのローカル窓と今サイクルのローカル窓の和**を覆う必要がある。前回の動的障害物を消すためである。
+- 14.2 節の「origin 更新でセルデータのシフトを行わない」の成立前提は「master に更新サイクルを跨いだ状態を持つレイヤが存在しないこと」である。global が動的障害物を蓄積する設計にすると、この前提を破る。蓄積せず「静的 + 最新のローカル 1 枚 + 膨張」を毎回作り直す形なら前提は保たれる。
+
+### 15.3 `map_updates` の領域は overlap を膨張半径ぶん広げる
+
+`r = ceil(inflation_radius / resolution)` セルとして、
+
+| ROI | 範囲 | 理由 |
+|---|---|---|
+| 書き込み (publish する領域) | 変化領域 ⊕ `r` | 窓端に現れた障害物の膨張が切れないため |
+| 読み出し (膨張元として走査する領域) | 変化領域 ⊕ `2r` | ⊕`r` の各セルのコストを正しく再計算するには、そのセルから `r` 以内の全 `LETHAL_OBSTACLE` セルが必要 |
+
+overlap 領域そのものを送ると、購読側で窓端の膨張が欠ける。14.4 節で潰した navyu の非対称窓と同種の off-by-`r` である。
+
+### 15.4 距離場の min 融合は厳密。ただし障害物集合の定義を揃えること
+
+`d(x, A ∪ B) = min(d(x, A), d(x, B))` なので、global 距離場とローカル距離場の `min` による融合は**近似ではなく厳密**である。成立条件は 2 つ。
+
+1. ローカル距離場を毎周期ゼロから作り直す。`min` は距離を減らす方向にしか働かないため、古い動的障害物が残ると消えない。
+2. **障害物集合の定義を global / local で一致させる。** 14.7 節のとおり参照マップは 96 % が `NO_INFORMATION` であり、unknown を障害物に含めると global 距離場がほぼ全域 0 になって融合結果が壊れる。`CostTraversabilityModel` の `unknown_is_free` と同じ設定を距離場の生成側でも一元化すること (13 章 6 項と同じ論点)。
+
+**距離場専用ノードは作らない方向を第一候補にする。** 融合距離場が必要なのはローカル窓の範囲だけで、global 側は静的なので一度計算すれば済む (グローバルプランナは global 距離場を、ローカル側は融合場を使う)。専用ノードを置くと、7.1 節が指摘する 64 MB の `float` 全域距離場を ROS 越しに流す必要が出るか、あるいは結局ローカル窓サイズの出力になり `local_map_node` に置くのと同じで hop が 1 増えるだけになる。
+
+### 15.5 clearing 用の投影
+
+`project_scan` はマーキング専用であり ray trace のクリアリングには使えない。センサ側の帰結なので `docs/sensor-design.md` に記録した。
