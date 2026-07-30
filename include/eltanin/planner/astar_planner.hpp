@@ -19,7 +19,7 @@
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/core/types.hpp>
 #include <eltanin/map/map_geometry.hpp>
-#include <eltanin/planner/cell_map.hpp>
+#include <eltanin/map/cell_map.hpp>
 #include <eltanin/planner/traversable_search.hpp>
 
 #include <cassert>
@@ -47,7 +47,7 @@ static_assert(static_cast<int>(Traversability::Circumscribed) == 1);
 static_assert(static_cast<int>(Traversability::Inscribed) == 2);
 
 /// The only place the cell type and the traversability model are visible to the search.
-template <CellMap Map, class Model>
+template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 TraversabilityGrid build_traversability_grid(const Map & map, const Model & model)
 {
@@ -69,7 +69,7 @@ std::optional<Path> plan_on_grid(
 }  // namespace detail
 
 /// Eight-connected A* over the cells classified Traversability::Free; nullopt when unreachable.
-template <CellMap Map, class Model>
+template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 std::optional<Path> plan(
   const Map & map, const Model & model, const Pose2D & start, const Pose2D & goal,

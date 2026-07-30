@@ -64,7 +64,7 @@ plan<Map, Model>()                        ヘッダテンプレート
 
 **3 値を 2 値に潰さない。** `Free` / `Circumscribed` / `Inscribed` をそのまま 1 byte に格納する。これは §7.2 の 2 パス化が「近傍展開の通行可否述語 1 本の差し替え」で済む状態を保つためであり、§4 が 3 値にした理由をそのまま引き継いでいる。列挙子の値 0 / 1 / 2 は `astar_planner.hpp` の `static_assert` で固定した (`traversability.hpp` は変更していない)。
 
-**`CellMap` concept を `planner/` に置いた理由**: `map/` への追加は T1〜T3 の公開 API を変更しないという制約に触れる。利用者は `plan` / `smooth` / `find_nearest_traversable` の 3 つで、§9.2 (利用者の無い public を作らない) に反しない。**2 人目のモジュールが `CellMap` を要求した時点で `include/eltanin/map/` へ移すこと。** その移動は破壊的変更ではない (別名を残せる)。
+**`CellMap` concept を当初 `planner/` に置いた理由**: `map/` への追加は T1〜T3 の公開 API を変更しないという制約に触れる。利用者は `plan` / `smooth` / `find_nearest_traversable` の 3 つで、§9.2 (利用者の無い public を作らない) に反しない。**T6 で `eltanin_safety` が 2 人目の利用者になったため `include/eltanin/map/cell_map.hpp` (`eltanin::map::CellMap`) へ移した。** 単一リポジトリで利用者を全部直せるため後方互換の別名は置いていない。
 
 ---
 

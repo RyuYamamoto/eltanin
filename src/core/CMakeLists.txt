@@ -2,7 +2,8 @@ add_library(eltanin_core STATIC
   geometry.cpp
   polygon.cpp
   footprint.cpp
-  path.cpp)
+  path.cpp
+  differential_drive.cpp)
 add_library(eltanin::core ALIAS eltanin_core)
 
 target_compile_features(eltanin_core PUBLIC cxx_std_20)

@@ -17,7 +17,7 @@
 
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/map/map_geometry.hpp>
-#include <eltanin/planner/cell_map.hpp>
+#include <eltanin/map/cell_map.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -42,7 +42,7 @@ inline int saturate_to_int(std::int64_t value) noexcept
 }  // namespace detail
 
 /// Euclidean-nearest Traversability::Free cell within a Chebyshev radius of `from`.
-template <CellMap Map, class Model>
+template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 std::optional<map::MapIndex> find_nearest_traversable(
   const Map & map, const Model & model, const map::MapIndex & from, int max_radius_cells)

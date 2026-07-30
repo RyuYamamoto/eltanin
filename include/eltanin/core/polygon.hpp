@@ -61,6 +61,26 @@ bool contains(
 /// Shoelace signed area; positive for counter-clockwise winding.
 double signed_area(const Polygon2D & polygon);
 
+/// Vertex order of a polygon; Degenerate covers n < 3 and a near-zero area.
+enum class Winding
+{
+  CounterClockwise,
+  Clockwise,
+  Degenerate
+};
+
+/// Sign of signed_area(); abs(area) <= area_tolerance [m^2] is reported as Degenerate.
+Winding winding(const Polygon2D & polygon, double area_tolerance = 1e-12);
+
+/// Reverses clockwise vertices; idempotent, a no-op when Degenerate, and does not keep vertex 0.
+Polygon2D to_counter_clockwise(const Polygon2D & polygon);
+
+/// Consistent sign of consecutive cross products, independent of winding; self-intersection is out.
+bool is_convex(const Polygon2D & polygon);
+
+/// Axis-aligned bounds as (min, max). Precondition: the polygon has at least one vertex.
+std::pair<Eigen::Vector2d, Eigen::Vector2d> bounding_box(const Polygon2D & polygon);
+
 Polygon2D transform(const Polygon2D & polygon, const Transform2D & tf);
 
 Polygon2D transform(const Polygon2D & polygon, const Pose2D & pose);

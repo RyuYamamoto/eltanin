@@ -182,3 +182,98 @@ TEST(MapGeometry, SetOriginShiftsTheWorldMapping)
   EXPECT_EQ(index->y, 0);
   EXPECT_FALSE(geometry.world_to_map(Vector2d{-1.0, -2.0}).has_value());
 }
+
+TEST(MapGeometry, WorldRectToCellsCoversAnInteriorWindow)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d{-1.0, -2.0});
+  const auto rect = geometry.world_rect_to_cells(Vector2d{-0.94, -1.94}, Vector2d{-0.81, -1.86});
+
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 1);
+  EXPECT_EQ(rect->min_y, 1);
+  EXPECT_EQ(rect->max_x, 3);
+  EXPECT_EQ(rect->max_y, 2);
+}
+
+TEST(MapGeometry, WorldRectToCellsClampsAPartiallyOutsideWindow)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d::Zero());
+  const auto rect = geometry.world_rect_to_cells(Vector2d{-0.3, -0.3}, Vector2d{0.6, 0.6});
+
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 0);
+  EXPECT_EQ(rect->min_y, 0);
+  EXPECT_EQ(rect->max_x, 9);
+  EXPECT_EQ(rect->max_y, 7);
+}
+
+TEST(MapGeometry, WorldRectToCellsRejectsAWindowOutsideTheMap)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d::Zero());
+  EXPECT_FALSE(
+    geometry.world_rect_to_cells(Vector2d{-1.0, -1.0}, Vector2d{-0.1, -0.1}).has_value());
+  EXPECT_FALSE(geometry.world_rect_to_cells(Vector2d{0.5, 0.5}, Vector2d{1.0, 1.0}).has_value());
+  EXPECT_FALSE(geometry.world_rect_to_cells(Vector2d{0.1, 0.5}, Vector2d{0.2, 1.0}).has_value());
+}
+
+TEST(MapGeometry, WorldRectToCellsFloorsNegativeCoordinates)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d::Zero());
+  // A static_cast<int> truncation towards zero would report min_x = 0 here instead of nullopt.
+  EXPECT_FALSE(
+    geometry.world_rect_to_cells(Vector2d{-0.04, -0.04}, Vector2d{-0.01, -0.01}).has_value());
+
+  const auto rect = geometry.world_rect_to_cells(Vector2d{-0.04, -0.04}, Vector2d{0.06, 0.06});
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 0);
+  EXPECT_EQ(rect->max_x, 1);
+}
+
+TEST(MapGeometry, WorldRectToCellsPlacesCellBoundariesInTheUpperCell)
+{
+  const MapGeometry geometry(8, 8, 0.25, Vector2d::Zero());
+  const auto rect = geometry.world_rect_to_cells(Vector2d{0.25, 0.25}, Vector2d{0.75, 0.75});
+
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 1);
+  EXPECT_EQ(rect->min_y, 1);
+  EXPECT_EQ(rect->max_x, 3);
+  EXPECT_EQ(rect->max_y, 3);
+}
+
+TEST(MapGeometry, WorldRectToCellsAcceptsADegenerateWindow)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d::Zero());
+  const Vector2d point{0.13, 0.13};
+  const auto rect = geometry.world_rect_to_cells(point, point);
+
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->min_x, 2);
+  EXPECT_EQ(rect->max_x, 2);
+  EXPECT_EQ(rect->min_y, 2);
+  EXPECT_EQ(rect->max_y, 2);
+}
+
+TEST(MapGeometry, WorldRectToCellsRejectsEverythingOnAnEmptyMap)
+{
+  const MapGeometry geometry(0, 0, 0.05, Vector2d::Zero());
+  EXPECT_FALSE(geometry.world_rect_to_cells(Vector2d::Zero(), Vector2d{1.0, 1.0}).has_value());
+}
+
+TEST(MapGeometry, WorldRectToCellsAgreesWithWorldToMapOnTheCorners)
+{
+  const MapGeometry geometry(10, 8, 0.05, Vector2d{-1.0, -2.0});
+  const Vector2d min{-0.87, -1.83};
+  const Vector2d max{-0.62, -1.68};
+  const auto rect = geometry.world_rect_to_cells(min, max);
+  const auto lower = geometry.world_to_map(min);
+  const auto upper = geometry.world_to_map(max);
+
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(lower.has_value());
+  ASSERT_TRUE(upper.has_value());
+  EXPECT_EQ(rect->min_x, lower->x);
+  EXPECT_EQ(rect->min_y, lower->y);
+  EXPECT_EQ(rect->max_x, upper->x);
+  EXPECT_EQ(rect->max_y, upper->y);
+}

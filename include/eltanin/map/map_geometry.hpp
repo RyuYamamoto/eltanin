@@ -17,6 +17,7 @@
 
 #include <eltanin/core/types.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -30,6 +31,15 @@ struct MapIndex
 {
   int x{0};
   int y{0};
+};
+
+/// Inclusive cell rectangle; a constructed value always satisfies min <= max on both axes.
+struct CellRect
+{
+  int min_x{0};
+  int min_y{0};
+  int max_x{0};
+  int max_y{0};
 };
 
 /// The single place in this library that converts between world and map coordinates.
@@ -92,6 +102,21 @@ public:
       return std::nullopt;
     }
     return index;
+  }
+
+  /// Cell rectangle covering the world window, clamped to the map; nullopt when they do not overlap.
+  std::optional<CellRect> world_rect_to_cells(
+    const Eigen::Vector2d & min, const Eigen::Vector2d & max) const noexcept
+  {
+    assert(min.x() <= max.x() && min.y() <= max.y());
+    const MapIndex lower = floor_to_index(min);
+    const MapIndex upper = floor_to_index(max);
+    if (upper.x < 0 || upper.y < 0 || lower.x >= size_x_ || lower.y >= size_y_) {
+      return std::nullopt;
+    }
+    return CellRect{
+      std::max(0, lower.x), std::max(0, lower.y), std::min(size_x_ - 1, upper.x),
+      std::min(size_y_ - 1, upper.y)};
   }
 
   bool operator==(const MapGeometry & rhs) const noexcept

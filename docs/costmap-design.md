@@ -206,7 +206,7 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 
 - `CollisionRadii::classify(double)` に `float` セルを渡す形が concept を満たすため、**`DistanceMap` 側で追加のアダプタは不要**である (`TraversabilityModel<CollisionRadii, float>` が `float → double` の暗黙変換で成立する)。
 - プランナは判定モデルの適用を探索の前に全セル 1 回の分類として前置し、探索本体を非テンプレート関数にした。**探索本体はセル型も判定モデルも見ない**ため、上記の一致は構造的に保証される。詳細は `docs/planner-design.md` §2。
-- `Map` 側の要件は `CellMap` concept (`value_type` / `geometry()` / `operator()(int, int) const`) として `include/eltanin/planner/cell_map.hpp` に置いた。**2 人目の利用者が現れた時点で `include/eltanin/map/` へ移すこと。**
+- `Map` 側の要件は `CellMap` concept (`value_type` / `geometry()` / `operator()(int, int) const`) として置いた。当初は `include/eltanin/planner/cell_map.hpp` にあったが、**T6 で `eltanin_safety` が 2 人目の利用者になったため `include/eltanin/map/cell_map.hpp` (`eltanin::map::CellMap`) へ移した。**
 
 ### 6.3 座標変換と幾何情報の分離
 

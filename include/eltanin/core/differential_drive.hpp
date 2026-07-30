@@ -12,24 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#ifndef ELTANIN__MAP__CELL_MAP_HPP_
-#define ELTANIN__MAP__CELL_MAP_HPP_
+#ifndef ELTANIN__CORE__DIFFERENTIAL_DRIVE_HPP_
+#define ELTANIN__CORE__DIFFERENTIAL_DRIVE_HPP_
 
-#include <eltanin/map/map_geometry.hpp>
+#include <eltanin/core/types.hpp>
 
-#include <concepts>
-
-namespace eltanin::map
+namespace eltanin
 {
 
-/// Minimum grid-map surface a reader needs; GridMap<T> satisfies it.
-template <class Map>
-concept CellMap = requires(const Map & map, int mx, int my) {
-  typename Map::value_type;
-  { map.geometry() } -> std::convertible_to<const MapGeometry &>;
-  { map(mx, my) } -> std::convertible_to<typename Map::value_type>;
-};
+/// Below this angular velocity [rad/s] the straight-line approximation replaces the arc integral.
+inline constexpr double ANGULAR_VEL_EPSILON = 1e-6;
 
-}  // namespace eltanin::map
+/// One differential-drive step; linear.y() is ignored. Precondition: dt > 0.
+Pose2D integrate_differential_drive(const Pose2D & pose, const Twist2D & twist, double dt);
 
-#endif  // ELTANIN__MAP__CELL_MAP_HPP_
+}  // namespace eltanin
+
+#endif  // ELTANIN__CORE__DIFFERENTIAL_DRIVE_HPP_

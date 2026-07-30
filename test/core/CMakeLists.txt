@@ -4,7 +4,8 @@ add_executable(eltanin_test_core
   test_geometry.cpp
   test_polygon.cpp
   test_footprint.cpp
-  test_path.cpp)
+  test_path.cpp
+  test_differential_drive.cpp)
 
 target_link_libraries(eltanin_test_core PRIVATE eltanin::core GTest::gtest_main)
 target_compile_options(eltanin_test_core PRIVATE ${ELTANIN_WARNING_FLAGS})

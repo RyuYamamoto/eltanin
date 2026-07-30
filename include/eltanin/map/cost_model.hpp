@@ -71,12 +71,22 @@ public:
     return Traversability::Free;
   }
 
+  /// Occupancy for the exact footprint check; inflated values below LETHAL are not obstacles.
+  bool is_obstacle(std::uint8_t cost) const noexcept
+  {
+    if (cost == NO_INFORMATION) {
+      return !unknown_is_traversable_;
+    }
+    return cost >= LETHAL_OBSTACLE;
+  }
+
 private:
   std::uint8_t circumscribed_cost_{1};
   bool unknown_is_traversable_{false};
 };
 
 static_assert(TraversabilityModel<CostTraversabilityModel, std::uint8_t>);
+static_assert(ObstacleModel<CostTraversabilityModel, std::uint8_t>);
 
 }  // namespace eltanin::map
 

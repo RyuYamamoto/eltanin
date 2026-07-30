@@ -19,7 +19,7 @@
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/core/types.hpp>
 #include <eltanin/map/map_geometry.hpp>
-#include <eltanin/planner/cell_map.hpp>
+#include <eltanin/map/cell_map.hpp>
 
 #include <cstddef>
 
@@ -49,7 +49,7 @@ void assert_smoother_params(const SmootherParams & params);
 }  // namespace detail
 
 /// Iterative smoothing with a per-point collision check; the two end points never move.
-template <CellMap Map, class Model>
+template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 Path smooth(
   const Path & path, const Map & map, const Model & model, const SmootherParams & params = {})

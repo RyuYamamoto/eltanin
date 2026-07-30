@@ -159,3 +159,28 @@ TEST(CostModel, UnknownHandlingIsConfigurable)
   EXPECT_EQ(permissive.classify(NO_INFORMATION), Traversability::Free);
   EXPECT_EQ(permissive.classify(LETHAL_OBSTACLE), Traversability::Inscribed);
 }
+
+TEST(CostModel, IsObstacleOnlySelectsLethalCells)
+{
+  const CostTraversabilityModel traversability(model().circumscribed_cost());
+
+  EXPECT_TRUE(traversability.is_obstacle(LETHAL_OBSTACLE));
+  EXPECT_FALSE(traversability.is_obstacle(INSCRIBED_INFLATED_OBSTACLE));
+  EXPECT_FALSE(traversability.is_obstacle(MAX_NON_OBSTACLE));
+  EXPECT_FALSE(traversability.is_obstacle(FREE_SPACE));
+}
+
+TEST(CostModel, IsObstacleFollowsTheUnknownPolicy)
+{
+  const std::uint8_t threshold = model().circumscribed_cost();
+  EXPECT_TRUE(CostTraversabilityModel(threshold, false).is_obstacle(NO_INFORMATION));
+  EXPECT_FALSE(CostTraversabilityModel(threshold, true).is_obstacle(NO_INFORMATION));
+}
+
+TEST(CostModel, InflatedCellsAreInscribedButNotObstacles)
+{
+  const CostTraversabilityModel traversability(model().circumscribed_cost());
+  // The inflation layer writes at most INSCRIBED_INFLATED_OBSTACLE onto non-obstacle cells.
+  EXPECT_EQ(traversability.classify(INSCRIBED_INFLATED_OBSTACLE), Traversability::Inscribed);
+  EXPECT_FALSE(traversability.is_obstacle(INSCRIBED_INFLATED_OBSTACLE));
+}

@@ -34,6 +34,12 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
   { model.classify(cell) } -> std::same_as<Traversability>;
 };
 
+/// Contract for models that also answer "is this cell occupied", used by the exact footprint check.
+template <class Model, class Cell>
+concept ObstacleModel = requires(const Model & model, Cell cell) {
+  { model.is_obstacle(cell) } -> std::same_as<bool>;
+};
+
 }  // namespace eltanin
 
 #endif  // ELTANIN__CORE__TRAVERSABILITY_HPP_
