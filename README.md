@@ -112,6 +112,18 @@ Both inflate a real map and run the planner on it; the second one then tracks th
 and the traced trajectory can be plotted over the costmap. The tracking measurements taken this way
 are recorded in [docs/control-design.md](docs/control-design.md) §5.
 
+```bash
+./build/examples/eltanin_limiter_profile out_dir
+./build/examples/eltanin_limit_on_real_map path/to/map.yaml out_dir
+```
+
+The first one needs no map: it runs `VelocityLimiter` on synthetic wall and single-obstacle maps and
+writes the limited speed against the gap to the wall for a forward **and** a reverse command, next to
+what navyu's `std::min()` would have produced, plus the collision verdict over a full turn. The
+second plans and tracks on a real map, stamps an obstacle onto the planned path after planning and
+dumps the predicted poses and the world-frame footprint. What these plots show is described in
+[docs/collision-design.md](docs/collision-design.md) §11.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

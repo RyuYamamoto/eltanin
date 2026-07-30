@@ -336,3 +336,80 @@ T1 から移送された要件のうち**重心 / 点と多角形の符号付き
 | `test/collision/test_collision_checker.cpp` | `FirstStage` / 8 方位の短絡 / `Circumscribed` の向き依存 / 辺上・頂点上 / クランプ / 各粒度の層 |
 | `test/collision/test_velocity_limiter.cpp` | `create` の検証 9 通り / 制限式 (後退の回帰) / 曲率保持 / 素通し / 打ち切り / 決定性 / 頂点順序不変 |
 | `test/collision/test_velocity_limiter_closed_loop.cpp` | 前進・後退の停止、各周期の無衝突、停止余裕、純旋回が阻害されないこと |
+
+---
+
+## 11. 可視化 (`examples/`)
+
+可視化はコアに入れない (`AGENTS.md` の依存規則)。`examples/` が CSV / PGM を吐き、プロットは外部で行う。
+単体テストが「値が合っているか」を固定するのに対し、可視化は**テストが見ていない範囲**を拾う。
+
+### 11.1 `eltanin_limiter_profile <output_dir>` (マップ不要)
+
+合成マップ (6 m 角、`resolution = 0.05`) に対して既定パラメータのリミッタを走らせる。
+
+| 出力 | 内容 |
+|---|---|
+| `velocity_profile.csv` | 壁までの gap に対する `v_out`。**前進と後退の両方**、および navyu の `std::min` が返す値を並べる |
+| `closed_loop_forward.csv` | `SimpleSimulator` を plant にした停止走行 (周期 0.1 s) |
+| `heading_sweep_diagonal.csv` | `Circumscribed` 帯 (対角 0.354 m) で yaw を 1 度刻みに 1 周させた衝突判定 |
+| `heading_sweep_head_on.csv` | `Inscribed` 帯 (正面 0.25 m) の同じ掃引 |
+| `bands.pgm` | セルごとの `Free` (0) / `Circumscribed` (128) / `Inscribed` (254) |
+| `meta.txt` | パラメータと導出半径 |
+
+**後退バグの可視化 (`velocity_profile.csv`)**: 同じ位置・同じ壁に対し、`yaw = 0` で `v = +0.5`、
+`yaw = pi` で `v = -0.5` を与える。どちらも壁に向かう同一の運動なので、符号以外は同じでなければならない。
+
+| gap | `v_out_forward` | `v_out_reverse` | `navyu_forward` | `navyu_reverse` |
+|---|---|---|---|---|
+| 0.85 | 0.5 | -0.5 | 0.5 | -0.5 |
+| 0.80 | 0.447214 | -0.447214 | 0.447214 | **-0.5** |
+| 0.70 | 0.316228 | -0.316228 | 0.316228 | **-0.5** |
+| 0.60 | 0 | -0 | 0 | **-0.5** |
+| 0.40 | 0 | -0 | 0 | **-0.5** |
+
+navyu の列は後退で全域 -0.5 のまま = **制限が一度もかからない**。本実装は前進と厳密に鏡像になる。
+
+**向き依存性の可視化 (`heading_sweep_*.csv`)**: 実測は解析解と一致する。障害物が base 系で
+角度 `θ`、距離 `r = 0.3536` にあるとき、0.6 m 角のフットプリントに内包される条件は
+`r * max(|cos θ|, |sin θ|) <= 0.3` すなわち `31.9° <= |θ| <= 58.1°`。障害物が 45° 方向にあるので
+`yaw ∈ [-13.1°, 13.1°]` (mod 90°) が衝突になる。
+
+| 配置 | 中心セルのコスト | 分類 | 衝突する向き |
+|---|---|---|---|
+| 対角 (5, 5)、0.354 m | 214 | `Circumscribed` | 360 サンプル中 **108**。`±13.5°` を中心に 90° 周期の 4 弧 (解析値 `±13.1°`) |
+| 正面 (5, 0)、0.25 m | 253 | `Inscribed` | **360 / 360** (短絡、向きに依存しない) |
+
+navyu の単一しきい値ではこの図は原理的に全周 1 にしかならない。
+
+### 11.2 `eltanin_limit_on_real_map <map.yaml> <output_dir> [start goal] [obstacle_fraction]`
+
+A* で計画 → `PurePursuit` で追従 → **その指令を `VelocityLimiter` に通し** → `SimpleSimulator` を駆動する。
+`obstacle_fraction` (既定 0.5) は**計画後に**経路上へ 0.45 m 角の障害物を置く。プランナが知らない
+障害物にリミッタが出会う状況であり、セーフティリミッタ本来の用途にあたる。
+
+出力は `crop.pgm` / `path.csv` / `trajectory.csv` / `predicted.csv` (予測姿勢列) /
+`footprint.csv` (world 系フットプリント) / `meta.txt`。
+
+navyu の実マップ (`resolution 0.05`、経路 37.3 m) での実測:
+
+| 構成 | 周期数 | 減速した周期 | 衝突検知した周期 | 最大減速量 |
+|---|---|---|---|---|
+| 障害物なし (`obstacle_fraction 0`) | 7538 | **0** | 99 | 0 m/s |
+| 経路上に障害物 (既定) | 3600 | 55 | 155 | 0.5 m/s (完全停止) |
+
+**障害物なしで減速が 0 回なのは正しい。** 計画経路は `inflation_radius = 0.55` の膨張を避けて通るので、
+予測地平 1.0 m 内に衝突が現れても常に 0.7 m 以上先である。`d_col = 0.7 - 0.2 = 0.5` に対する
+制動上限は `sqrt(2 * 0.5 * 0.5) = 0.707 m/s` で、要求速度 0.5 m/s を上回るため上限が拘束しない。
+**リミッタが通常の追従を阻害しないこと**がこの数字の意味である。
+
+障害物ありでは `v_out` が `0.447 -> 0.316 -> 0` と落ちて停止する。§3.1 が述べた
+「`abs(v) * dt = 0.1 m` の量子化による階段状の減速」がそのまま観測できる。停止位置は障害物中心から
+0.719 m、フットプリント前端と障害物端の間隔は 0.30 m で、閉ループテストが固定した
+`[collision_margin, collision_margin + 2 * abs(v) * dt] = [0.2, 0.4]` の中に入る。
+
+### 11.3 `examples/real_map_fixture.hpp`
+
+実マップ example 3 本 (`plan` / `track` / `limit`) が共有する部品 (読み込み + 膨張、自動 start/goal、
+クロップ、CSV / meta 出力) をここに集約した。抽出は挙動を変えていないことを、
+`plan_on_real_map` / `track_on_real_map` の出力が抽出前とバイト一致することで確認している。
