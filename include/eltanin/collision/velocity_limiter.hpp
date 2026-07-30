@@ -122,7 +122,7 @@ VelocityLimiter::Result VelocityLimiter::limit(
   for (int step = 0; step < params_.prediction_steps; ++step) {
     pose = integrate_differential_drive(pose, cmd_in, dt);
     const CollisionCheck check = check_footprint(map, model, params_.footprint, pose);
-    // Leaving the map truncates the prediction instead of limiting; see docs/safety-design.md.
+    // Leaving the map truncates the prediction instead of limiting; see docs/collision-design.md.
     if (check == CollisionCheck::OutsideMap) {
       break;
     }
