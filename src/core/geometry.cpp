@@ -15,9 +15,18 @@
 #include <eltanin/core/geometry.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace eltanin
 {
+
+namespace
+{
+
+/// Relative bound: the raw cross product scales with the product of the segment lengths.
+constexpr double SEGMENT_PARALLEL_EPS = 1e-12;
+
+}  // namespace
 
 Eigen::Vector2d closest_point_on_segment(
   const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b)
@@ -35,6 +44,26 @@ double distance_to_segment(
   const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b)
 {
   return (p - closest_point_on_segment(p, a, b)).norm();
+}
+
+std::optional<Eigen::Vector2d> segment_intersection(
+  const Eigen::Vector2d & a1, const Eigen::Vector2d & a2, const Eigen::Vector2d & b1,
+  const Eigen::Vector2d & b2)
+{
+  const Eigen::Vector2d r = a2 - a1;
+  const Eigen::Vector2d s = b2 - b1;
+  const double cross_rs = r.x() * s.y() - r.y() * s.x();
+  // A degenerate segment gives cross_rs == 0 with a zero bound, so it takes this branch too.
+  if (std::abs(cross_rs) <= SEGMENT_PARALLEL_EPS * r.norm() * s.norm()) {
+    return std::nullopt;
+  }
+  const Eigen::Vector2d q = b1 - a1;
+  const double t = (q.x() * s.y() - q.y() * s.x()) / cross_rs;
+  const double u = (q.x() * r.y() - q.y() * r.x()) / cross_rs;
+  if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0) {
+    return std::nullopt;
+  }
+  return a1 + t * r;
 }
 
 }  // namespace eltanin

@@ -15,6 +15,7 @@
 #ifndef ELTANIN__CORE__ANGLE_HPP_
 #define ELTANIN__CORE__ANGLE_HPP_
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -50,6 +51,13 @@ inline double normalize_angle_positive(double angle)
 inline double shortest_angular_distance(double from, double to)
 {
   return normalize_angle(to - from);
+}
+
+/// Interpolates along the shortest rotation; result is in (-pi, pi]. `t` is clamped to [0, 1].
+inline double interpolate_angle(double from, double to, double t)
+{
+  const double ratio = std::clamp(t, 0.0, 1.0);
+  return normalize_angle(from + ratio * shortest_angular_distance(from, to));
 }
 
 /// A closed arc traced counter-clockwise from `from` to `to`; a full turn is not representable.

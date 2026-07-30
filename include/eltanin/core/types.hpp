@@ -19,6 +19,7 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <cmath>
 
 namespace eltanin
@@ -37,6 +38,15 @@ struct Twist2D
   Eigen::Vector2d linear{Eigen::Vector2d::Zero()};
   double angular{0.0};
 };
+
+/// Position is linear, yaw follows the shortest rotation. `t` is clamped to [0, 1].
+inline Pose2D interpolate_pose(const Pose2D & from, const Pose2D & to, double t)
+{
+  const double ratio = std::clamp(t, 0.0, 1.0);
+  return Pose2D{
+    from.position + ratio * (to.position - from.position),
+    interpolate_angle(from.yaw, to.yaw, ratio)};
+}
 
 /// SE(2) rigid transform. Distinct from `Pose2D` (a state) with no implicit conversion.
 class Transform2D

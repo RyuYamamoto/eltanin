@@ -21,6 +21,7 @@ namespace
 
 using eltanin::closest_point_on_segment;
 using eltanin::distance_to_segment;
+using eltanin::segment_intersection;
 using Eigen::Vector2d;
 
 constexpr double kTol = 1e-12;
@@ -102,4 +103,117 @@ TEST(Geometry, ClosestPointIsSymmetricInSegmentOrientation)
   const Vector2d b{2.0, 1.0};
   const Vector2d p{0.3, 1.7};
   EXPECT_NEAR(distance_to_segment(p, a, b), distance_to_segment(p, b, a), kTol);
+}
+
+TEST(Geometry, SegmentIntersectionCrossing)
+{
+  const auto point = segment_intersection(
+    Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0}, Vector2d{-1.0, 1.0}, Vector2d{1.0, -1.0});
+  ASSERT_TRUE(point.has_value());
+  EXPECT_NEAR(point->x(), 0.0, kTol);
+  EXPECT_NEAR(point->y(), 0.0, kTol);
+}
+
+TEST(Geometry, SegmentIntersectionOffCenterCrossing)
+{
+  const auto point = segment_intersection(
+    Vector2d{0.0, 0.0}, Vector2d{4.0, 0.0}, Vector2d{1.0, -2.0}, Vector2d{1.0, 2.0});
+  ASSERT_TRUE(point.has_value());
+  EXPECT_NEAR(point->x(), 1.0, kTol);
+  EXPECT_NEAR(point->y(), 0.0, kTol);
+}
+
+TEST(Geometry, SegmentIntersectionIsSymmetricInArgumentOrder)
+{
+  const Vector2d a1{0.0, 0.0};
+  const Vector2d a2{4.0, 2.0};
+  const Vector2d b1{0.0, 2.0};
+  const Vector2d b2{4.0, 0.0};
+
+  const auto forward = segment_intersection(a1, a2, b1, b2);
+  const auto swapped = segment_intersection(b1, b2, a1, a2);
+  const auto reversed = segment_intersection(a2, a1, b2, b1);
+  ASSERT_TRUE(forward.has_value());
+  ASSERT_TRUE(swapped.has_value());
+  ASSERT_TRUE(reversed.has_value());
+  EXPECT_NEAR((*forward - *swapped).norm(), 0.0, kTol);
+  EXPECT_NEAR((*forward - *reversed).norm(), 0.0, kTol);
+}
+
+TEST(Geometry, SegmentIntersectionTouchingEndpointIsIncluded)
+{
+  // Coordinates are exact in binary, so the closed-interval comparison is not at rounding risk.
+  const auto tee = segment_intersection(
+    Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{1.0, 0.0}, Vector2d{1.0, 1.0});
+  ASSERT_TRUE(tee.has_value());
+  EXPECT_NEAR(tee->x(), 1.0, kTol);
+  EXPECT_NEAR(tee->y(), 0.0, kTol);
+
+  const auto corner = segment_intersection(
+    Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{2.0, 2.0});
+  ASSERT_TRUE(corner.has_value());
+  EXPECT_NEAR(corner->x(), 2.0, kTol);
+  EXPECT_NEAR(corner->y(), 0.0, kTol);
+}
+
+TEST(Geometry, SegmentIntersectionBeyondTheSegmentIsNullopt)
+{
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{1.0, 0.0}, Vector2d{2.0, -1.0}, Vector2d{2.0, 1.0})
+                 .has_value());
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{4.0, 0.0}, Vector2d{1.0, 1.0}, Vector2d{1.0, 2.0})
+                 .has_value());
+}
+
+TEST(Geometry, SegmentIntersectionParallelIsNullopt)
+{
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{0.0, 1.0}, Vector2d{2.0, 1.0})
+                 .has_value());
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0, 2.0}, Vector2d{1.0, 0.0}, Vector2d{3.0, 2.0})
+                 .has_value());
+}
+
+TEST(Geometry, SegmentIntersectionCollinearIsNullopt)
+{
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{1.0, 0.0}, Vector2d{3.0, 0.0})
+                 .has_value());
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{4.0, 0.0})
+                 .has_value());
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, Vector2d{3.0, 0.0}, Vector2d{5.0, 0.0})
+                 .has_value());
+}
+
+TEST(Geometry, SegmentIntersectionDegenerateIsNullopt)
+{
+  const Vector2d point{1.0, 0.0};
+  EXPECT_FALSE(
+    segment_intersection(point, point, Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}).has_value());
+  EXPECT_FALSE(
+    segment_intersection(Vector2d{0.0, 0.0}, Vector2d{2.0, 0.0}, point, point).has_value());
+  EXPECT_FALSE(segment_intersection(point, point, point, point).has_value());
+}
+
+TEST(Geometry, SegmentIntersectionIsScaleInvariant)
+{
+  constexpr double scale = 1e6;
+  const auto scaled = segment_intersection(
+    Vector2d{-scale, -scale}, Vector2d{scale, scale}, Vector2d{-scale, scale},
+    Vector2d{scale, -scale});
+  ASSERT_TRUE(scaled.has_value());
+  EXPECT_NEAR(scaled->norm(), 0.0, 1e-6);
+
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0 * scale, 0.0}, Vector2d{0.0, scale},
+                 Vector2d{2.0 * scale, scale})
+                 .has_value());
+  EXPECT_FALSE(segment_intersection(
+                 Vector2d{0.0, 0.0}, Vector2d{2.0e-6, 0.0}, Vector2d{0.0, 1.0e-6},
+                 Vector2d{2.0e-6, 1.0e-6})
+                 .has_value());
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
+#include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/angle.hpp>
 #include <eltanin/core/footprint.hpp>
 #include <eltanin/core/path.hpp>
@@ -58,6 +59,13 @@ int main()
   const eltanin::Path smoothed =
     eltanin::planner::smooth(*path, free_costmap, traversability);
 
+  auto tracker = eltanin::control::PurePursuit::create(eltanin::control::PurePursuitParams{});
+  if (!tracker.has_value()) {
+    std::cerr << "PurePursuit::create unexpectedly failed\n";
+    return EXIT_FAILURE;
+  }
+  const eltanin::control::PurePursuit::Result command = tracker->compute(start, smoothed, 0.01);
+
   std::cout << "cell " << index->x << "," << index->y << " center (" << center.x() << ", "
             << center.y() << ") cost " << static_cast<int>(costmap(index->x, index->y))
             << " normalized angle " << eltanin::normalize_angle(7.0)
@@ -65,6 +73,9 @@ int main()
             << " error kind count "
             << static_cast<int>(eltanin::map_io::MapIoErrorKind::WriteFailed)
             << " scan points " << scan_points.size() << " path poses " << path->size()
-            << " smoothed length " << eltanin::path_length(smoothed) << '\n';
+            << " smoothed length " << eltanin::path_length(smoothed) << " arc length back "
+            << eltanin::cumulative_arc_length(smoothed).back() << " tracker status "
+            << static_cast<int>(command.status) << " tracker angular "
+            << command.command.angular << '\n';
   return EXIT_SUCCESS;
 }

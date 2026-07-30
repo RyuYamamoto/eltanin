@@ -26,4 +26,19 @@ double path_length(const Path & path)
   return length;
 }
 
+std::vector<double> cumulative_arc_length(const Path & path)
+{
+  std::vector<double> lengths;
+  lengths.reserve(path.size());
+  double length = 0.0;
+  for (std::size_t i = 0; i < path.size(); ++i) {
+    // Same accumulation order as path_length, so back() matches it exactly.
+    if (i > 0) {
+      length += (path[i].position - path[i - 1].position).norm();
+    }
+    lengths.push_back(length);
+  }
+  return lengths;
+}
+
 }  // namespace eltanin

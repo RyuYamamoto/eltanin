@@ -434,7 +434,7 @@ public:
 | `map_io/` | `eltanin_map_io` / `eltanin::map_io` | T1 | PGM + YAML 読み込み、PGM 書き出し (yaml-cpp 依存) |
 | `sensor/` | `eltanin_sensor` / `eltanin::sensor` | T3 (完了) | Scan 投影 (`ScanData` / `ScanFilter` / `project_scan`)。**依存は `eltanin_core` のみ** (tf / laser_geometry / PCL / ROS を持たない)。設計は `docs/sensor-design.md` |
 | `planner/` | `eltanin_planner` / `eltanin::planner` | T4 (グローバルのみ完了 / ローカルは未着手) | 8 近傍 A* グローバルプランナ (1 パス探索)、最近傍通行可セル探索、反復平滑化スムーザ。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/planner-design.md` |
-| `control/` | `eltanin_control` | T5 | 経路追従、`Pose2D` / 角度の補間、累積弧長、線分交差 |
+| `control/` | `eltanin_control` / `eltanin::control` | T5 (完了) | Pure Pursuit 経路追従 (`PurePursuitParams` / `PurePursuit`)。**依存は `eltanin_core` のみ** (コストマップを見ない)。設計は `docs/control-design.md`。`Pose2D` / 角度の補間・累積弧長・線分交差は汎用ユーティリティなので `eltanin_core` の既存ヘッダに置いた |
 | `safety/` | `eltanin_safety` | T6 | セーフティリミッタ、厳密フットプリント衝突 (多角形の重心 / 凸性 / 符号付き距離 / 交差) |
 | `sim/` | `eltanin_sim` | T6 | 簡易シミュレータ |
 

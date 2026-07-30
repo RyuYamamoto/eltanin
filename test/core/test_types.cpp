@@ -21,6 +21,8 @@
 namespace
 {
 
+using eltanin::interpolate_angle;
+using eltanin::interpolate_pose;
 using eltanin::Pose2D;
 using eltanin::Transform2D;
 using eltanin::Twist2D;
@@ -60,6 +62,59 @@ TEST(Types, AggregateInitialization)
   EXPECT_DOUBLE_EQ(twist.linear.x(), 0.3);
   EXPECT_DOUBLE_EQ(twist.linear.y(), -0.1);
   EXPECT_DOUBLE_EQ(twist.angular, 0.2);
+}
+
+TEST(Types, InterpolatePoseHitsBothEndpoints)
+{
+  const Pose2D from{Vector2d{1.0, 2.0}, 0.3};
+  const Pose2D to{Vector2d{-3.0, 5.0}, -1.2};
+
+  const Pose2D at_zero = interpolate_pose(from, to, 0.0);
+  EXPECT_DOUBLE_EQ(at_zero.position.x(), from.position.x());
+  EXPECT_DOUBLE_EQ(at_zero.position.y(), from.position.y());
+  EXPECT_NEAR(at_zero.yaw, from.yaw, kTol);
+
+  const Pose2D at_one = interpolate_pose(from, to, 1.0);
+  EXPECT_DOUBLE_EQ(at_one.position.x(), to.position.x());
+  EXPECT_DOUBLE_EQ(at_one.position.y(), to.position.y());
+  EXPECT_NEAR(at_one.yaw, to.yaw, kTol);
+}
+
+TEST(Types, InterpolatePosePositionIsLinear)
+{
+  const Pose2D from{Vector2d{1.0, 2.0}, 0.0};
+  const Pose2D to{Vector2d{5.0, -2.0}, 0.0};
+  for (const double t : {0.0, 0.25, 0.5, 0.75, 1.0}) {
+    const Pose2D pose = interpolate_pose(from, to, t);
+    EXPECT_NEAR(pose.position.x(), 1.0 + 4.0 * t, kTol) << "t=" << t;
+    EXPECT_NEAR(pose.position.y(), 2.0 - 4.0 * t, kTol) << "t=" << t;
+  }
+}
+
+TEST(Types, InterpolatePoseYawMatchesInterpolateAngle)
+{
+  const Pose2D from{Vector2d{0.0, 0.0}, 3.0};
+  const Pose2D to{Vector2d{1.0, 1.0}, -3.0};
+  for (const double t : {0.0, 0.2, 0.5, 0.8, 1.0}) {
+    EXPECT_DOUBLE_EQ(interpolate_pose(from, to, t).yaw, interpolate_angle(3.0, -3.0, t))
+      << "t=" << t;
+  }
+}
+
+TEST(Types, InterpolatePoseClampsRatio)
+{
+  const Pose2D from{Vector2d{1.0, 2.0}, 0.3};
+  const Pose2D to{Vector2d{-3.0, 5.0}, -1.2};
+
+  const Pose2D below = interpolate_pose(from, to, -2.0);
+  EXPECT_DOUBLE_EQ(below.position.x(), from.position.x());
+  EXPECT_DOUBLE_EQ(below.position.y(), from.position.y());
+  EXPECT_DOUBLE_EQ(below.yaw, interpolate_pose(from, to, 0.0).yaw);
+
+  const Pose2D above = interpolate_pose(from, to, 3.0);
+  EXPECT_DOUBLE_EQ(above.position.x(), to.position.x());
+  EXPECT_DOUBLE_EQ(above.position.y(), to.position.y());
+  EXPECT_DOUBLE_EQ(above.yaw, interpolate_pose(from, to, 1.0).yaw);
 }
 
 TEST(Types, TransformAppliedToPoint)

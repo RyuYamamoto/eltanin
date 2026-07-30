@@ -25,6 +25,7 @@ namespace
 
 using eltanin::angle_in_range;
 using eltanin::AngleRange;
+using eltanin::interpolate_angle;
 using eltanin::normalize_angle;
 using eltanin::normalize_angle_positive;
 using eltanin::shortest_angular_distance;
@@ -146,6 +147,71 @@ TEST(Angle, ShortestAngularDistanceRange)
       const double to = 0.29 * static_cast<double>(j);
       EXPECT_TRUE(in_normalized_range(shortest_angular_distance(from, to)));
     }
+  }
+}
+
+TEST(Angle, InterpolateHitsBothEndpoints)
+{
+  EXPECT_DOUBLE_EQ(interpolate_angle(0.3, 1.2, 0.0), 0.3);
+  EXPECT_NEAR(interpolate_angle(0.3, 1.2, 1.0), 1.2, kTol);
+  EXPECT_NEAR(interpolate_angle(kPi - 0.1, -kPi + 0.1, 1.0), -kPi + 0.1, kTol);
+}
+
+TEST(Angle, InterpolateIsLinearInside)
+{
+  EXPECT_NEAR(interpolate_angle(0.0, 1.0, 0.25), 0.25, kTol);
+  EXPECT_NEAR(interpolate_angle(0.0, 1.0, 0.5), 0.5, kTol);
+  EXPECT_NEAR(interpolate_angle(-0.4, 0.4, 0.5), 0.0, kTol);
+}
+
+TEST(Angle, InterpolateClampsRatio)
+{
+  EXPECT_DOUBLE_EQ(interpolate_angle(0.3, 1.2, -1.0), interpolate_angle(0.3, 1.2, 0.0));
+  EXPECT_DOUBLE_EQ(interpolate_angle(0.3, 1.2, 5.0), interpolate_angle(0.3, 1.2, 1.0));
+  EXPECT_DOUBLE_EQ(interpolate_angle(0.3, 1.2, -1e-9), 0.3);
+}
+
+TEST(Angle, InterpolateTakesTheShortestRotation)
+{
+  // 3.0 -> -3.0 is +0.283 rad across pi, not -6.0 rad through zero.
+  const double result = interpolate_angle(3.0, -3.0, 0.5);
+  EXPECT_NEAR(std::abs(shortest_angular_distance(result, kPi)), 0.0, 1e-9);
+  EXPECT_GT(std::abs(result), 3.0);
+  // The midpoint lands on the (-pi, pi] boundary, so compare it as an angle, not as a value.
+  const double mirrored = interpolate_angle(-3.0, 3.0, 0.5);
+  EXPECT_NEAR(std::abs(shortest_angular_distance(mirrored, kPi)), 0.0, 1e-9);
+  EXPECT_NEAR(interpolate_angle(3.0, -3.0, 0.25), 3.0707963267948966, kTol);
+  EXPECT_NEAR(interpolate_angle(-3.0, 3.0, 0.25), -3.0707963267948966, kTol);
+}
+
+TEST(Angle, InterpolateResultStaysNormalized)
+{
+  for (int i = -30; i <= 30; ++i) {
+    for (int j = -30; j <= 30; ++j) {
+      const double from = 0.41 * static_cast<double>(i);
+      const double to = 0.37 * static_cast<double>(j);
+      for (const double t : {0.0, 0.1, 0.5, 0.9, 1.0}) {
+        EXPECT_TRUE(in_normalized_range(interpolate_angle(from, to, t)))
+          << "from=" << from << " to=" << to << " t=" << t;
+      }
+    }
+  }
+}
+
+TEST(Angle, InterpolateAntipodalIsDeterministic)
+{
+  // shortest_angular_distance returns +pi for an exactly opposite pair, so the arc goes CCW.
+  EXPECT_NEAR(interpolate_angle(0.0, kPi, 0.5), 0.5 * kPi, kTol);
+  EXPECT_NEAR(interpolate_angle(0.0, -kPi, 0.5), 0.5 * kPi, kTol);
+  EXPECT_DOUBLE_EQ(interpolate_angle(0.0, kPi, 0.5), interpolate_angle(0.0, -kPi, 0.5));
+}
+
+TEST(Angle, InterpolateIgnoresFullTurnsInTheInput)
+{
+  for (const double t : {0.0, 0.25, 0.5, 1.0}) {
+    const double expected = interpolate_angle(0.4, -1.1, t);
+    EXPECT_NEAR(interpolate_angle(0.4 + kTwoPi, -1.1, t), expected, kTol) << "t=" << t;
+    EXPECT_NEAR(interpolate_angle(0.4, -1.1 - kTwoPi, t), expected, kTol) << "t=" << t;
   }
 }
 

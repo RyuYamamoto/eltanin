@@ -17,6 +17,8 @@
 
 #include <eltanin/core/types.hpp>
 
+#include <optional>
+
 namespace eltanin
 {
 
@@ -27,6 +29,11 @@ Eigen::Vector2d closest_point_on_segment(
 /// Distance from `p` to segment [a, b]. A degenerate segment (a == b) measures to `a`.
 double distance_to_segment(
   const Eigen::Vector2d & p, const Eigen::Vector2d & a, const Eigen::Vector2d & b);
+
+/// Intersection of closed segments; nullopt when parallel, collinear or degenerate.
+std::optional<Eigen::Vector2d> segment_intersection(
+  const Eigen::Vector2d & a1, const Eigen::Vector2d & a2, const Eigen::Vector2d & b1,
+  const Eigen::Vector2d & b2);
 
 }  // namespace eltanin
 

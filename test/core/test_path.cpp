@@ -16,12 +16,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstddef>
 #include <utility>
 #include <vector>
 
 namespace
 {
 
+using eltanin::cumulative_arc_length;
 using eltanin::Path;
 using eltanin::path_length;
 using eltanin::Pose2D;
@@ -89,6 +92,91 @@ TEST(Path, IterationVisitsEveryPose)
     sum_x += pose.position.x();
   }
   EXPECT_NEAR(sum_x, 3.0, kTol);
+}
+
+TEST(Path, CumulativeArcLengthOfEmptyPathIsEmpty)
+{
+  const Path path;
+  EXPECT_TRUE(cumulative_arc_length(path).empty());
+}
+
+TEST(Path, CumulativeArcLengthOfSinglePoseIsZero)
+{
+  const Path path{Pose2D{Vector2d{1.0, 2.0}, 0.5}};
+  const std::vector<double> lengths = cumulative_arc_length(path);
+  ASSERT_EQ(lengths.size(), 1u);
+  EXPECT_DOUBLE_EQ(lengths[0], 0.0);
+}
+
+TEST(Path, CumulativeArcLengthOnEvenlySpacedLine)
+{
+  constexpr double spacing = 0.25;
+  constexpr std::size_t count = 9;
+  Path path;
+  for (std::size_t i = 0; i < count; ++i) {
+    path.push_back(Pose2D{Vector2d{spacing * static_cast<double>(i), 0.0}, 0.0});
+  }
+
+  const std::vector<double> lengths = cumulative_arc_length(path);
+  ASSERT_EQ(lengths.size(), count);
+  for (std::size_t i = 0; i < count; ++i) {
+    EXPECT_DOUBLE_EQ(lengths[i], spacing * static_cast<double>(i)) << "index " << i;
+  }
+}
+
+TEST(Path, CumulativeArcLengthOnPolyline)
+{
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{3.0, 4.0}, 0.0},
+    Pose2D{Vector2d{3.0, 0.0}, 0.0}, Pose2D{Vector2d{-3.0, 0.0}, 0.0}};
+
+  const std::vector<double> lengths = cumulative_arc_length(path);
+  ASSERT_EQ(lengths.size(), 4u);
+  EXPECT_DOUBLE_EQ(lengths[0], 0.0);
+  EXPECT_DOUBLE_EQ(lengths[1], 5.0);
+  EXPECT_DOUBLE_EQ(lengths[2], 9.0);
+  EXPECT_DOUBLE_EQ(lengths[3], 15.0);
+}
+
+TEST(Path, CumulativeArcLengthIsNonDecreasing)
+{
+  Path path;
+  for (int i = 0; i < 40; ++i) {
+    const double angle = 0.31 * static_cast<double>(i);
+    path.push_back(Pose2D{Vector2d{std::cos(angle), 0.5 * std::sin(angle)}, 0.0});
+  }
+
+  const std::vector<double> lengths = cumulative_arc_length(path);
+  ASSERT_EQ(lengths.size(), path.size());
+  for (std::size_t i = 1; i < lengths.size(); ++i) {
+    EXPECT_GE(lengths[i], lengths[i - 1]) << "index " << i;
+  }
+}
+
+TEST(Path, CumulativeArcLengthBackMatchesPathLength)
+{
+  Path path;
+  for (int i = 0; i < 40; ++i) {
+    const double angle = 0.31 * static_cast<double>(i);
+    path.push_back(Pose2D{Vector2d{std::cos(angle), 0.5 * std::sin(angle)}, 0.0});
+  }
+  EXPECT_DOUBLE_EQ(cumulative_arc_length(path).back(), path_length(path));
+
+  const Path single{Pose2D{Vector2d{1.0, 2.0}, 0.0}};
+  EXPECT_DOUBLE_EQ(cumulative_arc_length(single).back(), path_length(single));
+}
+
+TEST(Path, CumulativeArcLengthKeepsDuplicatePosesFlat)
+{
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{1.0, 0.0}, 0.5}, Pose2D{Vector2d{2.0, 0.0}, 0.0}};
+
+  const std::vector<double> lengths = cumulative_arc_length(path);
+  ASSERT_EQ(lengths.size(), 4u);
+  EXPECT_DOUBLE_EQ(lengths[1], 1.0);
+  EXPECT_DOUBLE_EQ(lengths[2], lengths[1]);
+  EXPECT_DOUBLE_EQ(lengths[3], 2.0);
 }
 
 TEST(Path, ConstructionFromVector)

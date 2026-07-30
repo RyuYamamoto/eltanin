@@ -64,6 +64,9 @@ private:
 /// Sum of distances between consecutive positions [m]; 0 for an empty or single-pose path.
 double path_length(const Path & path);
 
+/// Arc length from the first pose to each pose [m]; one entry per pose, [0] is 0, non-decreasing.
+std::vector<double> cumulative_arc_length(const Path & path);
+
 }  // namespace eltanin
 
 #endif  // ELTANIN__CORE__PATH_HPP_

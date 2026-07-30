@@ -12,9 +12,14 @@ that needs ROS 2, visualization or file I/O lives in a separate target.
 | `eltanin_core` | `eltanin::core` | Eigen | `Pose2D` / `Twist2D` / `Transform2D`, angle normalization, point-segment geometry, `Polygon2D`, footprint radii, `Traversability`, `Path` |
 | `eltanin_map` | `eltanin::map` | `eltanin::core` | `MapGeometry` (the only world/map conversion), `GridMap<T>`, nav2-scale cost constants, cost model |
 | `eltanin_map_io` | `eltanin::map_io` | `eltanin::map`, yaml-cpp | PGM + YAML map loading, PGM debug dump |
+| `eltanin_sensor` | `eltanin::sensor` | `eltanin::core` | Laser scan projection into planar points (`ScanData` / `ScanFilter` / `project_scan`) |
+| `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\* global planner, nearest traversable cell search, iterative path smoother |
+| `eltanin_control` | `eltanin::control` | `eltanin::core` | Pure pursuit path tracking (`PurePursuit`) |
 
 Design decisions for the costmap, collision classification, error reporting and module layout are
-recorded in [docs/costmap-design.md](docs/costmap-design.md).
+recorded in [docs/costmap-design.md](docs/costmap-design.md). Per-module design notes live in
+[docs/sensor-design.md](docs/sensor-design.md), [docs/planner-design.md](docs/planner-design.md)
+and [docs/control-design.md](docs/control-design.md).
 
 ## Requirements
 

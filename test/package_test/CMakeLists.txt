@@ -9,4 +9,5 @@ target_link_libraries(eltanin_package_test PRIVATE
   eltanin::map
   eltanin::map_io
   eltanin::sensor
-  eltanin::planner)
+  eltanin::planner
+  eltanin::control)
