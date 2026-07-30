@@ -206,7 +206,7 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 
 - `CollisionRadii::classify(double)` に `float` セルを渡す形が concept を満たすため、**`DistanceMap` 側で追加のアダプタは不要**である (`TraversabilityModel<CollisionRadii, float>` が `float → double` の暗黙変換で成立する)。
 - プランナは判定モデルの適用を探索の前に全セル 1 回の分類として前置し、探索本体を非テンプレート関数にした。**探索本体はセル型も判定モデルも見ない**ため、上記の一致は構造的に保証される。詳細は `docs/planner-design.md` §2。
-- `Map` 側の要件は `CellMap` concept (`value_type` / `geometry()` / `operator()(int, int) const`) として置いた。当初は `include/eltanin/planner/cell_map.hpp` にあったが、**T6 で `eltanin_safety` が 2 人目の利用者になったため `include/eltanin/map/cell_map.hpp` (`eltanin::map::CellMap`) へ移した。**
+- `Map` 側の要件は `CellMap` concept (`value_type` / `geometry()` / `operator()(int, int) const`) として置いた。当初は `include/eltanin/planner/cell_map.hpp` にあったが、**T6 で `eltanin_collision` が 2 人目の利用者になったため `include/eltanin/map/cell_map.hpp` (`eltanin::map::CellMap`) へ移した。**
 
 ### 6.3 座標変換と幾何情報の分離
 
@@ -435,8 +435,8 @@ public:
 | `sensor/` | `eltanin_sensor` / `eltanin::sensor` | T3 (完了) | Scan 投影 (`ScanData` / `ScanFilter` / `project_scan`)。**依存は `eltanin_core` のみ** (tf / laser_geometry / PCL / ROS を持たない)。設計は `docs/sensor-design.md` |
 | `planner/` | `eltanin_planner` / `eltanin::planner` | T4 (グローバルのみ完了 / ローカルは未着手) | 8 近傍 A* グローバルプランナ (1 パス探索)、最近傍通行可セル探索、反復平滑化スムーザ。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/planner-design.md` |
 | `control/` | `eltanin_control` / `eltanin::control` | T5 (完了) | Pure Pursuit 経路追従 (`PurePursuitParams` / `PurePursuit`)。**依存は `eltanin_core` のみ** (コストマップを見ない)。設計は `docs/control-design.md`。`Pose2D` / 角度の補間・累積弧長・線分交差は汎用ユーティリティなので `eltanin_core` の既存ヘッダに置いた |
-| `safety/` | `eltanin_safety` | T6 | セーフティリミッタ、厳密フットプリント衝突 (多角形の重心 / 凸性 / 符号付き距離 / 交差) |
-| `sim/` | `eltanin_sim` | T6 | 簡易シミュレータ |
+| `collision/` | `eltanin_collision` / `eltanin::collision` | T6 (完了) | 二段構えのフットプリント衝突判定 (セル / 点群 / 多角形の各粒度) と制動距離則による速度制限 (`VelocityLimiter`)。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/collision-design.md`。ディレクトリ名は用途名 (`safety/`) ではなく機構名にした — 「セーフティ」は T7 の ROS ノード側の語彙である。多角形の頂点順序 / 凸性 / AABB は汎用なので `eltanin_core` に置いた。重心 / 符号付き距離 / 多角形交差は利用者がないため未実装 (§9.2、理由は `docs/collision-design.md` §5.1) |
+| `sim/` | `eltanin_sim` / `eltanin::sim` | T6 (完了) | 差動二輪の簡易 plant (`SimpleSimulator`)。**依存は `eltanin_core` のみ**。積分の純関数 `integrate_differential_drive` は `core` に置き、予測と plant が共有する |
 
 統合デモ (navyu 相当の動作確認) は T7。
 
@@ -500,6 +500,8 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 5. **ROI をセル座標で必要としたら `MapGeometry` に足す**: 公開されている world → cell 変換は `world_to_map()` (範囲外は `nullopt`) **だけ**である。範囲検査なしの生変換は公開していない。負のインデックスをそのまま返す API は、呼び出し側がクランプを忘れたときに範囲外アクセスへ直行するため、利用者が現れる前に置かない方針にした (9.2)。
 
    T2 が「world 座標の窓をクランプ済みのセル矩形に変換する」操作を必要としたら、**`MapGeometry` にメンバとして追加する**こと。nav2 の `Costmap2D::worldToMapEnforceBounds` に相当する形 (常にマップ内へクランプして返す) か、矩形ごと返す形 (窓がマップと交差しなければ `nullopt`) のいずれかが素直である。後者の方が「クランプ忘れ」が起こりえないぶん安全。
+
+   **T6 で決着した。** フットプリントの AABB をセル矩形に直す利用者が現れたため、後者の形で `MapGeometry::world_rect_to_cells(min, max) -> std::optional<CellRect>` を追加した。既存の private な `floor_to_index()` / `to_int_saturating()` を再利用するので、負座標の切り捨て方向と int 範囲外・NaN の防御が `world_to_map()` と共有される。`min <= max` は `assert` (呼び出し側の計算ミスであり設定不正ではない)。
 
    **`MapGeometry` の外で `std::floor((wx - origin_x) / resolution)` を書かないこと。** これを許すと navyu の 5 箇所重複が再発する。変換の実装が `MapGeometry` の中にしか無い状態を維持する。
 6. **`NO_INFORMATION` の扱い**: `CostTraversabilityModel` は `unknown_is_free` フラグで分岐する。膨張処理側でも未知セルの扱いを設定として一元化し、全経路で一貫させること (navyu は内接円分岐で未知の扱いが抜けていた)。
