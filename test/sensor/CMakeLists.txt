@@ -1,5 +1,6 @@
 add_executable(eltanin_test_sensor
   test_scan_projection.cpp
+  test_scan_clearing.cpp
   test_scan_to_costmap.cpp)
 
 target_link_libraries(eltanin_test_sensor PRIVATE

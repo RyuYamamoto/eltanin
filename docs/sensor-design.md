@@ -10,12 +10,13 @@
 
 対象は「1 枚の 2D レーザスキャンを、フィルタしたうえで平面上の点列にする」ことのみである。
 
-公開 API は次の 3 つだけである。
+公開 API は次の 4 つだけである。
 
 | 要素 | 場所 |
 |---|---|
 | `ScanData` / `ScanFilter` | `include/eltanin/sensor/scan_projection.hpp` |
-| `project_scan()` 2 オーバーロード | 同上 |
+| `project_scan()` 2 オーバーロード (マーキング用) | 同上 |
+| `project_scan_for_clearing()` 2 オーバーロード (クリアリング用、§11) | `include/eltanin/sensor/scan_clearing.hpp` |
 | `AngleRange` / `angle_in_range()` | `include/eltanin/core/angle.hpp` (角度の概念は core に閉じる) |
 
 対象外とし、利用者が現れてから足すもの:
@@ -28,7 +29,7 @@
 | `intensities` / `time_increment` / `scan_time` | 利用者が存在しない |
 | ビームごとの時刻補正 (スキャン中のロボット運動による歪み補正) | 姿勢の時系列補間が前提。`Transform2D` 1 個を受ける現契約の外 |
 | ダウンサンプリング / voxel grid、スキャンの蓄積 (nav2 の `ObservationBuffer` 相当) | 観測モデルの話。本モジュールは 1 スキャンを 1 回投影するだけ |
-| レイトレースによる自由空間クリア | §11 を参照。現契約では表現できないことを明記してある |
+| レイトレースのセル塗り (レイが通過したセルの列挙) | セル座標を扱わない (§6)。塗るのは `eltanin::map::RaytraceLayer` である。センサ側が出すのはレイの終点だけ (§11) |
 | 複数センサの点列統合 | 呼び出し側が 2 回呼んで連結すればよい。追記モードの API を持たせない (§8) |
 | ロボット自身のフットプリント形状によるビーム除外 | 角度セクタで足りない幾何判定は `eltanin_safety` |
 | 極座標のまま扱うプランナ向け API | 利用者が存在しない |
@@ -77,6 +78,8 @@ upper = filter.max_range; if (isfinite(scan.range_max)) upper = min(upper, scan.
 - **有効下限 > 有効上限 の場合に専用の早期 return を置かない。** `range < lower || range > upper` が全ビームを落とすので、出力が空になるのは述語の帰結である。分岐を足すと同じ判定が 2 本になる。この状態はセンサ諸元とパラメータの組み合わせ次第で起こるので `assert` しない (§9)。
 
 navyu は「パラメータによるゲート」と「`laser_geometry` 内部の `scan.range_*` ゲート」の 2 段構成で、有効範囲がコードのどこを読んでも分からなかった。参照 LiDAR の実測値 (`scan` = [0.1, 30.0] / `filter` = [0.0, 5.0]) では**下限がセンサ側、上限がパラメータ側から来る**ため、片方だけを見る設計では両方を再現できない。`effective_bounds()` が「有効範囲はどこに書いてあるのか」に対する唯一の答えになる。
+
+**畳み込みは `detail::effective_bounds()` の 1 箇所しかない。** クリアリングのパス (§11) も同じ関数を呼ぶため、`detail` 名前空間に出して 2 つの翻訳単位で共有している。センサ諸元との交差規則をパスごとに書き分けると、非有限値の扱いや閉区間の端が食い違ってもテストが両方を跨いで検出できない。
 
 `ScanFilter` のフィールド名を `min_range` / `max_range` とし、`ScanData` の `range_min` / `range_max` と**あえて別語順**にしている。両構造体が同じ関数に渡るため、`std::max(filter.min_range, scan.range_min)` の一方を書き間違えると**コンパイルエラーになる**。同名にすると `std::max(scan.range_min, scan.range_min)` が黙って通り、畳み込みが 1 箇所しかないだけにそこを取り違えると全ビームの判定が壊れる。
 
@@ -221,15 +224,59 @@ void project_scan(const ScanData &, const ScanFilter &, const Transform2D & sens
 
 ---
 
-## 11. clearing 用の投影は `project_scan` では表現できない
+## 11. clearing 用の投影 (`project_scan_for_clearing`)
 
-`project_scan` はフィルタで落ちたビームを出力に残さないため、ray trace のクリアリングには使えない。**これは意図した契約であり、欠陥ではない。** (`costmap-design.md` §15.1 / §15.5 と対応する。)
+`project_scan` はフィルタで落ちたビームを出力に残さないため、ray trace のクリアリングには使えない。**これは意図した契約であり、欠陥ではない。** そこで**マーキング用の `project_scan` を変えず、clearing 用の投影を別関数として足す 2 パス**にした (`costmap-design.md` §15.1 / §15.5 / §16 と対応する)。
 
-- nav2 も marking と clearing を別レンジ (`obstacle_max_range` / `raytrace_max_range`) に分け、`inf_is_valid` で inf を `range_max - ε` に置換してクリアリングに使っている。inf ビームは「その方向は `range_max` まで自由」という情報を持つためである。
-- eltanin では **`project_scan` をマーキング用に保ち、clearing 用の投影を別関数として後から足す 2 パス**にすれば、現在の API は変更不要である。センサ原点は呼び出し側が持つ `Transform2D::translation()` から得られるので、出力に原点を含める必要はない。
-- `range_max` を `ScanData` 側に持たせた判断 (§2) がここで効く。clearing パスが inf ビームを `range_max` に置換するのに必要な情報が `ScanData` に揃っている。
-- **罠: 角度フィルタはマーキングとクリアリングで同一にしないと、信用しないビームで自由空間を消す。** 2 パスに分けると設定を 2 箇所に書けてしまうため、呼び出し側が同じ `ScanFilter` の角度範囲を渡す規約にすること。
-- ビーム index と出力点の対応 (§8) は、2 パス方式なら不要である。1 パスでマーキングとクリアリングを同時に行う設計を選ぶ場合にのみ必要になる。
+```cpp
+void project_scan_for_clearing(const ScanData &, const ScanFilter & marking_filter,
+                               double clearing_max_range, std::vector<Eigen::Vector2d> & out);
+void project_scan_for_clearing(const ScanData &, const ScanFilter & marking_filter,
+                               double clearing_max_range, const Transform2D & sensor_to_world,
+                               std::vector<Eigen::Vector2d> & out);
+```
+
+出力は**各ビームの自由区間の遠端 (レイの終点) の点列**である。セル座標も通過セルの列も含まない。セルを塗るのは `eltanin::map::RaytraceLayer` の責務であり、§6 の「`eltanin_sensor` はセル座標を扱わない」を維持する。出力の契約 (出力引数 / 先頭で `clear()` / 追記モードなし / index 昇順 / 穴埋めなし) は §8 と同一である。
+
+**レイの始点 = センサ原点は出力に含めない。** 呼び出し側が `sensor_to_world.translation()` として既に持っている値であり、720 点に同じ値を複製する意味がない。
+
+### 11.1 マーキング用の `ScanFilter` をそのまま受け取る
+
+clearing 専用のフィルタ型を作らず、**マーキングに渡した `ScanFilter` そのものと、クリアリング最大レンジ 1 個**を受ける。
+
+- **罠: 角度フィルタがマーキングとクリアリングで食い違うと、信用しないビームで自由空間を宣言してしまう。** 「同じ角度範囲を渡すこと」を文書上の規約にするだけでは、2 箇所に別の値を書ける API を残すことになる。角度セクタと近傍側の下限をマーキングと同じオブジェクトから読むので、**食い違いが型の上で起こりえない。**
+- 分けたのは遠方側の上限だけである (詳細設計 D-27)。遠方ビームは角度分解能が粗く、自由空間の宣言には信頼できない。**既定値はライブラリに持たない** (ROS 層のパラメータ `clearing_max_range`、既定 3.0 m)。
+- `marking_filter.max_range` は clearing パスでは**使わない**。同じ構造体の一部を無視する API になるが、角度セクタと近傍側下限が一致する利益がそれを上回る。
+
+### 11.2 マーキングとクリアリングでビームの扱いが変わる箇所
+
+| 読み値 | marking (`project_scan`) | clearing |
+|---|---|---|
+| 遠方側の上限より遠い | **捨てる** | **上限まで切り詰める。** そこまでは自由と分かっている |
+| `+inf` (無反射) | 捨てる | `scan.range_max` まで自由とみなし、そのうえで上限で切り詰める |
+| `+inf` かつ `scan.range_max` が非有限 | 捨てる | **捨てる。** どこまで自由なのかを決める情報がない |
+| `NaN` / `-inf` / 負値 | 捨てる | 捨てる |
+| 近傍側の下限より近い | 捨てる | 捨てる。信頼できない短い読み値でレイを引くと実在する障害物を消しうる |
+
+`range_max` を `ScanData` 側に持たせた判断 (§2) がここで効く。inf ビームの置換に必要な情報が `ScanData` に揃っている。nav2 も同じ構成であり、`inf_is_valid` で inf を `range_max - ε` に置換し、`obstacle_max_range` と `raytrace_max_range` を分けている。
+
+**有効区間の畳み込みは §3 の `effective_bounds()` 1 箇所を共有する。** clearing パスは「マーキングのフィルタの `max_range` だけをクリアリング最大レンジに差し替えた `ScanFilter`」を渡して同じ関数を呼ぶ。非有限は「制約なし」・閉区間、という交差規則がマーキングと一致することが構造的に保証される。切り詰めたあとの距離が下限を下回るビームを落とす判定 1 本だけを持ち、「有効区間が空」(例: クリアリング上限 < `range_min`) も同じ述語の帰結として空出力になる。専用の早期 return を置かない (§3 と同じ方針)。
+
+### 11.3 引き続き持たないもの
+
+| 項目 | 理由 |
+|---|---|
+| ビーム index と出力点の対応 | 2 パス方式では不要である (§8)。1 パスで両方を作る設計を選ぶ場合にのみ必要になる |
+| 「このビームは無反射だった」というフラグ | 終点セルを塗るか否かの判断に使えるが、`RaytraceLayer` は**終点セルを常に塗らない**保守側の規則を採ったので利用者がいない (`costmap-design.md` §16.3) |
+| 自由区間の始点を出力に含める (点対の列にする) | レイは常にセンサ原点から引く (§11.4)。出力が 2 倍になり `ObstacleLayer` への直渡し (§8) と非対称になる |
+| クリアリング専用の角度範囲 / 最小レンジ | §11.1 のとおり、食い違いを作れる API を持たない |
+
+### 11.4 レイはセンサ原点から引く (`range_min` の内側も自由になる)
+
+`RaytraceLayer` はセンサ原点のセルから終点セルの手前までを塗るので、**`range_min` より近い区間 (参照 LiDAR で 0.1 m、`resolution` 0.05 m なら 2 セル) も自由と宣言される。** ここは構造的に未観測な区間である。
+
+- 受け入れた理由: その 2 セルはロボット自身が今いる場所であり、静的地図の `LETHAL_OBSTACLE` は既定で保護される (`costmap-design.md` §16.2)。nav2 も同じ挙動である。
+- 代案 (始点を `range_min` の位置にする) は出力を点対にする必要があり、§11.3 の理由で採らない。
 
 ---
 
@@ -237,7 +284,7 @@ void project_scan(const ScanData &, const ScanFilter &, const Transform2D & sens
 
 | 対象 | 依存 |
 |---|---|
-| `eltanin_sensor` (ライブラリ) | C++ 標準ライブラリ / Eigen / `eltanin_core` のみ |
+| `eltanin_sensor` (ライブラリ) | C++ 標準ライブラリ / Eigen / `eltanin_core` のみ。clearing 用の投影を足しても変わらない |
 | `eltanin_test_sensor` (テスト) | 上記 + `eltanin::map` (`ObstacleLayer` 結線の検証) + GoogleTest |
 
 `laser_geometry` / PCL / tf2 / ROS 2 / yaml-cpp / `eltanin_map` をライブラリに持ち込まない。`cmake/eltaninConfig.cmake.in` は新しい外部依存がないため変更していない。

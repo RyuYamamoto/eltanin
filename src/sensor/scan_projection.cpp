@@ -22,16 +22,9 @@
 namespace eltanin::sensor
 {
 
-namespace
+namespace detail
 {
 
-struct RangeBounds
-{
-  double lower;
-  double upper;
-};
-
-/// Intersects the sensor's own limits with the filter's; a non-finite scan limit means "no limit".
 RangeBounds effective_bounds(const ScanData & scan, const ScanFilter & filter)
 {
   double lower = filter.min_range;
@@ -45,7 +38,7 @@ RangeBounds effective_bounds(const ScanData & scan, const ScanFilter & filter)
   return RangeBounds{lower, upper};
 }
 
-}  // namespace
+}  // namespace detail
 
 void project_scan(
   const ScanData & scan, const ScanFilter & filter, std::vector<Eigen::Vector2d> & out)
@@ -60,7 +53,7 @@ void project_scan(
   out.clear();
   out.reserve(scan.ranges.size());
 
-  const RangeBounds bounds = effective_bounds(scan, filter);
+  const detail::RangeBounds bounds = detail::effective_bounds(scan, filter);
   for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
     const double range = static_cast<double>(scan.ranges[i]);
     if (!std::isfinite(range) || range < bounds.lower || range > bounds.upper) {

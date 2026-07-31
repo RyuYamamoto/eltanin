@@ -54,6 +54,21 @@ void project_scan(
   const ScanData & scan, const ScanFilter & filter, const Transform2D & sensor_to_world,
   std::vector<Eigen::Vector2d> & out);
 
+namespace detail
+{
+
+/// Closed interval, in metres, that a beam's range has to fall in.
+struct RangeBounds
+{
+  double lower;
+  double upper;
+};
+
+/// Folds the sensor's own limits into the filter's; a non-finite scan limit means "no limit".
+RangeBounds effective_bounds(const ScanData & scan, const ScanFilter & filter);
+
+}  // namespace detail
+
 }  // namespace eltanin::sensor
 
 #endif  // ELTANIN__SENSOR__SCAN_PROJECTION_HPP_

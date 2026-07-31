@@ -1,5 +1,6 @@
 add_library(eltanin_sensor STATIC
-  scan_projection.cpp)
+  scan_projection.cpp
+  scan_clearing.cpp)
 add_library(eltanin::sensor ALIAS eltanin_sensor)
 
 target_compile_features(eltanin_sensor PUBLIC cxx_std_20)
