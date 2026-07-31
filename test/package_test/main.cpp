@@ -13,6 +13,7 @@
 // limitations under the License
 
 #include <eltanin/collision/velocity_limiter.hpp>
+#include <eltanin/control/goal_approach.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/angle.hpp>
 #include <eltanin/core/footprint.hpp>
@@ -68,6 +69,16 @@ int main()
   }
   const eltanin::control::PurePursuit::Result command = tracker->compute(start, smoothed, 0.01);
 
+  auto approach = eltanin::control::GoalApproach::create(eltanin::control::GoalApproachParams{});
+  if (!approach.has_value()) {
+    std::cerr << "GoalApproach::create unexpectedly failed\n";
+    return EXIT_FAILURE;
+  }
+  const eltanin::control::GoalApproach::Result approach_result =
+    approach->compute(start, smoothed, 0.05);
+  const eltanin::Twist2D approach_limited =
+    eltanin::control::detail::apply_linear_limit(command.command, approach_result.linear_vel_limit);
+
   auto limiter =
     eltanin::collision::VelocityLimiter::create(eltanin::collision::VelocityLimiterParams{});
   if (!limiter.has_value()) {
@@ -91,7 +102,10 @@ int main()
             << " smoothed length " << eltanin::path_length(smoothed) << " arc length back "
             << eltanin::cumulative_arc_length(smoothed).back() << " tracker status "
             << static_cast<int>(command.status) << " tracker angular "
-            << command.command.angular << " limited linear " << limited.command.linear.x()
+            << command.command.angular << " approach state "
+            << static_cast<int>(approach_result.state) << " approach remaining arc "
+            << approach_result.remaining_arc << " approach limited angular "
+            << approach_limited.angular << " limited linear " << limited.command.linear.x()
             << " predicted poses " << limited.predicted_poses.size() << " plant yaw "
             << plant.pose().yaw << '\n';
   return EXIT_SUCCESS;

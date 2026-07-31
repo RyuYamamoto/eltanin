@@ -1,4 +1,5 @@
 add_library(eltanin_control STATIC
+  goal_approach.cpp
   pure_pursuit.cpp)
 add_library(eltanin::control ALIAS eltanin_control)
 

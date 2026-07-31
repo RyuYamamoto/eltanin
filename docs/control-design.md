@@ -262,7 +262,7 @@ navyu 形を走らせるためのもので、閾値をマジックナンバー�
 |---|---|
 | C-1 | `dt` の上限は 2 つある。**向き合わせの収束条件** `dt < yaw_tolerance / (ALIGNMENT_ANGULAR_VEL_RATIO * max_angular_vel)` (既定値で 0.14 s) を破ると、1 周期の旋回量が許容帯を飛び越え続けて**永久に前進しない**。もう 1 つは 1 次遅れの安定条件 `LINEAR_VEL_GAIN * dt <= 1` で、破ってもクランプが効くので発散はしない。`create()` は `dt` を知らないため検証できない。`dt = 0.1 s` で整合が完了することをテストで固定してある |
 | C-2 | **ゴール到達判定は経路点間隔に依存する。** 「最近傍点が末尾の点」で判定するため、最終線分の中点を越えた時点で成立する。点間隔 `s` の経路では最大 `s/2` 手前で止まる (実測 0.024992 m / `s/2 = 0.025`)。距離許容値パラメータは追加していない (navyu 踏襲) |
-| C-3 | **最終姿勢合わせを持たない。** T4 が経路末尾に載せた `goal.yaw` は T5 では使わない。要求 goal の向きに合わせる旋回が必要なら後続タスクが足す |
+| C-3 | **最終姿勢合わせを持たない。** T4 が経路末尾に載せた `goal.yaw` は T5 では使わない。要求 goal の向きに合わせる旋回が必要なら後続タスクが足す。**T5 では持たない。E-10 の `GoalApproach` が引き取った (§12)** |
 | C-4 | **経路点の `yaw` を使わない。** 目標点の方位は `atan2` で作る (navyu 踏襲)。経路の `yaw` を信頼する設計は利用者が現れてから |
 | C-5 | **大域最近傍なので index が後退しうる。** 自己交差・折り返す経路ではロボットが経路の別区間に吸着する。対処するには前回 index を持つ必要があり、経路の identity に依存する状態が入る (§1 の「内部状態は 2 つのみ」が崩れる)。前提として「経路は前進のみでカスプを含まず自己交差しない」を置く (8 近傍 A* + 反復平滑化の出力はこれを満たす) |
 | C-6 | **新しい経路を渡すときは呼び出し側が `reset()` を呼ぶ。** `yaw_aligned_` は経路の入れ替えを検知できないため、新しい経路でも向き合わせが再開しない。`NoPath` / `GoalReached` では自動でリセットされる |
@@ -386,6 +386,7 @@ T6 (`eltanin_safety`) の多角形交差からも使える。`control` に置く
 | `test/control/tracking_fixture.hpp` | 差動二輪の運動学積分 (`simulate`)、経路生成 (`make_straight_path` / `make_arc_path`)、横方向誤差計測 (`lateral_error`)、`NavyuFormReference` |
 | `test/control/test_pure_pursuit.cpp` | `create()` の検証、退化ケース、初回決定性、`path` の不変性、向き合わせ (22 件) |
 | `test/control/test_pure_pursuit_tracking.cpp` | 直線・円弧の追従誤差、navyu 形との比較、ゴール残距離 (7 件) |
+| `test/control/test_goal_approach.cpp` | `GoalApproach` (§12) の減速則 / yaw 収束 / 進捗検査 / 退化ケースとラッチ / `apply_linear_limit` (38 件) |
 | `test/core/test_angle.cpp` / `test_types.cpp` / `test_path.cpp` / `test_geometry.cpp` | 4 ユーティリティ (§8) の契約 (25 件を追加) |
 
 横方向誤差は経路の各線分に対する `distance_to_segment` の最小値で測る (再実装しない)。
@@ -445,3 +446,273 @@ p4 (1.20, -0.70)  距離 1.3892
 ただし**この経路が検出できるのは `linear_vel_ > 0.162` のゴミだけ**である (それ以下では先行距離が
 0.3162 未満で p1 が選ばれ続ける)。だから 1 と 2 の両方が必要である。
 この経路は追従の現実性を意図しない合成経路である。
+
+---
+
+## 12. ゴール最終接近 (`GoalApproach`)
+
+対象は `include/eltanin/control/goal_approach.hpp` / `src/control/goal_approach.cpp` の
+`eltanin::control::GoalApproach` と `eltanin::control::detail::apply_linear_limit()`。
+
+`docs/integration-design.md` §13-2 / §15.1 が記録した **R-7 (ゴール手前で角速度が ±0.4 rad/s で振動する)**
+への対策である。移植元はない。navyu の `navyu_path_tracker` はゴール最終接近の概念を持たない
+(欠陥 13 / C-3)。
+
+### 12.1 責務境界と合成の契約
+
+**`GoalApproach` は `PurePursuit` を知らない。** 速度上限と状態を返すだけで、合成は呼び出し側が行う。
+
+```
+pp = pursuit.compute(robot, path, dt);
+ga = approach.compute(robot, path, dt);
+
+switch (ga.state) {
+  Aligning:                    cmd = ga.command;                                       // その場旋回
+  Reached / AlignmentTimeout:  cmd = {};                                               // ゼロ指令
+  Inactive / Approaching:      cmd = detail::apply_linear_limit(pp.command, ga.linear_vel_limit);
+}
+// pp.status が Tracking 以外ならゼロ指令 (§1)
+```
+
+`Inactive` では上限が `+inf` で `apply_linear_limit()` が恒等写像になるため、
+**`Inactive` と `Approaching` は分岐なしで同じ経路を通せる。**
+
+#### 12.1.1 `linear.x()` だけをクランプすると R-7 は直らない
+
+これが `apply_linear_limit()` を `eltanin` 側に置いた理由である。
+§1.1 の機構によりゴール手前では角速度の分母が `min_lookahead_dist` に張り付き、
+`w` の振幅は `v` にほぼ比例する。したがって `v` を絞れば `w` も縮む —
+**ただし `PurePursuit` が返す `w` は自分の内部状態 `linear_vel_` から計算されている**
+(`pure_pursuit.cpp:132-134`)。呼び出し側が `command.linear.x()` だけを `std::min` で潰しても、
+`w` は絞られていない `linear_vel_` のまま出てくる。振動はそのまま残る。
+
+合成は **Twist 全体への比率スケール**でなければならない。曲率 `w/v` を保つ形である。
+
+```
+ratio = v_out / v_in      (|v_in| <= MIN_LINEAR_VEL なら 1.0)
+out   = { v_out, 0.0, w_in * ratio }
+```
+
+同じ形の先例が `collision::detail::limit_command()` (`velocity_limiter.cpp:60-76`) にある。
+減速則の式まで同一である。**この関数を呼び出し側 (ROS ノード) に書かせると、正しさが微妙な割に
+`eltanin` の単体テストでは誤りを検出できない。** 責務境界は変えずに実装だけ `eltanin` 側へ移した。
+`Twist2D` と上限値しか受けない純関数なので、`PurePursuit` への依存は生じない。
+
+`MIN_LINEAR_VEL = 1e-9` は `collision::detail::MIN_LINEAR_VEL` と同値だが**参照しない。**
+`control` が `collision` に依存してはいけない (`AGENTS.md` の依存規則)。
+
+### 12.2 パラメータと既定値
+
+| パラメータ | 既定値 | 意味・根拠 |
+|---|---|---|
+| `xy_goal_tolerance` | 0.10 [m] | 到達とみなす位置誤差。nav2 `SimpleGoalChecker` の語彙 |
+| `yaw_goal_tolerance` | 0.10 [rad] | 到達とみなす方位誤差。同上 |
+| `approach_distance` | 0.5 [m] | 減速フェーズに入る残弧長。制動距離 `v²/(2a) = 0.25 m` の 2 倍 |
+| `approach_decel` | 0.5 [m/s²] | 減速則の減速度。実機の加減速限界が未計測のため保守値 |
+| `yaw_align_timeout` | 5.0 [s] | 向き合わせの進捗検査。最悪 (`pi`) の 3.45 s が予算の 69 % |
+| `max_angular_vel` | 1.0 [rad/s] | 向き合わせ時の角速度の対称上限 |
+
+`approach_distance` を制動距離の 2 倍に取った理由は、**帯に入った瞬間に指令が段差にならない**ことである。
+`approach_decel = 0.5` での減速則の値:
+
+| `remaining_arc` [m] | 0.5 | 0.4 | 0.3 | 0.25 | 0.2 | 0.15 | 0.10 | 0.05 | 0.01 | 0 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `sqrt(2 * 0.5 * s)` [m/s] | **0.707** | 0.632 | 0.548 | **0.500** | 0.447 | 0.387 | **0.316** | 0.224 | 0.100 | **0** |
+
+- 接近帯の入口 (0.5 m) で上限 0.707 m/s は `desired_linear_vel` の既定 0.5 を上回る。
+  実際に減速が効き始めるのは残弧長 0.25 m からである。
+- 到達帯の境界 (0.10 m) でも 0.316 m/s ある。**クリープ不足でゴールに入れない事態は起きない。**
+- `Inactive` ↔ `Approaching` の境界でのチャタリングは無害である。
+  上限が `+inf` と 0.707 の間で往復するだけで、どちらも 0.5 を上回るので指令は変わらない。
+
+**`max_angular_vel` は `PurePursuitParams` と同名・同既定値になる。これは意図した重複である。**
+ROS 側のパラメータは 1 つで、どちらの生成器が指令を出しても同じ上限に従う。
+
+`create()` の検証は §10 の分類 B (`std::optional`)。6 値の有限性 → `yaw_goal_tolerance` 以外の正値性 →
+`yaw_goal_tolerance ∈ (0, pi)` → **`approach_distance >= xy_goal_tolerance`** の順に見る。
+最後の条件を課す理由は 12.3 にある。
+
+### 12.3 状態遷移と評価順序
+
+| `state` | 条件 | `command` | `linear_vel_limit` |
+|---|---|---|---|
+| `Inactive` | `remaining_arc > approach_distance` (空経路を含む) | ゼロ | `+inf` |
+| `Approaching` | 接近帯の中 かつ `position_error > xy_goal_tolerance` | ゼロ | `sqrt(2 * approach_decel * remaining_arc)` |
+| `Aligning` | 接近帯の中 かつ 位置到達 かつ `|yaw_error| > yaw_goal_tolerance` | **その場旋回** | **0** |
+| `Reached` | 接近帯の中 かつ 位置到達 かつ 方位到達 | ゼロ | **0** |
+| `AlignmentTimeout` | `align_elapsed > yaw_align_timeout` | ゼロ | **0** |
+
+**終端 3 状態の上限を 0 にすることが「ゴールで止まる」ことの本体である。**
+`Reached` の時点で残弧長は `xy_goal_tolerance` 前後残っているので、減速則を素直に当てると
+0.316 m/s が出る。一方 `PurePursuit` の `GoalReached` は経路点間隔基準 (C-2 / 実測 0.025 m 手前) なので
+まだ `Tracking` を返して 0.5 m/s を要求している。**合成結果が前進指令になり、ゴールで止まらない。**
+
+`compute()` の評価順序は次に固定してある。
+
+```
+1. assert (dt > 0 かつ有限、robot が有限)                       ← 分類 A
+2. 経路が空でなければ観測量 (remaining_arc / position_error / yaw_error) を計算する
+3. latched_ があれば その状態 + ゼロ指令 + 上限 0 を返す           ← ラッチ最優先
+4. remaining_arc > approach_distance なら Inactive + ゼロ指令 + 上限 +inf
+5. position_error > xy_goal_tolerance なら Approaching + ゼロ指令 + 減速則の上限
+6. |yaw_error| <= yaw_goal_tolerance なら Reached をラッチして返す
+7. Aligning: align_elapsed_ += dt。timeout を厳密 > で超えたら AlignmentTimeout をラッチする
+8. 4 / 5 / 6 のいずれかを通ったら align_elapsed_ = 0 に戻す
+```
+
+**接近帯 (`remaining_arc <= approach_distance`) を `Approaching` / `Aligning` / `Reached` 全部の
+前提条件にしてある。** これが「迂回路が自分の終端付近を通ったときに早期 `Reached` になる」問題への
+対策である。迂回路の途中でロボットがゴール位置の 10 cm 以内を通っても、**その時点の最近傍点は
+経路の途中**なので残弧長は大きく `Inactive` のままになる。判定が「ゴールとの距離」ではなく
+「経路上のどこを走っているか」で行われるためである。
+
+**`approach_distance >= xy_goal_tolerance` を `create()` で要求する理由もここにある。**
+接近帯が到達帯より内側だと、到達帯に入っても `Inactive` のままで永久に `Reached` にならない。
+
+**ラッチが空経路より優先する。** 一過性の空経路で消えるラッチはラッチではない。
+新しい経路を渡すときは呼び出し側が `reset()` を呼ぶ契約 (G-5) なので正常なフローでは差が出ない。
+差が出るのは「経路が途切れた」異常時だけで、そこではラッチを保つ方が安全側である。
+
+**ラッチ中も観測量は実測値を返す** (手順 2 が手順 3 より前にある)。
+ラッチしたことで `remaining_arc` が `+inf` に見えるのは「ゴールから遠い」を意味してしまい、
+`follower_state` に載せたときに読み手を誤らせる。ラッチが支配するのは
+`state` / `command` / `linear_vel_limit` の 3 つだけである。
+
+空経路が `Inactive` に落ちるのは**特別扱いではなく式の帰結**である。観測量の既定値が `+inf` なので
+`remaining_arc > approach_distance` が自然に成立する。
+
+### 12.4 向き合わせは比例則にした (`PurePursuit` の bang-bang を踏襲しない)
+
+旋回則は `w = clamp(YAW_ALIGN_GAIN * yaw_error, ±max_angular_vel)`、`YAW_ALIGN_GAIN = 2.0 [1/s]` は
+`.cpp` の無名名前空間の非公開定数である (`LINEAR_VEL_GAIN` と同じ扱い / §2)。
+
+`PurePursuit` の初期向き合わせと同じ bang-bang (`ALIGNMENT_ANGULAR_VEL_RATIO = 0.5`) を**却下した。**
+`dt = 0.05 s`、`max_angular_vel = 1.0`、`yaw_goal_tolerance = 0.10` で初期方位誤差から
+許容帯に入るまでの時間 [s]:
+
+| 初期誤差 [rad] | **比例 `k=2.0`** | 比例 `k=1.0` | bang-bang `0.5 w_max` | bang-bang `w_max` |
+|---|---|---|---|---|
+| 0.50 | 0.80 | 1.60 | 0.80 | 0.45 |
+| 1.00 | 1.30 | 2.25 | 1.80 | 0.90 |
+| 2.00 | 2.30 | 3.25 | 3.85 | 1.90 |
+| **pi (最悪)** | **3.45** | 4.40 | **6.10** | 3.05 |
+
+**`0.5 w_max` 形は既定値で `pi` の回転に 6.10 s かかり、`yaw_align_timeout` の 5.0 s を超える。**
+つまり既定設定のまま対向姿勢のゴールを与えると必ず `AlignmentTimeout` になる。
+`k = 1.0` も 4.40 s で余裕が 0.6 s しかない。
+
+`max_angular_vel` を丸ごと使う bang-bang は 3.05 s で時間は足りるが、**`dt` に対して脆い。**
+初期誤差 `pi` から収束させたときの符号反転回数 (許容帯を飛び越えて振動した回数):
+
+| `dt` [s] | 比例 `k=2.0` | 反転 | bang-bang `w_max` | 反転 |
+|---|---|---|---|---|
+| 0.05 | 3.45 s | 0 | 3.05 s | 0 |
+| 0.15 | 3.45 s | 0 | 3.15 s | **1** |
+| 0.30 | 3.30 s | 0 | **収束せず** | **90** |
+| 0.50 | 3.50 s | **1** | **収束せず** | 54 |
+
+bang-bang の破綻条件は `dt > yaw_goal_tolerance / max_angular_vel = 0.10 s` で、
+20 Hz 運用の 0.05 s に対して余裕が 2 倍しかない。**ROS タイマのジッタで 0.1 s を超えることは現実にある。**
+比例則の破綻条件は `YAW_ALIGN_GAIN * dt <= 1` すなわち `dt <= 0.5 s` で、余裕が 10 倍ある。
+実測で反転が出るのもちょうど `dt = 1/k` からで、解析と一致する。
+
+副産物として **`sign()` 分岐が消える。** 符号は比例項が持つため、navyu 欠陥 10
+(`alpha == 0` で `sign = -1` になり逆向きに回る) と同種の穴が原理的に作れない。
+最短方向を通ることは `normalize_angle` の値域 `(-pi, pi]` がそのまま保証する。
+対向 (厳密に `pi`) では `+pi` 側 = 反時計回りが選ばれ、決定的である (§8 と同じ規約)。
+
+### 12.5 C-3 / C-4 との関係
+
+- **C-3 (最終姿勢合わせを持たない) は `GoalApproach` が引き取った。** §6 の C-3 の行は
+  「T5 の `PurePursuit` は持たない」という意味に限定される。
+- **C-4 (経路点の `yaw` を使わない) の唯一の例外である。** `GoalApproach` は経路末尾の `yaw` を
+  ゴール方位として読む。T4 が経路末尾に載せた `goal.yaw` (navyu 欠陥 13 で捨てられていた値) が
+  ここで初めて使われる。**中間点の `yaw` は依然読まない。**
+
+### 12.6 `PurePursuit::Status` に `Approaching` を追加しなかった
+
+`eltanin_ros` の詳細設計 (`docs/design/eltaninnavyuros.md` の D-17 / §8.2 / §10 S4) は
+「`PurePursuit::Status` に `Approaching` を追加する」と書いている。**実装はこれに従っていない。**
+
+- 接近の状態語彙は `GoalApproach::State` の 5 値に閉じている。`Status` に `Approaching` を足すと
+  **同じ概念が 2 箇所に出て、どちらが真かが決まらない。**
+- `PurePursuit` は接近帯を判定するための情報 (`approach_distance` / 残弧長) を持たない。
+  持たせるなら §1 の「内部状態は 2 つのみ」と C-2 の到達判定契約を両方変えることになる。
+- `Status` を触らなければ既存 432 件・`examples` の実測値・§4.1 の閾値表がそのまま生きる。
+
+`Status` の `switch` は製品コード・テスト・`examples` を通じて **0 件**であり、
+網羅性警告のリスクは元から存在しなかった。**追加を避けた理由は警告ではなく概念の重複である。**
+`eltaninnavyuros.md` 側の記述の修正は `path_follower` の実装タスクに送っている。
+
+### 12.7 進捗検査は `Aligning` の `dt` 累積だけである
+
+`align_elapsed_` に `dt` を積み、`yaw_align_timeout` を**厳密 `>`** で超えたら `AlignmentTimeout` を
+ラッチする。既定値 5.0 / `dt = 0.05` なら 100 周期目で `elapsed == 5.0` (まだ `Aligning`)、
+101 周期目の 5.05 で打ち切る。時計は持たない (G-1)。
+
+**これは C-1 に対する第二の役目を持つ。** C-1 は「`dt` が大きいと 1 周期の旋回量が許容帯を
+飛び越え続けて永久に前進しない」という上限を記録しているが、`create()` は `dt` を知らないので
+検証できない。`GoalApproach` では同じ状況が有限時間で打ち切られる。
+12.4 で比例則を選んだのは破綻条件を `dt <= 0.5 s` まで押し出すためで、
+進捗検査はそれでも破れたときの最後の網である。
+
+`AlignmentTimeout` を `reset()` までラッチし、同時に指令をゼロ・上限を 0 にしてある。
+**呼び出し側が失敗を取りこぼしても、ロボットは回り続けも進み続けもしない** (N-11 への構造的対策)。
+
+**`Approaching` に進捗検査はない。** 壁に引っかかって物理的に停滞した場合は打ち切れない。
+これは意図した範囲外である。停滞の検出は上位 (`navigator` の停止トリガ / `path_follower` の
+`trajectory_timeout`) の担当であり、`GoalApproach` に時計や実測速度を持ち込む (G-1 / G-10 に反する)
+理由にはならない。12.8 でマージン減算を却下した理由でもある。
+
+### 12.8 実装上の判断
+
+| 判断 | 理由 |
+|---|---|
+| **`cumulative_arc_length()` を使わない** | 値返しでヒープ確保が入る (G-2 / navyu 欠陥 8)。`compute()` の中で「最近傍 index の走査 `O(n)`」→「そこから末尾までの線分長の総和 `O(n-i)`」を確保なしで回す。20 Hz × 727 点 = 14.5 k 距離評価/秒で実害はない |
+| **最近傍 index を受けるオーバーロードを足さない** | `PurePursuit` と重複して走査するが、`costmap-design.md` §9.2「利用者が現に存在しないものを public にしない」。必要になったら実測を根拠に足す |
+| **`nearest_index()` を複製した** | `core` へ昇格させると `pure_pursuit.cpp` を書き換えることになり、`PurePursuit` を 1 行も変えない方針を破る。複製は 12 行で、同順位解決 (厳密 `<` で最小 index / `squaredNorm` 比較) まで揃えてある。統合は `PurePursuit` に触る後続タスクの判断に送る |
+| **`approach_decel` を `VelocityLimiterParams::max_deceleration` と分ける** | 既定値は同じ 0.5 だが関心が違う。前者は**ゴール**までの制動則 (到達品質)、後者は**障害物**までの制動則 (安全)。片方を詰めたい要求は片方に波及すべきでない |
+| **角速度に独立した減速則を持たない** | §1.1 の機構により、ゴール手前では `w` の振幅が `v` にほぼ比例する。比率スケール (12.1.1) で合成すれば `w` は自動的に同じ比率で縮む |
+| **マージン減算を却下した** | `max(0, remaining_arc - xy_goal_tolerance)` を `sqrt` に入れれば到達帯の境界で上限がちょうど 0 になり `Aligning` への遷移が滑らかになる。しかし**上限が 0 に漸近するので到達帯に入る手前で停滞しうる**。`Approaching` に進捗検査はない (12.7) ので打ち切れない。「必ず帯に入る」を優先し、境界での 0.316 → 0 の段差を受け入れる (`dt = 0.05 s` の行き過ぎは 1.6 cm で `xy_goal_tolerance` の内側) |
+| **ラッチを 2 つの `bool` にせず `std::optional<State>` 1 個にした** | `Reached` と `AlignmentTimeout` は排他であり、優先順位が 1 行で書ける |
+
+内部状態は `latched_` と `align_elapsed_` の **2 個だけ**である。§1 の「内部状態は 2 つのみ」と同じ規律で、
+**経路の identity に依存する状態 (前回 index など) を持たない。**
+
+### 12.9 制約と退化ケース
+
+制約 ID は **`G-*`** を使う。§6 の `C-1` 〜 `C-11` は `PurePursuit` の制約であり、
+そこに追記すると「どちらのクラスの制約か」が読めなくなる。
+
+| # | 制約 | `PurePursuit` の対応 |
+|---|---|---|
+| G-1 | 時計を持たない。`dt` を引数で受ける | §1 / navyu 欠陥 7 |
+| G-2 | `compute()` はヒープ確保をしない | §1 / navyu 欠陥 8 |
+| G-3 | コストマップを見ない。障害物由来の減速は `VelocityLimiter` の担当 | C-11 |
+| G-4 | 後退しない。オーバーシュートしても戻らず旋回のみで合わせる | C-7 |
+| G-5 | **経路の identity を検知できない。新しい経路では呼び出し側が `reset()` を呼ぶ。** ラッチがあるため本クラスでは必須である | C-6 |
+| G-6 | スレッド安全性は呼び出し側の責務 | C-9 |
+| G-7 | `dt` に上限がある。`create()` は検証できない。打ち切りは進捗検査が行う (12.7) | C-1 |
+| G-8 | 経路は前進のみでカスプを含まず自己交差しないことを前提とする | C-5 |
+| G-9 | ROS / Rerun / matplotlib-cpp / Python を知らない | `AGENTS.md` |
+| G-10 | 実測速度を受け取らない。状態推定・遅延補償は範囲外 | C-8 |
+| G-11 | 経路点の座標は有限であることを前提とし、検査しない | C-10 |
+| G-12 | `PurePursuit` を知らない。合成は呼び出し側が行う | 12.1 |
+
+| # | 状況 | 挙動 |
+|---|---|---|
+| 1 | `path` が空 | `Inactive` / ゼロ指令 / 上限 `+inf` / 観測量 `remaining_arc` `position_error` は `+inf`、`yaw_error` は 0 |
+| 2 | `path` が 1 点 | `remaining_arc == 0`。状態は位置・方位誤差から決まり、`Approaching` なら上限は 0 になる |
+| 3 | ゴール上で開始 (位置・方位ともに到達) | 初回 `compute()` で `Reached` |
+| 4 | ゴール上で開始・方位誤差が許容値より大きい | 初回から `Aligning`。既定パラメータ・`dt = 0.05 s` で有限周期で `Reached` に収束する |
+| 5 | 初期方位誤差が厳密に `pi` | 反時計回りに回って収束する (12.4) |
+| 6 | `remaining_arc` が `approach_distance` をまたぐ | 上限が `+inf` から有限値へ落ちる。`Approaching` の範囲で単調性を保つ |
+| 7 | `Reached` 後にロボットが外乱で帯を出る | ラッチにより `Reached` のまま。帯の境界で状態が振動すること自体が R-7 の再発になる |
+| 8 | `apply_linear_limit()` に `v ≈ 0` の指令 | 比率が定義できないので `w` をそのまま通す。その場旋回を上限で殺さない |
+
+### 12.10 単調性の但し書き
+
+`linear_vel_limit` が `remaining_arc` に対して単調非減少なのは **`state == Approaching` の範囲に限る。**
+終端 3 状態の上限を 0 にした (12.3) ため、`remaining_arc = 0.08` では
+「`Approaching` なら 0.28 / `Reached` なら 0」となり、`remaining_arc` だけの関数ではなくなる。
+テストも `Approaching` の範囲で掃いている。
