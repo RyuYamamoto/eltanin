@@ -65,14 +65,33 @@ navyu の `navyu_safety_limiter` は ROS ノードの名前であり、「セー
 
 ### 2.1 navyu との違い
 
-navyu の `navyu_safety_limiter.cpp` は `cost > 99` という単一しきい値で、**向きを一切考慮しなかった**。
-`cost > 99` は膨張帯のかなり外側にも立つため、
+**navyu も向きは考慮している。** `CostmapHelper::obstacle_collision_check()` は姿勢で変換した
+フットプリントの AABB を走査し、セル中心の内包を winding-angle 法で判定する。構造は本実装の
+第 2 段とほぼ同じである。違いは次の 2 点。
 
-- `Circumscribed` 帯の外側で偽陽性 (通れる姿勢でも停止する)、
-- ロボットが細長い形状のとき、向きによって通れる / 通れないの区別ができない、
+| # | navyu | 本実装 |
+|---|---|---|
+| 1 | 第 1 段がない。全 step で必ず AABB 走査と内包判定を払う | 中心セル 1 個の 3 値分類で大半の step を byte 比較 1 回で捨てる |
+| 2 | 占有基準が `cost > 99`。膨張帯のかなり外側まで障害物扱いになり、実際には通れる姿勢でも停止する (偽陽性) | `is_obstacle` (`cost >= LETHAL_OBSTACLE`) で「膨張値」と「実障害物セル」を分離する |
 
-の両方を持つ。二段構えは第 1 段で安価に大半を捨て、判断が向きに依存する帯だけに
-O(セル数 × 頂点数) の厳密判定を払う。
+二段構えは (1) を足し、(2) を置き換えたものである。「どれくらい近いか」を第 1 段 (半径ベース) に、
+「厳密にどこか」を第 2 段 (占有ベース) に分けたのが設計上の要点であり、navyu はこの 2 つを
+`cost > 99` という 1 本のしきい値に畳んでいた。
+
+### 2.1.1 navyu の内包判定は内部点を取りこぼす
+
+`CostmapHelper::is_inside_polygon()` は角度和が `2 * pi` に一致するかを
+
+```cpp
+return (2 * M_PI - std::fabs(sum_angle)) < std::numeric_limits<double>::epsilon();
+```
+
+で見ている。**許容値 2.22e-16 は 4 回の `atan2` が積む誤差より小さい。** navyu の既定フットプリント
+(0.44 x 0.30 m) を 1 度刻みに回転させて内部の 12 点を判定すると、4320 件中 **41 件 (約 1 %) が
+`false`** になる (残差の最大は 8.88e-16)。**衝突の見逃し側**の誤りである。
+
+`core/polygon.cpp` の `contains()` は crossing number で、境界は `distance_to_segment` と
+`edge_tolerance = 1e-9` で先に確定させる。角度和を使わないのでこの脆さがない。
 
 ### 2.2 占有基準は 3 値分類を流用しない
 
@@ -121,13 +140,26 @@ T6 のテストはこの膨らませを行わない既定構成で書いてい�
 navyu の `navyu_safety_limiter.cpp` は次の形だった。
 
 ```cpp
-const double v_lim = std::sqrt(2.0 * alpha * d_col);
-twist.linear.x = std::min(v_lim, twist_in.linear.x);
+auto sgn = [](double val) { return (val > 0.0) ? 1.0 : ((val < 0.0) ? -1.0 : 0.0); };
+const double d_col = std::max(0.0, collision_distance - margin_);
+const double v_lim = sgn(d_col) * sgn(linear_velocity) * std::sqrt(2.0 * alpha_ * std::fabs(d_col));
+double w_lim = cmd_vel_in_.angular.z;
+if (std::numeric_limits<double>::epsilon() < std::abs(linear_velocity)) {
+  w_lim = cmd_vel_in_.angular.z * (v_lim / linear_velocity);
+}
+cmd_vel_in_.linear.x = std::min(v_lim, cmd_vel_in_.linear.x);
+cmd_vel_in_.angular.z = std::min(w_lim, cmd_vel_in_.angular.z);
 ```
 
-`v_lim` は常に非負なので前進では上限として働く。しかし**後退では `twist_in.linear.x < 0` で
-`std::min` が「より負の値」= 入力そのものを返すため、制限が一切かからない**。
-`collision_distance = 0.25`、`v_in = -0.5` のとき `std::min(0.2236, -0.5) = -0.5` である。
+`v_lim` は `sgn()` により**符号付き**で、大きさ自体は正しく計算されている。欠陥は
+**`std::min` が「符号付き量の大きさに上限を掛ける」演算になっていない**ことである。
+後退 (`v_in < 0`) では `v_lim` も負になり、`std::min` は「より負の値」= 入力そのものを返す。
+`collision_distance = 0.25`、`v_in = -0.5` のとき `v_lim = -0.2236` で
+`std::min(-0.2236, -0.5) = -0.5`。**角速度にも同じ `std::min` を掛けている**ため、
+`w_in < 0` でも同じことが起きる。
+
+`std::clamp(v_in, -v_max, v_max)` は区間 `[-v_max, v_max]` への射影なので、符号によらず
+大きさだけを切る。これが `min` との本質的な差である。
 
 `detail::limit_command()` は大きさだけを抑える形にした。
 
@@ -300,10 +332,11 @@ T1 から移送された要件のうち**重心 / 点と多角形の符号付き
 
 | # | navyu | 本実装 |
 |---|---|---|
-| 1 | 後退時に `std::min` が制限にならない | `std::clamp(v_in, -v_max, v_max)` (`src/collision/velocity_limiter.cpp`) |
-| 2 | 角速度を制限せず旋回半径が変わる | 比率 `v_out / v_in` を角速度にも掛ける |
+| 1 | 後退時に `std::min` が制限にならない (線速度・角速度の両方) | `std::clamp(v_in, -v_max, v_max)` (`src/collision/velocity_limiter.cpp`) |
+| 2 | 角速度に別途 `std::min` を掛けるため、負の角速度で曲率が壊れる | 比率 `v_out / v_in` を角速度に掛けるだけにする |
 | 3 | `linear_vel_` をメンバに持つラチェット | 値型 + `const limit()`。テスト `IsDeterministicAcrossCalls` |
-| 4 | `cost > 99` の単一しきい値、向き非依存 | 二段構え (`check_footprint`) |
+| 4 | 第 1 段がなく全 step で AABB 走査、占有基準が `cost > 99` で偽陽性 | 二段構え (`check_footprint`)、占有は `cost >= LETHAL_OBSTACLE` |
+| 4b | `is_inside_polygon` の許容値が `epsilon` で内部点を約 1 % 取りこぼす (見逃し側) | crossing number + `edge_tolerance = 1e-9` (`contains`) |
 | 5 | 予測はオムニ、plant は差動二輪 | `integrate_differential_drive` を共有し `linear.y()` を無視 |
 | 6 | `static_cast<int>` による world → cell 変換 | `MapGeometry::world_rect_to_cells()` (floor + 飽和変換) |
 | 7 | 弦長で走行距離を測る | `abs(v) * dt` の累積 |
