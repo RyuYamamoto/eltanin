@@ -56,6 +56,14 @@ inline eltanin::Polygon2D robot_footprint()
     Eigen::Vector2d{0.22, -0.15}};
 }
 
+/// Everything the footprint implies, with no map attached; the same robot on any map.
+struct RobotModel
+{
+  eltanin::map::InflationCostModel inflation;
+  eltanin::CollisionRadii radii;
+  eltanin::map::CostTraversabilityModel model;
+};
+
 /// An inflated map together with everything derived from the footprint it was inflated for.
 struct InflatedMap
 {
@@ -65,17 +73,9 @@ struct InflatedMap
   eltanin::map::CostTraversabilityModel model;
 };
 
-/// Loads the YAML map and inflates it in place; prints the reason and returns nullopt on failure.
-inline std::optional<InflatedMap> load_and_inflate(const std::filesystem::path & yaml)
+/// Radii and cost models for robot_footprint(); prints the reason and returns nullopt on failure.
+inline std::optional<RobotModel> make_robot_model()
 {
-  eltanin::map::Costmap costmap;
-  try {
-    costmap = eltanin::map_io::load_map(yaml);
-  } catch (const eltanin::map_io::MapIoError & error) {
-    std::cerr << "failed to load " << yaml << ": " << error.what() << '\n';
-    return std::nullopt;
-  }
-
   const auto radii = eltanin::CollisionRadii::from_footprint(robot_footprint(), INFLATION_RADIUS);
   const auto inflation = radii.has_value()
                            ? eltanin::map::InflationCostModel::create(*radii, COST_SCALING_FACTOR)
@@ -84,10 +84,35 @@ inline std::optional<InflatedMap> load_and_inflate(const std::filesystem::path &
     std::cerr << "failed to build the inflation model\n";
     return std::nullopt;
   }
-  eltanin::map::InflationLayer(*inflation, false).update_costs(costmap);
-  return InflatedMap{
-    std::move(costmap), *inflation, *radii,
+  return RobotModel{
+    *inflation, *radii,
     eltanin::map::CostTraversabilityModel(inflation->circumscribed_cost(), false)};
+}
+
+/// Loads the YAML map without inflating it, which is what a StaticLayer wants.
+inline std::optional<eltanin::map::Costmap> load_raw_map(const std::filesystem::path & yaml)
+{
+  try {
+    return eltanin::map_io::load_map(yaml);
+  } catch (const eltanin::map_io::MapIoError & error) {
+    std::cerr << "failed to load " << yaml << ": " << error.what() << '\n';
+    return std::nullopt;
+  }
+}
+
+/// Loads the YAML map and inflates it in place; prints the reason and returns nullopt on failure.
+inline std::optional<InflatedMap> load_and_inflate(const std::filesystem::path & yaml)
+{
+  std::optional<eltanin::map::Costmap> costmap = load_raw_map(yaml);
+  if (!costmap.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RobotModel> robot = make_robot_model();
+  if (!robot.has_value()) {
+    return std::nullopt;
+  }
+  eltanin::map::InflationLayer(robot->inflation, false).update_costs(*costmap);
+  return InflatedMap{std::move(*costmap), robot->inflation, robot->radii, robot->model};
 }
 
 inline std::optional<eltanin::map::MapIndex> first_free_cell(
@@ -231,7 +256,8 @@ inline bool write_path_csv(const std::filesystem::path & file, const eltanin::Pa
 /// Geometry of the cropped image plus the radii, which every plotting script needs.
 inline void write_meta(
   std::ostream & meta, const eltanin::map::Costmap & crop,
-  const eltanin::map::MapIndex & lower_left, const InflatedMap & inflated)
+  const eltanin::map::MapIndex & lower_left,
+  const eltanin::map::InflationCostModel & inflation, const eltanin::CollisionRadii & radii)
 {
   const eltanin::map::MapGeometry & geometry = crop.geometry();
   meta << "resolution " << geometry.resolution() << '\n'
@@ -241,10 +267,17 @@ inline void write_meta(
        << "size_y " << geometry.size_y() << '\n'
        << "crop_offset_x " << lower_left.x << '\n'
        << "crop_offset_y " << lower_left.y << '\n'
-       << "circumscribed_cost " << static_cast<int>(inflated.inflation.circumscribed_cost()) << '\n'
-       << "inscribed_radius " << inflated.radii.inscribed_radius() << '\n'
-       << "circumscribed_radius " << inflated.radii.circumscribed_radius() << '\n'
-       << "inflation_radius " << inflated.radii.inflation_radius() << '\n';
+       << "circumscribed_cost " << static_cast<int>(inflation.circumscribed_cost()) << '\n'
+       << "inscribed_radius " << radii.inscribed_radius() << '\n'
+       << "circumscribed_radius " << radii.circumscribed_radius() << '\n'
+       << "inflation_radius " << radii.inflation_radius() << '\n';
+}
+
+inline void write_meta(
+  std::ostream & meta, const eltanin::map::Costmap & crop,
+  const eltanin::map::MapIndex & lower_left, const InflatedMap & inflated)
+{
+  write_meta(meta, crop, lower_left, inflated.inflation, inflated.radii);
 }
 
 /// Poses whose cell is not Free; the planner must produce none, a tracker may.
