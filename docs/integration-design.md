@@ -4,7 +4,7 @@ ROS を一切使わずに `map_io` から `sim` までを 1 プロセスの閉�
 の設計記録。**ライブラリ (`include/` / `src/`) には 1 バイトも足していない。** 既存 API のまま全系が
 回ることを示すのが目的だからである。
 
-- 実装: `examples/navigation_loop.hpp` (パイプライン本体)、`examples/navigate_on_real_map.cpp` (CLI)、
+- 実装: `examples/navigation_loop.hpp` (閉ループ本体)、`examples/navigate_on_real_map.cpp` (CLI)、
   `test/integration/test_navigate_on_real_map.cpp` (回帰テスト)
 - 前提: `docs/costmap-design.md` (レイヤ機構)、`docs/sensor-design.md` (`project_scan` の契約)、
   `docs/planner-design.md`、`docs/control-design.md`、`docs/collision-design.md`
@@ -26,7 +26,7 @@ plant」を回している。統合デモが加えるのは次の 5 点である
 
 2 が `eltanin_sensor` と `ObstacleLayer` の初めての利用者である。
 
-## 2. パイプラインをヘッダオンリーの共有ヘッダに置いた理由
+## 2. 閉ループをヘッダオンリーの共有ヘッダに置いた理由
 
 `navigate()` は `examples/navigation_loop.hpp` の `inline` 関数で、CLI (`examples/`) と gtest
 (`test/integration/`) が同じ実体を呼ぶ。テストから example のバイナリを `add_test` で起動する案は
