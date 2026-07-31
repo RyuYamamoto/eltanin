@@ -148,8 +148,14 @@ map_io::load_map
   -> control::PurePursuit
   -> collision::VelocityLimiter (footprint prediction, braking-distance law)
   -> sim::SimpleSimulator (differential-drive integration)
-  -> repeat, replanning whenever the limiter brings the robot to a stop
+  -> repeat, replanning once the observations block the path ahead
 ```
+
+An obstacle beyond the 3 m sensor range cannot be seen, so the first path runs straight through it.
+Only when the robot gets close enough do the cells land in its belief, and that is what triggers the
+replan — the robot curves around without ever stopping. Pass `--replan-on-stop-only` to hold the
+replan back until `VelocityLimiter` has brought the robot to a standstill instead, which is what
+exercises the limiter.
 
 ```bash
 cmake -B build -DELTANIN_BUILD_EXAMPLES=ON
@@ -160,8 +166,8 @@ cmake --build build -j
 The map defaults to `${ELTANIN_TEST_MAP_DIR}/map.yaml`, so the command above runs as it is; pass
 `--map path/to/map.yaml` for another one. Start and goal are picked from the map, so no coordinate is
 hard coded. An unknown obstacle is stamped onto the ground truth halfway along the planned path
-*after* planning, which is what makes the robot stop and replan; `--obstacle-fraction 0` gives a
-clean run instead. `--help` is not a flag, but any wrong argument prints the full option list.
+*after* planning, so the robot has to discover it; `--obstacle-fraction 0` gives a clean run instead.
+`--help` is not a flag, but any wrong argument prints the full option list.
 
 The run prints the per-leg statistics, the total cycle count, the final position error and whether
 the goal was reached, then writes six files into `out_dir`:
@@ -181,10 +187,11 @@ The exit code is 0 only when the goal was reached; otherwise the failing stage i
 python3 examples/plot_navigation_results.py --run out_dir --out plots
 ```
 
-Turns those files into four figures: the whole route over the costmap, a zoom on the stop in front of
-the unknown obstacle, the requested against the limited command over time, and the traversed cells
-over the costmap. Like `plot_collision_results.py` it is a developer tool that CMake never refers to.
-What each figure shows, and what reading them revealed, is in
+Turns those files into four figures: the whole route over the costmap, a zoom on the unknown obstacle,
+the requested against the limited command over time, and the traversed cells over the costmap. Add
+`--animate` for a `navigation.gif` that plays the run back next to the local window the limiter sees.
+Like `plot_collision_results.py` it is a developer tool that CMake never refers to. What each figure
+shows, and what reading them revealed, is in
 [docs/integration-design.md](docs/integration-design.md) §15.
 
 The same pipeline is a regression test, so `ctest` covers it. Under both sanitizers:

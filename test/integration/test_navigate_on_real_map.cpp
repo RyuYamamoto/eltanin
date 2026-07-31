@@ -153,12 +153,43 @@ TEST_F(NavigateOnRealMap, ReachesTheGoalOnTheCleanMap)
   EXPECT_FALSE(result.samples.empty());
 }
 
-TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
+/// With the observation trigger the robot replans before the limiter has anything to limit.
+TEST_F(NavigateOnRealMap, AvoidsAnObservedObstacleWithoutStopping)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
   }
   const NavigateConfig config;
+  ASSERT_GT(config.obstacle_fraction, 0.0);
+  ASSERT_TRUE(config.replan_on_blocked_path);
+
+  const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
+
+  EXPECT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
+  EXPECT_LE(result.final_position_error, config.goal_tolerance);
+  EXPECT_EQ(result.colliding_poses, 0u);
+  EXPECT_GE(result.replans_on_blocked_path, 1u);
+  EXPECT_EQ(result.replans_on_blocked_path, result.replans);
+  EXPECT_FALSE(result.observations.empty());
+
+  const bool stopped = std::any_of(
+    result.samples.begin(), result.samples.end(), [](const Sample & sample) {
+      return sample.limited.linear.x() == 0.0 && sample.limited.angular == 0.0;
+    });
+  EXPECT_FALSE(stopped) << "the robot came to a standstill although it replanned in time";
+  for (const eltanin_examples::LegStats & stats : result.legs) {
+    EXPECT_EQ(stats.limited_cycles, 0u) << "the limiter had to intervene";
+  }
+}
+
+/// Without it the limiter is the only thing that stops the robot, which is what A-3 checks.
+TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
+{
+  if (!map_available()) {
+    GTEST_SKIP() << "reference map not available at " << map_yaml();
+  }
+  NavigateConfig config;
+  config.replan_on_blocked_path = false;
   ASSERT_GT(config.obstacle_fraction, 0.0);
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
@@ -178,21 +209,26 @@ TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
       return sample.limited.linear.x() == 0.0 && sample.limited.angular == 0.0;
     });
   EXPECT_TRUE(stopped) << "the limiter never brought the command to a full stop";
+  EXPECT_EQ(result.replans_on_blocked_path, 0u);
   EXPECT_GE(result.stop_obstacle_clearance, config.limiter.collision_margin);
   EXPECT_GE(result.stop_clearance, config.limiter.collision_margin);
 }
 
+/// The stalling run is the cheap one that still has two legs, observations and a failed outcome.
 TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
   }
   NavigateConfig config;
-  config.obstacle_fraction = 0.0;
+  config.obstacle_fraction = BLOCKING_FRACTION;
+  config.obstacle_half_width_cells = BLOCKING_HALF_WIDTH_CELLS;
   const std::filesystem::path directory = output_dir("navigate_outputs");
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
-  ASSERT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
+  ASSERT_GE(result.leg_paths.size(), 2u) << result.message;
+  ASSERT_FALSE(result.samples.empty());
+  ASSERT_FALSE(result.observations.empty());
   ASSERT_TRUE(eltanin_examples::write_output_files(directory, config, robot(), result));
 
   for (const char * name :
@@ -218,7 +254,8 @@ TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
         "control_dt", "sensor_decimation", "local_window_size", "lidar_beams", "lidar_range_max",
         "raycast_step", "prediction_steps", "prediction_time", "prediction_dt", "collision_margin",
         "max_deceleration", "goal_tolerance", "max_replans", "stop_cycles_to_replan",
-        "stall_min_progress", "legs", "leg", "cycles", "replans", "global_updates",
+        "stall_min_progress", "replan_on_blocked_path", "path_check_distance", "legs",
+        "leg", "cycles", "replans", "replans_on_blocked_path", "global_updates",
         "window_clamped_cycles", "final_position_error", "colliding_poses", "outcome"}) {
     EXPECT_TRUE(meta_has_key(directory / "meta.txt", key)) << key << " is missing from meta.txt";
   }

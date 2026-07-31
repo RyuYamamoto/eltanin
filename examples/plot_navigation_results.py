@@ -35,6 +35,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.animation
 import matplotlib.pyplot as plt
 
 import numpy as np
@@ -249,6 +250,8 @@ def plot_stop(run, out, meta):
         "stop clearance {:.3f} m to any obstacle, {:.3f} m to the injected one".format(
             float(meta["stop_clearance"]), float(meta["stop_obstacle_clearance"])
         )
+        if "stop_clearance" in meta
+        else "the robot never stopped, so there is no stop clearance"
     )
     axes.legend(loc="upper left", fontsize=8)
     figure.tight_layout()
@@ -329,10 +332,107 @@ def plot_traversed(run, out, meta):
     plt.close(figure)
 
 
+def animate(run, out, meta, frame_step, fps):
+    """navigation.gif: the whole route on the left, the local window the limiter sees on the right."""
+    costmap = read_pgm(run / "costmap.pgm")
+    path = read_csv_columns(run / "path.csv")
+    trajectory = read_csv_columns(run / "trajectory.csv")
+    obstacles = read_csv_columns(run / "obstacles.csv")
+    extent = extent_of(meta, costmap)
+    window = float(meta["local_window_size"])
+    footprint = np.array([[0.22, 0.15], [-0.22, 0.15], [-0.22, -0.15], [0.22, -0.15]])
+    frames = range(0, trajectory["t"].size, max(1, frame_step))
+
+    figure, (whole, local) = plt.subplots(
+        1, 2, figsize=(11.0, 7.0), gridspec_kw={"width_ratios": [1.0, 1.6]}
+    )
+    # A leg only appears once it has been planned, or the animation would show the future detour.
+    legs = np.unique(path["leg"])
+    leg_lines = {}
+    for axes in (whole, local):
+        axes.imshow(cost_image(costmap), origin="lower", extent=extent, interpolation="nearest")
+        axes.set_aspect("equal")
+        axes.set_xlabel("x [m]")
+        leg_lines[axes] = [
+            axes.plot([], [], color=leg_colour(leg), linewidth=1.0)[0] for leg in legs
+        ]
+    whole.set_ylabel("y [m]")
+    whole.set_title("route")
+    # Only the magenta cells reveal what the robot knew when: the grey background is the final map.
+    local.set_title(f"local window, {window:.1f} m (background: final costmap)")
+
+    trail, = whole.plot([], [], color=DRIVEN_COLOUR, linewidth=1.2)
+    here = whole.plot([], [], "o", color="black", markersize=4.0)[0]
+    local_trail, = local.plot([], [], color=DRIVEN_COLOUR, linewidth=1.2)
+    body = plt.Polygon(footprint, closed=True, fill=False, edgecolor="black", linewidth=1.6)
+    local.add_patch(body)
+    seen = local.scatter([], [], s=22.0, marker="s", color=OBSERVED_COLOUR, zorder=5)
+    if "obstacle_x" in meta:
+        half = float(meta["obstacle_half_width"])
+        local.add_patch(
+            plt.Rectangle(
+                (float(meta["obstacle_x"]) - half, float(meta["obstacle_y"]) - half),
+                2.0 * half,
+                2.0 * half,
+                fill=False,
+                edgecolor="black",
+                linestyle="--",
+                linewidth=1.2,
+            )
+        )
+    caption = figure.suptitle("")
+
+    def draw(index):
+        current_leg = trajectory["leg"][index]
+        for axes, lines in leg_lines.items():
+            for line, leg in zip(lines, legs):
+                selected = path["leg"] == leg
+                shown = leg <= current_leg
+                line.set_data(
+                    path["x"][selected] if shown else [], path["y"][selected] if shown else []
+                )
+        x, y, yaw = trajectory["x"][index], trajectory["y"][index], trajectory["yaw"][index]
+        cosine, sine = np.cos(yaw), np.sin(yaw)
+        rotated = footprint @ np.array([[cosine, sine], [-sine, cosine]]) + [x, y]
+        body.set_xy(rotated)
+        trail.set_data(trajectory["x"][: index + 1], trajectory["y"][: index + 1])
+        local_trail.set_data(trajectory["x"][: index + 1], trajectory["y"][: index + 1])
+        here.set_data([x], [y])
+        found = obstacles["t"] <= trajectory["t"][index]
+        seen.set_offsets(
+            np.column_stack((obstacles["x"][found], obstacles["y"][found]))
+            if found.any()
+            else np.empty((0, 2))
+        )
+        local.set_xlim(x - 0.5 * window, x + 0.5 * window)
+        local.set_ylim(y - 0.5 * window, y + 0.5 * window)
+        caption.set_text(
+            "t {:6.2f} s   leg {}   v {:.3f} -> {:.3f} m/s   w {:+.3f} -> {:+.3f} rad/s{}".format(
+                trajectory["t"][index],
+                int(trajectory["leg"][index]),
+                trajectory["v_in"][index],
+                trajectory["v_out"][index],
+                trajectory["w_in"][index],
+                trajectory["w_out"][index],
+                "   STOPPED"
+                if trajectory["v_out"][index] == 0.0 and trajectory["w_out"][index] == 0.0
+                else "",
+            )
+        )
+        return (body, trail, local_trail, here, seen, caption)
+
+    movie = matplotlib.animation.FuncAnimation(figure, draw, frames=frames, interval=1000.0 / fps)
+    movie.save(out / "navigation.gif", writer=matplotlib.animation.PillowWriter(fps=fps), dpi=80)
+    plt.close(figure)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, type=Path, help="output directory of the example")
     parser.add_argument("--out", required=True, type=Path, help="directory for the figures")
+    parser.add_argument("--animate", action="store_true", help="also write navigation.gif")
+    parser.add_argument("--frame-step", type=int, default=8, help="cycles between two GIF frames")
+    parser.add_argument("--fps", type=int, default=20, help="frames per second of the GIF")
     arguments = parser.parse_args()
 
     if not (arguments.run / "meta.txt").is_file():
@@ -345,6 +445,8 @@ def main():
     plot_stop(arguments.run, arguments.out, meta)
     plot_commands(arguments.run, arguments.out, meta)
     plot_traversed(arguments.run, arguments.out, meta)
+    if arguments.animate:
+        animate(arguments.run, arguments.out, meta, arguments.frame_step, arguments.fps)
     print(f"wrote the figures into {arguments.out}")
     return 0
 

@@ -16,6 +16,7 @@
 
 #include <eltanin/map/grid_map.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
@@ -45,7 +46,7 @@ int usage(const char * program)
     << "usage: " << program << " <output_dir> [options]\n"
     << "  Runs the whole eltanin navigation stack in one process, without ROS: map_io ->\n"
     << "  LayeredCostmap (static + obstacle + inflation) -> A* -> smoother -> PurePursuit ->\n"
-    << "  VelocityLimiter -> SimpleSimulator, replanning when an unknown obstacle stops it.\n"
+    << "  VelocityLimiter -> SimpleSimulator, replanning once the observations block the path.\n"
     << "options:\n"
     << "  --map <map.yaml>           default: " << DEFAULT_MAP_DIR << "/map.yaml\n"
     << "  --start <x> <y>            default: picked from the map, with --goal\n"
@@ -54,6 +55,8 @@ int usage(const char * program)
     << "  --obstacle-half-width <n>  half width of that obstacle [cells]\n"
     << "  --dt <s>                   control period\n"
     << "  --sensor-decimation <n>    control cycles between two scans\n"
+    << "  --replan-on-stop-only      do not replan when the observations block the path, only\n"
+    << "                             once the limiter has brought the robot to a standstill\n"
     << "  Writes costmap.pgm, traversed.pgm, path.csv, trajectory.csv, obstacles.csv and\n"
     << "  meta.txt into <output_dir>.\n";
   return EXIT_FAILURE;
@@ -100,6 +103,8 @@ std::optional<Arguments> parse(int argc, char ** argv)
         arguments.config.control_dt = std::stod(argv[++i]);
       } else if (option == "--sensor-decimation" && has_values(argc, i, 1)) {
         arguments.config.sensor_decimation = std::stoi(argv[++i]);
+      } else if (option == "--replan-on-stop-only") {
+        arguments.config.replan_on_blocked_path = false;
       } else {
         return std::nullopt;
       }
@@ -149,7 +154,8 @@ void print_summary(
               << stats.max_path_deviation << " m\n";
   }
   std::cout << "total   cycles " << result.samples.size() << " | sim time " << result.sim_time
-            << " s | replans " << result.replans << " | global updates " << result.global_updates
+            << " s | replans " << result.replans << " (" << result.replans_on_blocked_path
+            << " from observations) | global updates " << result.global_updates
             << " | observations " << result.observations.size() << '\n'
             << "        final position error " << result.final_position_error << " m (tolerance "
             << config.goal_tolerance << " m) -> " << eltanin_examples::outcome_name(result.outcome)
@@ -157,10 +163,14 @@ void print_summary(
             << "        traversed poses in collision " << result.colliding_poses << " / "
             << result.samples.size() << '\n'
             << "        window clamped cycles " << result.window_clamped_cycles << '\n';
-  if (result.obstacle_centre.has_value()) {
-    std::cout << "        stop clearance " << result.stop_clearance << " m to any obstacle, "
-              << result.stop_obstacle_clearance << " m to the injected one (collision margin "
-              << config.limiter.collision_margin << " m)\n";
+  if (std::isfinite(result.stop_clearance)) {
+    std::cout << "        stop clearance " << result.stop_clearance << " m to any obstacle";
+    if (result.obstacle_centre.has_value()) {
+      std::cout << ", " << result.stop_obstacle_clearance << " m to the injected one";
+    }
+    std::cout << " (collision margin " << config.limiter.collision_margin << " m)\n";
+  } else {
+    std::cout << "        the robot never came to a standstill\n";
   }
 }
 

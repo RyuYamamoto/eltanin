@@ -46,6 +46,7 @@
 #include <numbers>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -75,7 +76,11 @@ struct NavigateConfig
   /// Simulated time bound [s]; divided by control_dt it gives the cycle limit.
   double max_sim_time{1000.0};
   int max_replans{3};
-  /// Consecutive cycles with an exactly zero command that trigger a replan.
+  /// Replan as soon as the observations block the path, instead of waiting for the limiter to stop.
+  bool replan_on_blocked_path{true};
+  /// How far along the path ahead of the robot that check looks [m].
+  double path_check_distance{4.0};
+  /// Consecutive cycles with an exactly zero command that trigger a replan; the fallback trigger.
   int stop_cycles_to_replan{5};
   /// Travel since the last replan below which another stop counts as a stall [m].
   double stall_min_progress{0.20};
@@ -185,6 +190,8 @@ struct NavigateResult
   std::vector<Sample> samples;
   std::vector<Observation> observations;
   std::size_t replans{0};
+  /// Replans the observations asked for; the rest came from the limiter having stopped the robot.
+  std::size_t replans_on_blocked_path{0};
   std::size_t global_updates{0};
   /// Cycles where the local window had to be clamped to stay inside the static map.
   std::size_t window_clamped_cycles{0};
@@ -351,6 +358,37 @@ inline double footprint_clearance_around(
     return std::numeric_limits<double>::infinity();
   }
   return footprint_clearance(truth, world_footprint, *rect);
+}
+
+/// True when an observed point sits within `radius` of the path over the next `distance` metres.
+inline bool path_blocked_ahead(
+  const eltanin::Path & path, const Eigen::Vector2d & robot,
+  std::span<const Eigen::Vector2d> points, double radius, double distance)
+{
+  if (path.size() < 2 || points.empty()) {
+    return false;
+  }
+  std::size_t nearest = 0;
+  double best = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < path.size(); ++i) {
+    const double squared = (path[i].position - robot).squaredNorm();
+    if (squared < best) {
+      best = squared;
+      nearest = i;
+    }
+  }
+  // The radius is the circumscribed one, so this asks exactly what A* asks of a cell: is it Free.
+  const double squared_radius = radius * radius;
+  double travelled = 0.0;
+  for (std::size_t i = nearest; i + 1 < path.size() && travelled <= distance; ++i) {
+    travelled += (path[i + 1].position - path[i].position).norm();
+    for (const Eigen::Vector2d & point : points) {
+      if ((path[i + 1].position - point).squaredNorm() <= squared_radius) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /// Minimum distance from `position` to the path polyline [m]; as in examples/track_on_real_map.cpp.
@@ -537,6 +575,7 @@ inline NavigateResult navigate(
   std::size_t leg = 0;
   int zero_cycles = 0;
   double progress_since_replan = 0.0;
+  bool path_blocked = false;
   bool at_goal = false;
 
   for (std::size_t step = 0; step < max_steps; ++step) {
@@ -558,6 +597,11 @@ inline NavigateResult navigate(
           observed_points.push_back(centre);
           result.observations.push_back(Observation{t, centre});
         }
+      }
+      if (config.replan_on_blocked_path) {
+        path_blocked = detail::path_blocked_ahead(
+          *path, plant.pose().position, observed_points, robot.radii.circumscribed_radius(),
+          config.path_check_distance);
       }
       // The origin and the cells have to move together: set_origin() alone relabels stale cells.
       bool clamped = false;
@@ -603,9 +647,11 @@ inline NavigateResult navigate(
       zero_cycles = 0;
     }
 
-    if (zero_cycles >= config.stop_cycles_to_replan) {
+    const bool stopped_too_long = zero_cycles >= config.stop_cycles_to_replan;
+    if (path_blocked || stopped_too_long) {
       // A stall means replanning did not help, so the first stop always gets one replan.
-      if (result.replans > 0 && progress_since_replan < config.stall_min_progress) {
+      if (stopped_too_long && result.replans > 0 &&
+          progress_since_replan < config.stall_min_progress) {
         result.outcome = NavigateOutcome::Stalled;
         result.message = "stalled at " + detail::pose_text(plant.pose()) + " after moving only " +
                          std::to_string(progress_since_replan) + " m since the last plan";
@@ -637,14 +683,19 @@ inline NavigateResult navigate(
         break;
       }
       path = std::move(replanned);
-      tracker->reset();
+      // Resetting mid-motion would dip the speed to zero, and the robot is already aligned.
+      if (stopped_too_long) {
+        tracker->reset();
+      } else {
+        ++result.replans_on_blocked_path;
+      }
       ++result.replans;
       ++leg;
       result.leg_paths.push_back(*path);
       result.legs.push_back(detail::leg_stats_for(*path));
       progress_since_replan = 0.0;
       zero_cycles = 0;
-      continue;
+      path_blocked = false;
     }
 
     const Eigen::Vector2d before = plant.pose().position;
@@ -814,6 +865,8 @@ inline bool write_output_files(
        << "max_deceleration " << limits.max_deceleration << '\n'
        << "goal_tolerance " << config.goal_tolerance << '\n'
        << "max_replans " << config.max_replans << '\n'
+       << "replan_on_blocked_path " << static_cast<int>(config.replan_on_blocked_path) << '\n'
+       << "path_check_distance " << config.path_check_distance << '\n'
        << "stop_cycles_to_replan " << config.stop_cycles_to_replan << '\n'
        << "stall_min_progress " << config.stall_min_progress << '\n'
        << "start_x " << result.start.position.x() << '\n'
@@ -833,6 +886,7 @@ inline bool write_output_files(
   meta << "cycles " << result.samples.size() << '\n'
        << "sim_time " << result.sim_time << '\n'
        << "replans " << result.replans << '\n'
+       << "replans_on_blocked_path " << result.replans_on_blocked_path << '\n'
        << "global_updates " << result.global_updates << '\n'
        << "window_clamped_cycles " << result.window_clamped_cycles << '\n'
        << "observations " << result.observations.size() << '\n'
