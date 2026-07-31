@@ -345,7 +345,10 @@ T1 から移送された要件のうち**重心 / 点と多角形の符号付き
 
 ---
 
-## 9. T7 (ROS ノード化) への申し送り
+## 9. ROS ノード化への申し送り
+
+ROS ノード化は後続タスクである。T7 は ROS を使わない統合デモであり、そちらは
+`docs/integration-design.md` を参照 (`VelocityLimiter` の最初の閉ループ利用者はそのデモである)。
 
 - ノード名は `safety_limiter` でよい。用途名はノード側に置く。
 - 可視化には `Result::predicted_poses` (world 系) と `VelocityLimiter::footprint()` (base 系) を使う。

@@ -438,7 +438,9 @@ public:
 | `collision/` | `eltanin_collision` / `eltanin::collision` | T6 (完了) | 二段構えのフットプリント衝突判定 (セル / 点群 / 多角形の各粒度) と制動距離則による速度制限 (`VelocityLimiter`)。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/collision-design.md`。ディレクトリ名は用途名 (`safety/`) ではなく機構名にした — 「セーフティ」は T7 の ROS ノード側の語彙である。多角形の頂点順序 / 凸性 / AABB は汎用なので `eltanin_core` に置いた。重心 / 符号付き距離 / 多角形交差は利用者がないため未実装 (§9.2、理由は `docs/collision-design.md` §5.1) |
 | `sim/` | `eltanin_sim` / `eltanin::sim` | T6 (完了) | 差動二輪の簡易 plant (`SimpleSimulator`)。**依存は `eltanin_core` のみ**。積分の純関数 `integrate_differential_drive` は `core` に置き、予測と plant が共有する |
 
-統合デモ (navyu 相当の動作確認) は T7。
+統合デモ (navyu 相当の動作確認) は T7 で完了した。`examples/navigate_demo` が全モジュールを 1 プロセスで
+閉ループとして回し、`test/integration` が回帰テストにしている。設計は `docs/integration-design.md`。
+**ライブラリには何も足していない** — 既存 API のまま全系が回ることを示すのが目的だったからである。
 
 **T2 のレイヤは独立ターゲット `eltanin_map_layers` にせず `eltanin_map` に統合した。** レイヤが使うのは `Costmap` / `MapGeometry` / `InflationCostModel` ですべて `eltanin_map` の中身であり、新ターゲットを切っても依存境界は 1 つも増えず、install / export の対象が増えるだけである。ヘッダは `include/eltanin/map/layers/`、ソースは `src/map/layers/` に置き、`src/map/CMakeLists.txt` の `add_library` に相対パスで列挙する。
 

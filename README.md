@@ -22,7 +22,9 @@ Design decisions for the costmap, collision classification, error reporting and 
 recorded in [docs/costmap-design.md](docs/costmap-design.md). Per-module design notes live in
 [docs/sensor-design.md](docs/sensor-design.md), [docs/planner-design.md](docs/planner-design.md),
 [docs/control-design.md](docs/control-design.md) and
-[docs/collision-design.md](docs/collision-design.md).
+[docs/collision-design.md](docs/collision-design.md);
+[docs/integration-design.md](docs/integration-design.md) covers the demo that runs all of them
+together.
 
 ## Requirements
 
@@ -53,7 +55,7 @@ build; note that this disables those checks.
 | `ELTANIN_ENABLE_WERROR` | OFF | Add `-Werror` |
 | `ELTANIN_ENABLE_ASAN` | OFF | AddressSanitizer |
 | `ELTANIN_ENABLE_UBSAN` | OFF | UndefinedBehaviorSanitizer |
-| `ELTANIN_TEST_MAP_DIR` | navyu map directory | Directory holding `map.pgm` / `map.yaml` for the real-map test; the test is skipped when absent |
+| `ELTANIN_TEST_MAP_DIR` | navyu map directory | Directory holding `map.pgm` / `map.yaml` used by the real-map tests and as the default map of `eltanin_navigate_demo`; those tests are skipped when it is absent |
 
 ### Sanitizer build
 
@@ -132,6 +134,65 @@ python3 examples/plot_collision_results.py --synthetic out_dir --real out_dir --
 It is a developer tool, deliberately not wired into CMake: nothing in the build refers to it, so
 Python never becomes a build dependency. It needs matplotlib and numpy. What each figure shows is
 described in [docs/collision-design.md](docs/collision-design.md) §11.
+
+## Running the whole stack without ROS
+
+`eltanin_navigate_demo` closes the loop over every module in a single process. No ROS node, no tf, no
+topic, no simulator process:
+
+```
+map_io::load_map
+  -> LayeredCostmap (static + obstacle + inflation), global for planning and local for the limiter
+  -> synthetic LiDAR -> sensor::project_scan -> ObstacleLayer
+  -> planner::plan (A*) -> planner::smooth
+  -> control::PurePursuit
+  -> collision::VelocityLimiter (footprint prediction, braking-distance law)
+  -> sim::SimpleSimulator (differential-drive integration)
+  -> repeat, replanning whenever the limiter brings the robot to a stop
+```
+
+```bash
+cmake -B build -DELTANIN_BUILD_EXAMPLES=ON
+cmake --build build -j
+./build/examples/eltanin_navigate_demo out_dir
+```
+
+The map defaults to `${ELTANIN_TEST_MAP_DIR}/map.yaml`, so the command above runs as it is; pass
+`--map path/to/map.yaml` for another one. Start and goal are picked from the map, so no coordinate is
+hard coded. An unknown obstacle is stamped onto the ground truth halfway along the planned path
+*after* planning, which is what makes the robot stop and replan; `--obstacle-fraction 0` gives a
+clean run instead. `--help` is not a flag, but any wrong argument prints the full option list.
+
+The run prints the per-leg statistics, the total cycle count, the final position error and whether
+the goal was reached, then writes six files into `out_dir`:
+
+| File | Contents |
+|---|---|
+| `costmap.pgm` | Cropped global costmap, raw cost values |
+| `traversed.pgm` | Same crop and geometry, cells the robot actually occupied |
+| `path.csv` | `leg,index,x,y,yaw` for every planned path, replans included |
+| `trajectory.csv` | One row per control cycle: pose, requested and limited command, collision distance |
+| `obstacles.csv` | `t,x,y` of the cells found occupied that the static map calls free |
+| `meta.txt` | Crop geometry, radii, every parameter, per-leg statistics, outcome, stop clearance |
+
+The exit code is 0 only when the goal was reached; otherwise the failing stage is named on stderr.
+
+The same pipeline is a regression test, so `ctest` covers it. Under both sanitizers:
+
+```bash
+cmake -B build-asan -DELTANIN_ENABLE_ASAN=ON -DELTANIN_ENABLE_UBSAN=ON
+cmake --build build-asan -j
+ctest --test-dir build-asan -R Navigate --output-on-failure
+```
+
+That takes about 95 s and needs about 500 MB. The cases that use the reference map are skipped when
+`ELTANIN_TEST_MAP_DIR` does not hold one; the two that fix the local window snapping always run.
+
+Known gaps, since the demo is honest about them: there is no local planner (a detour comes from
+global replanning only), and nothing decelerates on the final approach to the goal, so the requested
+command is still 0.5 m/s when `PurePursuit` reports `GoalReached` and the goal yaw does not converge.
+[docs/integration-design.md](docs/integration-design.md) records the design decisions and the
+measured numbers.
 
 ## License
 
