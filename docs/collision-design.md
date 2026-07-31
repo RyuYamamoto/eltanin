@@ -63,6 +63,11 @@ navyu の `navyu_safety_limiter` は ROS ノードの名前であり、「セー
 `switch` を書かずに済むので、政策そのものをマップなしでテストできる
 (`test_collision_checker.cpp` の `FirstStage.EncodesTheTwoStagePolicy`)。
 
+**第 1 段の `Free` 短絡が成立する前提は「コストマップが同じフットプリント由来の半径で
+膨張済みである」ことである。**膨張済みなら「中心セルが `Free`」= 「最近傍障害物が
+`circumscribed_radius` より遠い」= 「どの向きでも衝突しない」が言える (量子化残余は §2.4)。
+膨張のないマップではこれが成立しないので、§2.5 の `check_footprint_exact()` を使うこと。
+
 ### 2.1 navyu との違い
 
 **navyu も向きは考慮している。** `CostmapHelper::obstacle_collision_check()` は姿勢で変換した
@@ -129,9 +134,47 @@ return (2 * M_PI - std::fabs(sum_angle)) < std::numeric_limits<double>::epsilon(
 `CollisionRadii` を `0.707 * resolution` だけ膨らませて構築すること (`inflation_radius` も同じだけ広くなる)。
 T6 のテストはこの膨らませを行わない既定構成で書いている。
 
+**この残余に対する答えは §2.5 で 2 つになった。**半径を膨らませる方法は膨張半径も広がるので
+**通行可能領域が狭まる**のに対し、`check_footprint_exact()` は通行可能領域を狭めずに
+「`Free` 短絡による見逃し」だけを消す。ただし**障害物をセル中心 1 点で代表することに由来する
+残余は両者とも残る** — これを消すには距離場が要る。
+
 また、第 2 段は「コストマップが同じフットプリント由来の半径で膨張されている」ことを前提にする。
 別の半径で膨張されたコストマップを渡すと第 1 段の短絡が安全側でなくなる。
 `limit()` からは検証できないため、テストでは必ず `CollisionRadii::from_footprint()` で半径を導出している。
+
+### 2.5 膨張のないマップ向けの厳密入口
+
+`eltanin_ros` の `collision_predictor` は `FREE_SPACE` / `LETHAL_OBSTACLE` / `NO_INFORMATION` の
+3 値で膨張を持たない `local_map` に対して判定する。このマップでは `FREE_SPACE` は
+「障害物でない」ことしか意味せず距離情報を持たないため、**中心セルが `FREE_SPACE` でも
+フットプリントが `LETHAL_OBSTACLE` セルに重なる姿勢が存在し、二段構えはそれを `Free` と返す。**
+実機で衝突する欠陥であり、`check_footprint_exact()` を第 2 の入口として足した。
+
+```
+check_footprint_exact:
+  マップ外 -> OutsideMap                        (二段構えと同一のコードを通る)
+  Inscribed -> 衝突 (短絡)
+  それ以外 -> 常に第 2 段へ                     (Free 短絡を持たない)
+```
+
+`detail::classify_first_stage_exact()` は `classify_first_stage()` から導出する。政策表が
+2 箇所に分裂せず、**下の単調性をコード自身が表現する**。
+
+| 論点 | 判断 |
+|---|---|
+| なぜ `Free` ゲート**だけ**を外したのか | 第 1 段を完全に捨てると、膨張済みマップで §2.4 の量子化余裕 (最大 0.0354 m) を失い「厳密判定の方が常に安全側」が成り立たなくなる。`Free` ゲートのみ除去なら「第 1 段は衝突を確定させることはあっても否定はしない」という単調な契約になり、`check_footprint_exact()` が返す `Collision` の集合は `check_footprint()` のそれの**上位集合**になる |
+| なぜ既定を `true` にしたのか | 忘れると安全が退化する方向だから。既定を `false` にすると既定経路 (= 実機が通る経路) を通るテストが新規分だけになり、退化に気づけない構造になる |
+| 膨張済みマップへの影響 | **保守的になる方向にしか動かない。**軸に平行な壁では食い違い 0、対角障害物でも極めて稀で、`test_collision_checker.cpp` の掃引 (セル全域 × サブセル 5×5 × 8 方位) では 0.05 m の 2 シナリオで 1 件も踏まない。既存 424 件は期待値変更なしで通り、`examples` の出力 (§11.1 / §11.2 と `docs/integration-design.md` §12 の出どころ) は**バイト単位で不変**である |
+| なぜ `check_footprint()` を残すのか | 膨張済みマップに対する入口としては第 1 段が大半の step を byte 比較 1 回で捨てるぶん速い。多数候補を評価する DWA のような利用者で意味を持つ |
+
+`VelocityLimiterParams::exact_footprint_check` (既定 `true`) が `limit()` の 1 step ごとの
+呼び分けを決める。`bool` に不正値がないので `create()` の検証 (§6) には足していない。
+
+**「走行では 0 サイクルしか変わらない」を「厳密判定は不要」と読まないこと。**変わらないのは
+走行が通る姿勢が膨張帯を避けて計画された経路上にあるからで、膨張のない `local_map` を渡す
+`collision_predictor` では判定結果が大きく変わる (同一配置の膨張なしマップを掃引すると
+2 割超の姿勢で食い違う)。
 
 ---
 
@@ -369,8 +412,8 @@ ROS ノード化は後続タスクである。T7 は ROS を使わない統合�
 | `test/map/test_map_geometry.cpp` (追記) | `world_rect_to_cells` の内側 / クランプ / 非交差 / 負座標 / セル境界 / 退化窓 / 空マップ |
 | `test/map/test_cost_model.cpp` (追記) | `is_obstacle` が `LETHAL` のみ / 未知セル政策 / 膨張値は `Inscribed` だが非占有 |
 | `test/sim/test_simple_simulator.cpp` | 既定構築 / `set_pose` / `update` の戻り値 / **共有積分との厳密一致** / 累積 |
-| `test/collision/test_collision_checker.cpp` | `FirstStage` / 8 方位の短絡 / `Circumscribed` の向き依存 / 辺上・頂点上 / クランプ / 各粒度の層 |
-| `test/collision/test_velocity_limiter.cpp` | `create` の検証 9 通り / 制限式 (後退の回帰) / 曲率保持 / 素通し / 打ち切り / 決定性 / 頂点順序不変 |
+| `test/collision/test_collision_checker.cpp` | `FirstStage` / 8 方位の短絡 / `Circumscribed` の向き依存 / 辺上・頂点上 / クランプ / 各粒度の層 / 厳密入口 (`check_footprint_exact`) の非膨張マップ回帰・`OutsideMap` 一致・保守性の単調性 |
+| `test/collision/test_velocity_limiter.cpp` | `create` の検証 9 通り / 制限式 (後退の回帰) / 曲率保持 / 素通し / 打ち切り / 決定性 / 頂点順序不変 / `exact_footprint_check` の既定と分岐 |
 | `test/collision/test_velocity_limiter_closed_loop.cpp` | 前進・後退の停止、各周期の無衝突、停止余裕、純旋回が阻害されないこと |
 
 ---
