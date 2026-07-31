@@ -39,8 +39,8 @@ using eltanin::Pose2D;
 using eltanin::map::Costmap;
 using eltanin::map::MapGeometry;
 using eltanin_examples::NavigateConfig;
+using eltanin_examples::NavigateOutcome;
 using eltanin_examples::NavigateResult;
-using eltanin_examples::Outcome;
 using eltanin_examples::RobotModel;
 using eltanin_examples::Sample;
 
@@ -143,7 +143,7 @@ TEST_F(NavigateOnRealMap, ReachesTheGoalOnTheCleanMap)
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
 
-  EXPECT_EQ(result.outcome, Outcome::Reached) << result.message;
+  EXPECT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
   EXPECT_LE(result.final_position_error, config.goal_tolerance);
   EXPECT_EQ(result.colliding_poses, 0u);
   EXPECT_EQ(result.replans, 0u);
@@ -163,7 +163,7 @@ TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
 
-  EXPECT_EQ(result.outcome, Outcome::Reached) << result.message;
+  EXPECT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
   EXPECT_LE(result.final_position_error, config.goal_tolerance);
   EXPECT_EQ(result.colliding_poses, 0u);
   EXPECT_GE(result.replans, 1u);
@@ -192,7 +192,7 @@ TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
   const std::filesystem::path directory = output_dir("navigate_outputs");
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
-  ASSERT_EQ(result.outcome, Outcome::Reached) << result.message;
+  ASSERT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
   ASSERT_TRUE(eltanin_examples::write_output_files(directory, config, robot(), result));
 
   for (const char * name :
@@ -260,7 +260,7 @@ TEST_F(NavigateOnRealMap, ReportsAStallWhenReplanningDoesNotHelp)
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
 
-  EXPECT_TRUE(result.outcome == Outcome::Stalled || result.outcome == Outcome::ReplanFailed)
+  EXPECT_TRUE(result.outcome == NavigateOutcome::Stalled || result.outcome == NavigateOutcome::ReplanFailed)
     << eltanin_examples::outcome_name(result.outcome) << ": " << result.message;
   EXPECT_FALSE(result.message.empty());
   const std::size_t max_steps = static_cast<std::size_t>(config.max_sim_time / config.control_dt);
@@ -286,7 +286,7 @@ TEST(NavigationLoop, ReportsAFailedPlanOnASplitMap)
 
   const NavigateResult result = eltanin_examples::navigate(split, *robot, config);
 
-  EXPECT_EQ(result.outcome, Outcome::PlanFailed);
+  EXPECT_EQ(result.outcome, NavigateOutcome::PlanFailed);
   EXPECT_FALSE(result.message.empty());
   EXPECT_TRUE(result.samples.empty());
 }

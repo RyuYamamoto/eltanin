@@ -177,6 +177,16 @@ the goal was reached, then writes six files into `out_dir`:
 
 The exit code is 0 only when the goal was reached; otherwise the failing stage is named on stderr.
 
+```bash
+python3 examples/plot_navigation_results.py --run out_dir --out plots
+```
+
+Turns those files into four figures: the whole route over the costmap, a zoom on the stop in front of
+the unknown obstacle, the requested against the limited command over time, and the traversed cells
+over the costmap. Like `plot_collision_results.py` it is a developer tool that CMake never refers to.
+What each figure shows, and what reading them revealed, is in
+[docs/integration-design.md](docs/integration-design.md) §15.
+
 The same pipeline is a regression test, so `ctest` covers it. Under both sanitizers:
 
 ```bash

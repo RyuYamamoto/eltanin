@@ -95,7 +95,7 @@ struct NavigateConfig
 inline constexpr double CLEARANCE_SEARCH_MARGIN = 1.0;
 
 /// Why the run ended; every value but Reached names the stage that failed.
-enum class Outcome
+enum class NavigateOutcome
 {
   Reached,
   ModelFailed,
@@ -110,30 +110,30 @@ enum class Outcome
   StepLimit
 };
 
-inline const char * outcome_name(Outcome outcome) noexcept
+inline const char * outcome_name(NavigateOutcome outcome) noexcept
 {
   switch (outcome) {
-    case Outcome::Reached:
+    case NavigateOutcome::Reached:
       return "reached";
-    case Outcome::ModelFailed:
+    case NavigateOutcome::ModelFailed:
       return "model_failed";
-    case Outcome::StartGoalFailed:
+    case NavigateOutcome::StartGoalFailed:
       return "start_goal_failed";
-    case Outcome::PlanFailed:
+    case NavigateOutcome::PlanFailed:
       return "plan_failed";
-    case Outcome::PathTooShort:
+    case NavigateOutcome::PathTooShort:
       return "path_too_short";
-    case Outcome::NoPath:
+    case NavigateOutcome::NoPath:
       return "no_path";
-    case Outcome::GoalToleranceFailed:
+    case NavigateOutcome::GoalToleranceFailed:
       return "goal_tolerance_failed";
-    case Outcome::ReplanFailed:
+    case NavigateOutcome::ReplanFailed:
       return "replan_failed";
-    case Outcome::ReplanLimit:
+    case NavigateOutcome::ReplanLimit:
       return "replan_limit";
-    case Outcome::Stalled:
+    case NavigateOutcome::Stalled:
       return "stalled";
-    case Outcome::StepLimit:
+    case NavigateOutcome::StepLimit:
       return "step_limit";
   }
   return "unknown";
@@ -175,7 +175,7 @@ struct Observation
 
 struct NavigateResult
 {
-  Outcome outcome{Outcome::ModelFailed};
+  NavigateOutcome outcome{NavigateOutcome::ModelFailed};
   /// Empty on success; otherwise it says which stage failed and with what numbers.
   std::string message;
   eltanin::Pose2D start{};
@@ -204,7 +204,7 @@ struct NavigateResult
   /// Inflated truth the synthetic sensor reads and the traversed poses are verified against.
   eltanin::map::Costmap ground_truth;
 
-  bool reached() const noexcept { return outcome == Outcome::Reached; }
+  bool reached() const noexcept { return outcome == NavigateOutcome::Reached; }
 };
 
 namespace detail
@@ -447,7 +447,7 @@ inline NavigateResult navigate(
   std::optional<PurePursuit> tracker = PurePursuit::create(config.tracker);
   std::optional<VelocityLimiter> limiter = VelocityLimiter::create(config.limiter);
   if (!tracker.has_value() || !limiter.has_value()) {
-    result.outcome = Outcome::ModelFailed;
+    result.outcome = NavigateOutcome::ModelFailed;
     result.message = "PurePursuit::create or VelocityLimiter::create rejected its parameters";
     return result;
   }
@@ -468,7 +468,7 @@ inline NavigateResult navigate(
   } else {
     const auto pair = auto_start_goal(global.costmap(), robot.model);
     if (!pair.has_value()) {
-      result.outcome = Outcome::StartGoalFailed;
+      result.outcome = NavigateOutcome::StartGoalFailed;
       result.message = "auto_start_goal found no reachable pair of cells on the inflated map";
       return result;
     }
@@ -480,13 +480,13 @@ inline NavigateResult navigate(
 
   std::optional<eltanin::Path> path = detail::plan_leg(global.costmap(), robot, start, goal);
   if (!path.has_value()) {
-    result.outcome = Outcome::PlanFailed;
+    result.outcome = NavigateOutcome::PlanFailed;
     result.message =
       "plan() found no path from " + detail::pose_text(start) + " to " + detail::pose_text(goal);
     return result;
   }
   if (path->size() < 2) {
-    result.outcome = Outcome::PathTooShort;
+    result.outcome = NavigateOutcome::PathTooShort;
     result.message = "the smoothed initial path has fewer than two poses";
     return result;
   }
@@ -570,7 +570,7 @@ inline NavigateResult navigate(
 
     const PurePursuit::Result tracking = tracker->compute(plant.pose(), *path, config.control_dt);
     if (tracking.status == PurePursuit::Status::NoPath) {
-      result.outcome = Outcome::NoPath;
+      result.outcome = NavigateOutcome::NoPath;
       result.message = "PurePursuit reported NoPath on leg " + std::to_string(leg);
       break;
     }
@@ -606,13 +606,13 @@ inline NavigateResult navigate(
     if (zero_cycles >= config.stop_cycles_to_replan) {
       // A stall means replanning did not help, so the first stop always gets one replan.
       if (result.replans > 0 && progress_since_replan < config.stall_min_progress) {
-        result.outcome = Outcome::Stalled;
+        result.outcome = NavigateOutcome::Stalled;
         result.message = "stalled at " + detail::pose_text(plant.pose()) + " after moving only " +
                          std::to_string(progress_since_replan) + " m since the last plan";
         break;
       }
       if (result.replans >= static_cast<std::size_t>(config.max_replans)) {
-        result.outcome = Outcome::ReplanLimit;
+        result.outcome = NavigateOutcome::ReplanLimit;
         result.message = "the replan limit of " + std::to_string(config.max_replans) +
                          " was reached at " + detail::pose_text(plant.pose());
         break;
@@ -624,14 +624,14 @@ inline NavigateResult navigate(
       std::optional<eltanin::Path> replanned =
         detail::plan_leg(global.costmap(), robot, plant.pose(), goal);
       if (!replanned.has_value()) {
-        result.outcome = Outcome::ReplanFailed;
+        result.outcome = NavigateOutcome::ReplanFailed;
         result.message = "replan " + std::to_string(result.replans + 1) +
                          " failed: plan() found no path from " + detail::pose_text(plant.pose()) +
                          " to " + detail::pose_text(goal);
         break;
       }
       if (replanned->size() < 2) {
-        result.outcome = Outcome::PathTooShort;
+        result.outcome = NavigateOutcome::PathTooShort;
         result.message = "the smoothed path of replan " + std::to_string(result.replans + 1) +
                          " has fewer than two poses";
         break;
@@ -667,14 +667,14 @@ inline NavigateResult navigate(
   result.final_position_error = (plant.pose().position - goal.position).norm();
   if (at_goal) {
     if (result.final_position_error <= config.goal_tolerance) {
-      result.outcome = Outcome::Reached;
+      result.outcome = NavigateOutcome::Reached;
     } else {
-      result.outcome = Outcome::GoalToleranceFailed;
+      result.outcome = NavigateOutcome::GoalToleranceFailed;
       result.message = "PurePursuit reported GoalReached but the final position error is " +
                        std::to_string(result.final_position_error) + " m";
     }
   } else if (result.message.empty()) {
-    result.outcome = Outcome::StepLimit;
+    result.outcome = NavigateOutcome::StepLimit;
     result.message = "the cycle limit of " + std::to_string(max_steps) + " was reached";
   }
 
