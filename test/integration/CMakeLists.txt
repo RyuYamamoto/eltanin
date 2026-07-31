@@ -11,5 +11,6 @@ target_compile_definitions(eltanin_test_integration PRIVATE
   ELTANIN_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
 # The suite drives the whole stack on a 16 M cell map, so it is minutes rather than milliseconds.
+# The label is what selects it: a name regex would have to track every test suite name in the file.
 gtest_discover_tests(eltanin_test_integration
-  PROPERTIES ENVIRONMENT "${ELTANIN_TEST_ENVIRONMENT}" TIMEOUT 300)
+  PROPERTIES ENVIRONMENT "${ELTANIN_TEST_ENVIRONMENT}" TIMEOUT 300 LABELS integration)

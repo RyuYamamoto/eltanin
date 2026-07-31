@@ -192,7 +192,7 @@ The same pipeline is a regression test, so `ctest` covers it. Under both sanitiz
 ```bash
 cmake -B build-asan -DELTANIN_ENABLE_ASAN=ON -DELTANIN_ENABLE_UBSAN=ON
 cmake --build build-asan -j
-ctest --test-dir build-asan -R Navigate --output-on-failure
+ctest --test-dir build-asan -L integration --output-on-failure
 ```
 
 That takes about 95 s and needs about 500 MB. The cases that use the reference map are skipped when
