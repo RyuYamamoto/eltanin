@@ -611,6 +611,7 @@ include パスがヘッダの物理パスと一致し (`#include <eltanin/core/t
 - 既定コストは `NO_INFORMATION` に変わり、自由空間は ray trace の結果として書かれる。
 - `FREE_SPACE` のままにすると、**global 側の overlap 合成が「センサ視野外の静的障害物」を消す**。壁の陰・センサの死角・角度フィルタで落としたセクタがすべて「観測された自由空間」として global へ伝わるためである。navyu が持っていなかった欠陥を新たに作ることになる。
 - 帰結として、ローカル側の合成規則 (`ObstacleLayer` が `NO_INFORMATION` を無条件に上書きする。14.5 節) と ray trace のクリア規則の優先順位を決める必要がある。同一セルに「あるビームの終端 (障害物)」と「別のビームの通過 (自由)」が同時に立つため、**障害物を優先する**のが保守側である。
+- **T14 で `RaytraceLayer` として実装した。** 優先規則の確定版は 16.2 節にある。
 
 ### 15.2 global を毎周期全面再生成できない → `Layer` に ROI が必要になる
 
@@ -643,3 +644,61 @@ overlap 領域そのものを送ると、購読側で窓端の膨張が欠ける
 ### 15.5 clearing 用の投影
 
 `project_scan` はマーキング専用であり ray trace のクリアリングには使えない。センサ側の帰結なので `docs/sensor-design.md` に記録した。
+
+**T14 で実装した。** clearing 用の投影は `sensor::project_scan_for_clearing()` (`docs/sensor-design.md` §11)、セル塗りと合成規則は `RaytraceLayer` (16 章) である。
+
+---
+
+## 16. `RaytraceLayer` (T14 で確定した事項)
+
+ROS 層の `local_map` が要求する 3 値 (未観測 / 自由 / 障害物) を 1 枚のコストマップに書くレイヤである (`eltanin_map`: `include/eltanin/map/layers/raytrace_layer.hpp` / `src/map/layers/raytrace_layer.cpp`)。センサ側の clearing 投影は `docs/sensor-design.md` §11 に、ノードの組み方は詳細設計 (`eltanin_ros/docs/design/eltaninnavyuros.md`) §5.5 / §6.1 にある。
+
+### 16.1 入力と責務
+
+```cpp
+class RaytraceLayer final : public Layer
+{
+public:
+  explicit RaytraceLayer(bool clear_static_obstacles = false);
+  void set_observation(const Eigen::Vector2d & sensor_origin,
+                       std::span<const Eigen::Vector2d> marking_points,
+                       std::span<const Eigen::Vector2d> clearing_endpoints);
+  void clear_observation();
+  void update_costs(Costmap & master) override;
+};
+```
+
+- 受けるのは world 座標の点列 2 本とセンサ原点 1 個である。`span` で受けて内部の `vector` にコピーする (14.5 の `ObstacleLayer` と同じ理由)。観測未設定は正常状態 (観測前 / スキャン失効) であり、`update_costs()` は何もしない。
+- **マーキングは `ObstacleLayer` をメンバとして持ち、それに委譲する。** 「marking は `NO_INFORMATION` を無条件に上書きする」規則を 2 箇所に実装しないためである。14.5 の契約がそのまま本レイヤの marking 契約になる。
+- `clear_observation()` は ROS 層の N-4 (スキャンが `scan_timeout` より古い周期は static のみの窓を publish する) のためにある。観測を消せなければ、古いスキャンが毎周期再投影され続ける。
+- `clear_static_obstacles` はコンストラクタ引数だけで、setter を持たない。ノード起動時のパラメータであり、周期ごとに変わる値ではない。
+
+### 16.2 合成優先規則 (このレイヤの仕様そのもの)
+
+| 状況 | 規則 | 理由 |
+|---|---|---|
+| 同一セルに marking と clearing が立つ | **marking を優先** | 保守側。15.1 節の帰結 |
+| clearing が既存の `LETHAL_OBSTACLE` を消そうとする | **既定では消さない** (`clear_static_obstacles`、既定 `false`) | 自己位置誤差で静的な壁を消すと、厳密フットプリント判定が壁を見なくなる。動的障害物は静的地図に無いので消せる |
+| clearing が `NO_INFORMATION` を消す | 消して `FREE_SPACE` にする | 観測は未知に対する情報の増加である |
+| marking が `NO_INFORMATION` を上書き | 上書きする | 14.5 と同じ |
+
+**marking 優先はパスの順序で実現する。** `update_costs()` は「全ビームの clearing → 全点の marking」の 2 パスであり、セルごとの優先度比較を持たない。1 パスで交互に書くと「あるビームの終端を別のビームの通過が消す」という順序依存が生まれる。720 ビームのスキャンでは隣接ビームのレイが必ず互いの終端セルを掃くので、これは稀な競合ではなく常に起こる。
+
+**「既存の `LETHAL_OBSTACLE`」は master の現在値で判定する。** レイヤ順が `StaticLayer` → `RaytraceLayer` なので、この時点の `LETHAL_OBSTACLE` は静的地図由来である。レイヤに静的地図の複製を持たせない (14.1 のレイヤ境界の規約: レイヤは master に書くだけで、他レイヤの内部状態を知らない)。
+
+`INSCRIBED_INFLATED_OBSTACLE` などの中間値は clearing の保護対象にしない。膨張値は `InflationLayer` が毎周期作り直す派生値であり、`local_map` は膨張を持たない (詳細設計 D-14)。保護すべき一次情報は `LETHAL_OBSTACLE` だけである。
+
+### 16.3 レイの通し方
+
+- **終点セルは常に塗らない。** 実際の障害物が居るセルかもしれない。切り詰めた終点・地図端でクリップした終点も同じ扱いにできるので、ビームごとの「無反射だったか」を持ち込まずに済む (`sensor-design.md` §11.3)。失うのは 1 セルであり、隣接ビームが埋める。
+- **保護された `LETHAL_OBSTACLE` でレイを止めない。** ビームがそのセルを通過したという観測は直接の証拠であり、古い / ずれている静的地図よりも新しい。そのセルだけ残して奥は塗る。
+- **クリップは world 座標で行い、変換は `MapGeometry` だけを使う。** 窓外の終点 (クリアリング上限 3.05 m > 窓半幅) は普通に起こる。範囲検査のない world → cell 変換を公開しない方針 (9.1) を守るため、**四隅セルの中心が作る矩形**へ線分をパラメトリックにクリップしてから `world_to_map()` を呼ぶ。半セルの余裕があるので端の丸めで `nullopt` に落ちない。
+- クリップ後は整数 Bresenham で歩く。両端が範囲内なら中間セルも必ず範囲内なので、内側ループに範囲検査を持たない (14.4 の膨張窓と同じ考え方)。
+- 非有限な終点 (上流が NaN を漏らした場合) はクリップと `to_int_saturating()` を通って `nullopt` になり、そのビームだけが落ちる。**塗らない方向に落ちるので保守側である。** `assert` しない: センサ由来の異常値は正常処理として除外する (10 章)。
+- レイはセンサ原点のセルから引くので、`range_min` の内側 (参照 LiDAR で 2 セル) も自由になる。受け入れた理由は `sensor-design.md` §11.4 にある。
+
+### 16.4 ROS 層 (`local_map`) との対応
+
+`default_cost = NO_INFORMATION` / `StaticLayer` → `RaytraceLayer` / 膨張なし、が `local_map` の構成である。15.1 節の「ray trace を入れるとローカルの既定コストは `FREE_SPACE` ではなくなる」がここで現実になる。**ローカル窓が静的地図を含む理由** (LiDAR の取り付け位置と `range_min` によりロボット直下と後方近傍は構造的に未観測で、`unknown_is_free = false` の厳密判定では未観測セルがフットプリント内に必ず入るため、静的地図を含めないとロボットが 1 mm も動けない) は詳細設計 §5.5 にある。
+
+`test/map/test_raytrace_layer.cpp` が 16.2 の 4 規則と 16.3 のクリップ / 終点除外を、`test/sensor/test_scan_to_costmap.cpp` の `ScanToLocalMap.*` が「スキャン → 投影 2 本 → `StaticLayer` + `RaytraceLayer` → 3 値」の結線を固定している。

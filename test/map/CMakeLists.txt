@@ -4,6 +4,7 @@ add_executable(eltanin_test_map
   test_cost_model.cpp
   test_static_layer.cpp
   test_obstacle_layer.cpp
+  test_raytrace_layer.cpp
   test_inflation_layer.cpp
   test_layered_costmap.cpp
   test_inflation_real_map.cpp)

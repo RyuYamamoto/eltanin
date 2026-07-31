@@ -3,6 +3,7 @@ add_library(eltanin_map STATIC
   layered_costmap.cpp
   layers/static_layer.cpp
   layers/obstacle_layer.cpp
+  layers/raytrace_layer.cpp
   layers/inflation_layer.cpp)
 add_library(eltanin::map ALIAS eltanin_map)
 

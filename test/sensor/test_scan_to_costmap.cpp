@@ -16,6 +16,9 @@
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/layered_costmap.hpp>
 #include <eltanin/map/layers/obstacle_layer.hpp>
+#include <eltanin/map/layers/raytrace_layer.hpp>
+#include <eltanin/map/layers/static_layer.hpp>
+#include <eltanin/sensor/scan_clearing.hpp>
 #include <eltanin/sensor/scan_projection.hpp>
 
 #include <gtest/gtest.h>
@@ -31,12 +34,17 @@ namespace
 {
 
 using eltanin::Transform2D;
+using eltanin::map::Costmap;
 using eltanin::map::FREE_SPACE;
 using eltanin::map::LayeredCostmap;
 using eltanin::map::LETHAL_OBSTACLE;
 using eltanin::map::MapGeometry;
+using eltanin::map::NO_INFORMATION;
 using eltanin::map::ObstacleLayer;
+using eltanin::map::RaytraceLayer;
+using eltanin::map::StaticLayer;
 using eltanin::sensor::project_scan;
+using eltanin::sensor::project_scan_for_clearing;
 using eltanin::sensor::ScanData;
 using eltanin::sensor::ScanFilter;
 
@@ -68,10 +76,68 @@ ScanFilter reference_filter()
   return filter;
 }
 
-std::size_t count_cost(const eltanin::map::Costmap & costmap, std::uint8_t cost)
+std::size_t count_cost(const Costmap & costmap, std::uint8_t cost)
 {
   return static_cast<std::size_t>(
     std::count(costmap.data().begin(), costmap.data().end(), cost));
+}
+
+/// The sensor sits at the centre cell of the window, exactly on a cell centre.
+const Eigen::Vector2d kSensorPosition{0.05, 0.05};
+constexpr float kInfF = std::numeric_limits<float>::infinity();
+constexpr double kMarkingMaxRange = 1.0;
+constexpr double kClearingMaxRange = 0.6;
+
+/// One hit inside the clearing range, one beam with no return, one hit beyond it, one too close.
+ScanData local_map_scan()
+{
+  ScanData scan;
+  scan.angle_min = 0.0;
+  scan.angle_increment = 0.5 * kPi;
+  scan.range_min = 0.1;
+  scan.range_max = 30.0;
+  scan.ranges = {0.5F, kInfF, 0.8F, 0.05F};
+  return scan;
+}
+
+ScanFilter local_map_filter()
+{
+  ScanFilter filter;
+  filter.min_range = 0.0;
+  filter.max_range = kMarkingMaxRange;
+  return filter;
+}
+
+/// The static map of a real robot is mostly unexplored; only the wall cell is known here.
+Costmap static_window_with_a_wall()
+{
+  Costmap map(test_geometry(), NO_INFORMATION);
+  map(12, 10) = LETHAL_OBSTACLE;
+  return map;
+}
+
+/// The local map stack of the ROS layer: unknown by default, static first, then the observation.
+struct LocalMap
+{
+  LocalMap() : layers(test_geometry(), NO_INFORMATION)
+  {
+    layers.add_layer<StaticLayer>(static_window_with_a_wall());
+    raytrace = &layers.add_layer<RaytraceLayer>();
+  }
+
+  std::uint8_t cost_at(int mx, int my) const { return layers.costmap()(mx, my); }
+
+  LayeredCostmap layers;
+  RaytraceLayer * raytrace{nullptr};
+};
+
+void project_local_map_scan(
+  std::vector<Eigen::Vector2d> & marks, std::vector<Eigen::Vector2d> & endpoints)
+{
+  const Transform2D sensor_to_world(kSensorPosition, 0.0);
+  project_scan(local_map_scan(), local_map_filter(), sensor_to_world, marks);
+  project_scan_for_clearing(
+    local_map_scan(), local_map_filter(), kClearingMaxRange, sensor_to_world, endpoints);
 }
 
 }  // namespace
@@ -175,4 +241,72 @@ TEST(ScanToCostmap, EmptyProjectionLeavesTheMapAtTheDefaultCost)
   costmap.update();
 
   EXPECT_EQ(count_cost(costmap.costmap(), FREE_SPACE), costmap.costmap().cell_count());
+}
+TEST(ScanToLocalMap, ClearingAndMarkingProduceThreeValues)
+{
+  LocalMap local;
+  std::vector<Eigen::Vector2d> marks;
+  std::vector<Eigen::Vector2d> endpoints;
+  project_local_map_scan(marks, endpoints);
+  ASSERT_EQ(marks.size(), 2u);
+  ASSERT_EQ(endpoints.size(), 3u);
+
+  local.raytrace->set_observation(kSensorPosition, marks, endpoints);
+  local.layers.update();
+
+  EXPECT_EQ(local.cost_at(15, 10), LETHAL_OBSTACLE);
+  EXPECT_EQ(local.cost_at(2, 10), LETHAL_OBSTACLE);
+  EXPECT_EQ(local.cost_at(11, 10), FREE_SPACE);
+  EXPECT_EQ(local.cost_at(13, 10), FREE_SPACE);
+  EXPECT_EQ(local.cost_at(14, 10), FREE_SPACE);
+  EXPECT_EQ(local.cost_at(10, 15), FREE_SPACE);
+  EXPECT_GT(count_cost(local.layers.costmap(), NO_INFORMATION), 0u);
+}
+
+TEST(ScanToLocalMap, TheStaticWallSurvivesAClearingRayThatCrossesIt)
+{
+  LocalMap local;
+  std::vector<Eigen::Vector2d> marks;
+  std::vector<Eigen::Vector2d> endpoints;
+  project_local_map_scan(marks, endpoints);
+
+  local.raytrace->set_observation(kSensorPosition, {}, endpoints);
+  local.layers.update();
+
+  EXPECT_EQ(local.cost_at(12, 10), LETHAL_OBSTACLE);
+  EXPECT_EQ(local.cost_at(13, 10), FREE_SPACE);
+}
+
+TEST(ScanToLocalMap, CellsBeyondTheClearingRangeStayUnknown)
+{
+  LocalMap local;
+  std::vector<Eigen::Vector2d> marks;
+  std::vector<Eigen::Vector2d> endpoints;
+  project_local_map_scan(marks, endpoints);
+
+  local.raytrace->set_observation(kSensorPosition, marks, endpoints);
+  local.layers.update();
+
+  EXPECT_EQ(local.cost_at(4, 10), NO_INFORMATION);
+  EXPECT_EQ(local.cost_at(3, 10), NO_INFORMATION);
+  EXPECT_EQ(local.cost_at(10, 16), NO_INFORMATION);
+  EXPECT_EQ(local.cost_at(10, 5), NO_INFORMATION);
+}
+
+TEST(ScanToLocalMap, AStaleScanLeavesTheStaticWindowAlone)
+{
+  LocalMap local;
+  std::vector<Eigen::Vector2d> marks;
+  std::vector<Eigen::Vector2d> endpoints;
+  project_local_map_scan(marks, endpoints);
+  local.raytrace->set_observation(kSensorPosition, marks, endpoints);
+  local.layers.update();
+
+  local.raytrace->clear_observation();
+  local.layers.update();
+
+  EXPECT_EQ(local.cost_at(12, 10), LETHAL_OBSTACLE);
+  EXPECT_EQ(count_cost(local.layers.costmap(), FREE_SPACE), 0u);
+  EXPECT_EQ(
+    count_cost(local.layers.costmap(), NO_INFORMATION), local.layers.costmap().cell_count() - 1u);
 }
