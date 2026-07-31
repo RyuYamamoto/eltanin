@@ -46,6 +46,8 @@ struct VelocityLimiterParams
   double collision_margin{0.2};
   /// Deceleration used by the braking-distance law [m/s^2].
   double max_deceleration{0.5};
+  /// Drop the Free short-circuit of the centre cell; required for maps that carry no inflation.
+  bool exact_footprint_check{true};
 };
 
 namespace detail
@@ -121,7 +123,10 @@ VelocityLimiter::Result VelocityLimiter::limit(
   double travelled = 0.0;
   for (int step = 0; step < params_.prediction_steps; ++step) {
     pose = integrate_differential_drive(pose, cmd_in, dt);
-    const CollisionCheck check = check_footprint(map, model, params_.footprint, pose);
+    const CollisionCheck check =
+      params_.exact_footprint_check
+        ? check_footprint_exact(map, model, params_.footprint, pose)
+        : check_footprint(map, model, params_.footprint, pose);
     // Leaving the map truncates the prediction instead of limiting; see docs/collision-design.md.
     if (check == CollisionCheck::OutsideMap) {
       break;

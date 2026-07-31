@@ -38,6 +38,7 @@ using eltanin_test::make_limiter;
 using eltanin_test::reversed_footprint;
 using eltanin_test::CollisionScenario;
 using eltanin_test::single_obstacle_scenario;
+using eltanin_test::uninflated_scenario;
 using eltanin_test::wall_scenario;
 using Eigen::Vector2d;
 
@@ -72,6 +73,12 @@ void expect_same_result(const VelocityLimiter::Result & a, const VelocityLimiter
 TEST(VelocityLimiterCreate, AcceptsTheDefaultParameters)
 {
   EXPECT_TRUE(VelocityLimiter::create(VelocityLimiterParams{}).has_value());
+}
+
+TEST(VelocityLimiterCreate, ChecksTheFootprintExactlyByDefault)
+{
+  EXPECT_TRUE(VelocityLimiterParams{}.exact_footprint_check);
+  EXPECT_TRUE(make_limiter(VelocityLimiterParams{}).params().exact_footprint_check);
 }
 
 TEST(VelocityLimiterCreate, RejectsADegenerateFootprint)
@@ -344,6 +351,31 @@ TEST(VelocityLimiterLimit, ZeroesInPlaceRotationTowardsAnObstacle)
   EXPECT_TRUE(result.has_collision);
   EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
   EXPECT_DOUBLE_EQ(result.command.angular, 0.0);
+}
+
+TEST(VelocityLimiterLimit, OnlyTheExactCheckStopsForARawObstacleAhead)
+{
+  const CollisionScenario scenario = uninflated_scenario(5, 0);
+  const Pose2D robot = pose_at_cell(7, 11, 0.0);
+  const Twist2D cmd_in = twist(0.5, 0.0);
+
+  VelocityLimiterParams two_stage;
+  two_stage.exact_footprint_check = false;
+
+  const VelocityLimiter::Result exact =
+    make_limiter(VelocityLimiterParams{}).limit(scenario.map, scenario.model, robot, cmd_in);
+  const VelocityLimiter::Result lenient =
+    make_limiter(two_stage).limit(scenario.map, scenario.model, robot, cmd_in);
+
+  EXPECT_TRUE(exact.has_collision);
+  EXPECT_DOUBLE_EQ(exact.collision_distance, 0.1);
+  EXPECT_DOUBLE_EQ(exact.command.linear.x(), 0.0);
+  EXPECT_EQ(exact.predicted_poses.size(), 3u);
+
+  // No predicted pose lands on the lethal cell (16, 11), so the Free gate hides it every step.
+  EXPECT_FALSE(lenient.has_collision);
+  EXPECT_EQ(lenient.collision_distance, INFINITE_DISTANCE);
+  EXPECT_DOUBLE_EQ(lenient.command.linear.x(), cmd_in.linear.x());
 }
 
 TEST(VelocityLimiterLimit, IsIndependentOfTheFootprintVertexOrder)
