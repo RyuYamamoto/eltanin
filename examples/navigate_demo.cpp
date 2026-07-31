@@ -16,13 +16,14 @@
 
 #include <eltanin/map/grid_map.hpp>
 
+#include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace
 {
@@ -31,7 +32,6 @@ using eltanin::Pose2D;
 using eltanin_examples::LegStats;
 using eltanin_examples::NavigateConfig;
 using eltanin_examples::NavigateResult;
-using eltanin_examples::Sample;
 
 #ifdef ELTANIN_TEST_MAP_DIR
 constexpr const char * DEFAULT_MAP_DIR = ELTANIN_TEST_MAP_DIR;
@@ -59,7 +59,6 @@ int usage(const char * program)
   return EXIT_FAILURE;
 }
 
-/// Command line as parsed; nullopt means the usage was already printed.
 struct Arguments
 {
   std::filesystem::path output_dir;
@@ -67,8 +66,10 @@ struct Arguments
   NavigateConfig config;
 };
 
+/// True when `count` more arguments follow the option at `index`.
 bool needs_values(int argc, int index, int count) { return index + count < argc; }
 
+/// nullopt when the command line is unusable; the caller then prints the usage.
 std::optional<Arguments> parse(int argc, char ** argv)
 {
   if (argc < 2 || argv[1][0] == '-') {

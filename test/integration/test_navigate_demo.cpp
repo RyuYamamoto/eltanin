@@ -18,6 +18,7 @@
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/map/layered_costmap.hpp>
 #include <eltanin/map/layers/static_layer.hpp>
+#include <eltanin/map_io/pgm.hpp>
 
 #include <gtest/gtest.h>
 
@@ -268,6 +269,30 @@ TEST_F(NavigateDemo, ReportsAStallInsteadOfSpinning)
   const std::size_t max_steps =
     static_cast<std::size_t>(config.max_sim_time / config.control_dt);
   EXPECT_LT(result.samples.size(), max_steps);
+}
+
+/// An unreachable goal has to be reported with the failing stage, not run to the cycle limit.
+TEST(NavigatePipeline, ReportsAFailedPlanOnASplitMap)
+{
+  constexpr int CELLS = 160;
+  constexpr double RESOLUTION = 0.05;
+  Costmap split(MapGeometry(CELLS, CELLS, RESOLUTION, Eigen::Vector2d::Zero()));
+  for (int my = 0; my < CELLS; ++my) {
+    split(CELLS / 2, my) = eltanin::map::LETHAL_OBSTACLE;
+  }
+  const std::optional<RobotModel> robot = eltanin_examples::make_robot_model();
+  ASSERT_TRUE(robot.has_value());
+
+  NavigateConfig config;
+  config.local_window_size = static_cast<double>(CELLS) * RESOLUTION / 2.0;
+  config.start_goal = std::pair{Pose2D{Eigen::Vector2d{1.0, 4.0}, 0.0},
+                               Pose2D{Eigen::Vector2d{7.0, 4.0}, 0.0}};
+
+  const NavigateResult result = eltanin_examples::navigate(split, *robot, config);
+
+  EXPECT_EQ(result.outcome, Outcome::PlanFailed);
+  EXPECT_FALSE(result.message.empty());
+  EXPECT_TRUE(result.samples.empty());
 }
 
 /// The window origin has to land on the static grid, or StaticLayer resamples a shifted map.

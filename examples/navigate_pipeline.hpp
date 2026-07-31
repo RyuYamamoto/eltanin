@@ -36,6 +36,7 @@
 #include <eltanin/sim/simple_simulator.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -87,7 +88,7 @@ struct NavigateConfig
   /// nullopt picks the start and the goal from the map, so no map coordinate is hard coded.
   std::optional<std::pair<eltanin::Pose2D, eltanin::Pose2D>> start_goal{};
   /// Footprint aside, these are the limiter defaults docs/collision-design.md was measured with.
-  eltanin::collision::VelocityLimiterParams limiter{robot_footprint()};
+  eltanin::collision::VelocityLimiterParams limiter{.footprint = robot_footprint()};
   eltanin::control::PurePursuitParams tracker{};
 };
 
@@ -191,7 +192,8 @@ struct NavigateResult
   double final_position_error{0.0};
   double sim_time{0.0};
   std::size_t colliding_poses{0};
-  eltanin::Pose2D worst_pose{};
+  /// Where the first collision happened; only meaningful when colliding_poses is not zero.
+  eltanin::Pose2D first_colliding_pose{};
   std::optional<Eigen::Vector2d> obstacle_centre{};
   double obstacle_half_width{0.0};
   /// Footprint distance to the nearest lethal cell over the stopped cycles [m].
@@ -386,6 +388,29 @@ inline LegStats leg_stats_for(const eltanin::Path & path)
   return stats;
 }
 
+/// Folds one cycle into the statistics of its leg; `full_prediction` is prediction_steps + 1.
+inline void accumulate_sample(
+  LegStats & stats, const Sample & sample, const eltanin::Path & path,
+  std::size_t full_prediction)
+{
+  ++stats.cycles;
+  const double speed_loss =
+    std::abs(sample.requested.linear.x()) - std::abs(sample.limited.linear.x());
+  if (speed_loss > 1e-12) {
+    ++stats.limited_cycles;
+    stats.max_speed_loss = std::max(stats.max_speed_loss, speed_loss);
+  }
+  if (sample.has_collision) {
+    ++stats.collision_cycles;
+    stats.min_collision_distance =
+      std::min(stats.min_collision_distance, sample.collision_distance);
+  } else if (sample.predicted_count < full_prediction) {
+    ++stats.truncated_cycles;
+  }
+  stats.max_path_deviation =
+    std::max(stats.max_path_deviation, lateral_error(path, sample.pose.position));
+}
+
 inline std::string pose_text(const eltanin::Pose2D & pose)
 {
   return "(" + std::to_string(pose.position.x()) + ", " + std::to_string(pose.position.y()) + ")";
@@ -409,6 +434,12 @@ inline NavigateResult navigate(
   using eltanin::map::MapIndex;
   using eltanin::map::ObstacleLayer;
   using eltanin::map::StaticLayer;
+
+  assert(config.control_dt > 0.0);
+  assert(config.sensor_decimation >= 1);
+  assert(config.lidar_beams >= 1);
+  assert(config.stop_cycles_to_replan >= 1);
+  assert(config.max_replans >= 0);
 
   NavigateResult result;
   const MapGeometry & static_geometry = static_map.geometry();
@@ -473,6 +504,9 @@ inline NavigateResult navigate(
   }
 
   const int window_cells = static_cast<int>(std::lround(config.local_window_size / resolution));
+  // A window wider than the map would leave NO_INFORMATION cells the limiter reads as obstacles.
+  assert(window_cells >= 1);
+  assert(window_cells <= static_geometry.size_x() && window_cells <= static_geometry.size_y());
   LayeredCostmap local(
     MapGeometry(window_cells, window_cells, resolution, static_geometry.origin()),
     eltanin::map::NO_INFORMATION);
@@ -552,24 +586,7 @@ inline NavigateResult navigate(
     result.samples.push_back(Sample{
       leg, t, plant.pose(), tracking.command, limited.command, limited.collision_distance,
       limited.has_collision, limited.predicted_poses.size()});
-
-    LegStats & stats = result.legs[leg];
-    ++stats.cycles;
-    const double speed_loss =
-      std::abs(tracking.command.linear.x()) - std::abs(limited.command.linear.x());
-    if (speed_loss > 1e-12) {
-      ++stats.limited_cycles;
-      stats.max_speed_loss = std::max(stats.max_speed_loss, speed_loss);
-    }
-    if (limited.has_collision) {
-      ++stats.collision_cycles;
-      stats.min_collision_distance =
-        std::min(stats.min_collision_distance, limited.collision_distance);
-    } else if (limited.predicted_poses.size() < full_prediction) {
-      ++stats.truncated_cycles;
-    }
-    stats.max_path_deviation =
-      std::max(stats.max_path_deviation, detail::lateral_error(*path, plant.pose().position));
+    detail::accumulate_sample(result.legs[leg], result.samples.back(), *path, full_prediction);
 
     if (limited.command.linear.x() == 0.0 && limited.command.angular == 0.0) {
       ++zero_cycles;
@@ -588,7 +605,8 @@ inline NavigateResult navigate(
     }
 
     if (zero_cycles >= config.stop_cycles_to_replan) {
-      if (progress_since_replan < config.stall_min_progress) {
+      // A stall means replanning did not help, so the first stop always gets one replan.
+      if (result.replans > 0 && progress_since_replan < config.stall_min_progress) {
         result.outcome = Outcome::Stalled;
         result.message = "stalled at " + detail::pose_text(plant.pose()) + " after moving only " +
                          std::to_string(progress_since_replan) + " m since the last plan";
@@ -604,7 +622,7 @@ inline NavigateResult navigate(
       global.update();
       ++result.global_updates;
       accumulated_at_last_update = accumulated.size();
-      const std::optional<eltanin::Path> replanned =
+      std::optional<eltanin::Path> replanned =
         detail::plan_leg(global.costmap(), robot, plant.pose(), goal);
       if (!replanned.has_value()) {
         result.outcome = Outcome::ReplanFailed;
@@ -619,7 +637,7 @@ inline NavigateResult navigate(
                          " has fewer than two poses";
         break;
       }
-      path = replanned;
+      path = std::move(replanned);
       tracker->reset();
       ++result.replans;
       ++leg;
@@ -640,7 +658,7 @@ inline NavigateResult navigate(
         eltanin::collision::check_footprint(ground_truth, robot.model, footprint, plant.pose());
       if (check == CollisionCheck::Collision) {
         if (result.colliding_poses == 0) {
-          result.worst_pose = plant.pose();
+          result.first_colliding_pose = plant.pose();
         }
         ++result.colliding_poses;
       }
@@ -823,11 +841,18 @@ inline bool write_navigate_artifacts(
        << "colliding_poses " << result.colliding_poses << '\n'
        << "outcome " << outcome_name(result.outcome) << '\n'
        << "obstacle_fraction " << config.obstacle_fraction << '\n';
+  if (result.colliding_poses > 0) {
+    meta << "first_colliding_x " << result.first_colliding_pose.position.x() << '\n'
+         << "first_colliding_y " << result.first_colliding_pose.position.y() << '\n'
+         << "first_colliding_yaw " << result.first_colliding_pose.yaw << '\n';
+  }
+  if (std::isfinite(result.stop_clearance)) {
+    meta << "stop_clearance " << result.stop_clearance << '\n';
+  }
   if (result.obstacle_centre.has_value()) {
     meta << "obstacle_x " << result.obstacle_centre->x() << '\n'
          << "obstacle_y " << result.obstacle_centre->y() << '\n'
          << "obstacle_half_width " << result.obstacle_half_width << '\n'
-         << "stop_clearance " << result.stop_clearance << '\n'
          << "stop_obstacle_clearance " << result.stop_obstacle_clearance << '\n';
   }
   return static_cast<bool>(meta);
