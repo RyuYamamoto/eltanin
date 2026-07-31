@@ -44,7 +44,7 @@ using eltanin_examples::Outcome;
 using eltanin_examples::RobotModel;
 using eltanin_examples::Sample;
 
-/// Half width that engulfs the automatic start, so the run stalls before it ever moves [cells].
+/// Half width that engulfs the automatic start, so no replan can get the robot moving [cells].
 constexpr int BLOCKING_HALF_WIDTH_CELLS = 20;
 
 /// Fraction that puts that block over the start rather than ahead of it.
@@ -93,10 +93,10 @@ bool same_sample(const Sample & lhs, const Sample & rhs)
 {
   return lhs.leg == rhs.leg && lhs.t == rhs.t && lhs.pose.position == rhs.pose.position &&
          lhs.pose.yaw == rhs.pose.yaw && lhs.requested.linear == rhs.requested.linear &&
-         lhs.requested.angular == rhs.requested.angular && lhs.limited.linear == rhs.limited.linear
-         && lhs.limited.angular == rhs.limited.angular &&
-         lhs.collision_distance == rhs.collision_distance && lhs.has_collision == rhs.has_collision
-         && lhs.predicted_count == rhs.predicted_count;
+         lhs.requested.angular == rhs.requested.angular &&
+         lhs.limited.linear == rhs.limited.linear && lhs.limited.angular == rhs.limited.angular &&
+         lhs.collision_distance == rhs.collision_distance &&
+         lhs.has_collision == rhs.has_collision && lhs.predicted_count == rhs.predicted_count;
 }
 
 /// Loads the reference map once: at -O0 with sanitizers the load plus inflation costs seconds.
@@ -182,19 +182,18 @@ TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
   EXPECT_GE(result.stop_clearance, config.limiter.collision_margin);
 }
 
-TEST_F(NavigateOnRealMap, WritesTheDocumentedArtifacts)
+TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
   }
   NavigateConfig config;
   config.obstacle_fraction = 0.0;
-  const std::filesystem::path directory = output_dir("navigate_artifacts");
+  const std::filesystem::path directory = output_dir("navigate_outputs");
 
   const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
   ASSERT_EQ(result.outcome, Outcome::Reached) << result.message;
-  ASSERT_TRUE(
-    eltanin_examples::write_navigate_artifacts(directory, config, robot(), result));
+  ASSERT_TRUE(eltanin_examples::write_output_files(directory, config, robot(), result));
 
   for (const char * name :
        {"costmap.pgm", "traversed.pgm", "path.csv", "trajectory.csv", "obstacles.csv",
@@ -208,10 +207,8 @@ TEST_F(NavigateOnRealMap, WritesTheDocumentedArtifacts)
     "t,leg,x,y,yaw,v_in,w_in,v_out,w_out,collision_distance,has_collision,predicted_poses");
   EXPECT_EQ(first_line(directory / "obstacles.csv"), "t,x,y");
 
-  const eltanin::map_io::PgmImage costmap =
-    eltanin::map_io::read_pgm(directory / "costmap.pgm");
-  const eltanin::map_io::PgmImage traversed =
-    eltanin::map_io::read_pgm(directory / "traversed.pgm");
+  const eltanin::map_io::PgmImage costmap = eltanin::map_io::read_pgm(directory / "costmap.pgm");
+  const eltanin::map_io::PgmImage traversed = eltanin::map_io::read_pgm(directory / "traversed.pgm");
   EXPECT_EQ(costmap.width, traversed.width);
   EXPECT_EQ(costmap.height, traversed.height);
 
@@ -247,12 +244,12 @@ TEST_F(NavigateOnRealMap, IsDeterministic)
   for (std::size_t i = 0; i < first.samples.size(); ++i) {
     EXPECT_TRUE(same_sample(first.samples[i], second.samples[i])) << "cycle " << i << " differs";
   }
-  ASSERT_TRUE(eltanin_examples::write_navigate_artifacts(first_dir, config, robot(), first));
-  ASSERT_TRUE(eltanin_examples::write_navigate_artifacts(second_dir, config, robot(), second));
+  ASSERT_TRUE(eltanin_examples::write_output_files(first_dir, config, robot(), first));
+  ASSERT_TRUE(eltanin_examples::write_output_files(second_dir, config, robot(), second));
   EXPECT_EQ(read_file(first_dir / "trajectory.csv"), read_file(second_dir / "trajectory.csv"));
 }
 
-TEST_F(NavigateOnRealMap, ReportsAStallInsteadOfSpinning)
+TEST_F(NavigateOnRealMap, ReportsAStallWhenReplanningDoesNotHelp)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -266,8 +263,7 @@ TEST_F(NavigateOnRealMap, ReportsAStallInsteadOfSpinning)
   EXPECT_TRUE(result.outcome == Outcome::Stalled || result.outcome == Outcome::ReplanFailed)
     << eltanin_examples::outcome_name(result.outcome) << ": " << result.message;
   EXPECT_FALSE(result.message.empty());
-  const std::size_t max_steps =
-    static_cast<std::size_t>(config.max_sim_time / config.control_dt);
+  const std::size_t max_steps = static_cast<std::size_t>(config.max_sim_time / config.control_dt);
   EXPECT_LT(result.samples.size(), max_steps);
 }
 
@@ -285,8 +281,8 @@ TEST(NavigationLoop, ReportsAFailedPlanOnASplitMap)
 
   NavigateConfig config;
   config.local_window_size = static_cast<double>(CELLS) * RESOLUTION / 2.0;
-  config.start_goal = std::pair{Pose2D{Eigen::Vector2d{1.0, 4.0}, 0.0},
-                               Pose2D{Eigen::Vector2d{7.0, 4.0}, 0.0}};
+  config.start_goal = std::pair{
+    Pose2D{Eigen::Vector2d{1.0, 4.0}, 0.0}, Pose2D{Eigen::Vector2d{7.0, 4.0}, 0.0}};
 
   const NavigateResult result = eltanin_examples::navigate(split, *robot, config);
 

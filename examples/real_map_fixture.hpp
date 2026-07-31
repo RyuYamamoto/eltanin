@@ -39,7 +39,7 @@
 namespace eltanin_examples
 {
 
-/// Same robot as test/planner/test_planner_real_map.cpp, so the artifacts stay comparable.
+/// Same robot as test/planner/test_planner_real_map.cpp, so the numbers stay comparable.
 inline constexpr double INFLATION_RADIUS = 0.55;
 inline constexpr double COST_SCALING_FACTOR = 10.0;
 
@@ -56,7 +56,7 @@ inline eltanin::Polygon2D robot_footprint()
     Eigen::Vector2d{0.22, -0.15}};
 }
 
-/// Everything the footprint implies, with no map attached; the same robot on any map.
+/// The footprint-derived models; the same robot on any map.
 struct RobotModel
 {
   eltanin::map::InflationCostModel inflation;
@@ -89,7 +89,7 @@ inline std::optional<RobotModel> make_robot_model()
     eltanin::map::CostTraversabilityModel(inflation->circumscribed_cost(), false)};
 }
 
-/// Loads the YAML map without inflating it, which is what a StaticLayer wants.
+/// Loads the YAML map and leaves it uninflated, as a StaticLayer expects.
 inline std::optional<eltanin::map::Costmap> load_raw_map(const std::filesystem::path & yaml)
 {
   try {

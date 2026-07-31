@@ -54,7 +54,7 @@
 namespace eltanin_examples
 {
 
-/// Every knob of the closed loop, so that the pipeline itself holds no magic number.
+/// Every knob of the closed loop, so that the loop itself holds no magic number.
 struct NavigateConfig
 {
   /// Control period [s]; docs/control-design.md §5 measures the same tracking quality as 0.01.
@@ -83,7 +83,6 @@ struct NavigateConfig
   double obstacle_fraction{0.5};
   /// Half width of that obstacle [cells]; 4 gives a 9 x 9 cell = 0.45 m square.
   int obstacle_half_width_cells{4};
-  /// Check every traversed pose against the ground truth.
   bool verify_traversed{true};
   /// nullopt picks the start and the goal from the map, so no map coordinate is hard coded.
   std::optional<std::pair<eltanin::Pose2D, eltanin::Pose2D>> start_goal{};
@@ -95,7 +94,7 @@ struct NavigateConfig
 /// Extra distance searched around the robot when measuring the clearance at a stop [m].
 inline constexpr double CLEARANCE_SEARCH_MARGIN = 1.0;
 
-/// Why the run ended. Everything but Reached is a failure that names the stage it happened in.
+/// Why the run ended; every value but Reached names the stage that failed.
 enum class Outcome
 {
   Reached,
@@ -198,7 +197,7 @@ struct NavigateResult
   double obstacle_half_width{0.0};
   /// Footprint distance to the nearest lethal cell over the stopped cycles [m].
   double stop_clearance{std::numeric_limits<double>::infinity()};
-  /// Same, restricted to the injected obstacle, which is what the robot actually stopped for [m].
+  /// Same, restricted to the injected obstacle the robot stopped for [m].
   double stop_obstacle_clearance{std::numeric_limits<double>::infinity()};
   /// Belief costmap as it stood at the end of the run; its geometry is the static map's.
   eltanin::map::Costmap global_costmap;
@@ -341,7 +340,7 @@ inline double footprint_clearance(
   return clearance;
 }
 
-/// The same measurement over every lethal cell that could possibly be the closest one.
+/// Same, over every lethal cell within `reach` of `position`.
 inline double footprint_clearance_around(
   const eltanin::map::Costmap & truth, const eltanin::Polygon2D & world_footprint,
   const Eigen::Vector2d & position, double reach)
@@ -495,7 +494,7 @@ inline NavigateResult navigate(
   Costmap ground_truth = static_map;
   const std::optional<detail::StampedObstacle> obstacle = detail::stamp_obstacle(
     ground_truth, *path, config.obstacle_fraction, config.obstacle_half_width_cells);
-  // Inflating the truth as well is what lets check_footprint run its exact stage at all.
+  // The truth is inflated too, or check_footprint would never reach its exact stage.
   InflationLayer(robot.inflation, false).update_costs(ground_truth);
   if (obstacle.has_value()) {
     result.obstacle_centre = obstacle->centre;
@@ -523,9 +522,9 @@ inline NavigateResult navigate(
   const eltanin::sensor::ScanFilter filter{};
   std::vector<Eigen::Vector2d> points;
 
-  std::vector<Eigen::Vector2d> accumulated;
-  std::unordered_set<std::size_t> accumulated_cells;
-  std::size_t accumulated_at_last_update = 0;
+  std::vector<Eigen::Vector2d> observed_points;
+  std::unordered_set<std::size_t> observed_cells;
+  std::size_t observed_at_last_update = 0;
 
   result.leg_paths.push_back(*path);
   result.legs.push_back(detail::leg_stats_for(*path));
@@ -554,9 +553,9 @@ inline NavigateResult navigate(
         if (!cell.has_value() || static_map(cell->x, cell->y) == eltanin::map::LETHAL_OBSTACLE) {
           continue;
         }
-        if (accumulated_cells.insert(static_geometry.index(cell->x, cell->y)).second) {
+        if (observed_cells.insert(static_geometry.index(cell->x, cell->y)).second) {
           const Eigen::Vector2d centre = static_geometry.map_to_world(cell->x, cell->y);
-          accumulated.push_back(centre);
+          observed_points.push_back(centre);
           result.observations.push_back(Observation{t, centre});
         }
       }
@@ -618,10 +617,10 @@ inline NavigateResult navigate(
                          " was reached at " + detail::pose_text(plant.pose());
         break;
       }
-      global_obstacles.set_points(accumulated);
+      global_obstacles.set_points(observed_points);
       global.update();
       ++result.global_updates;
-      accumulated_at_last_update = accumulated.size();
+      observed_at_last_update = observed_points.size();
       std::optional<eltanin::Path> replanned =
         detail::plan_leg(global.costmap(), robot, plant.pose(), goal);
       if (!replanned.has_value()) {
@@ -680,8 +679,8 @@ inline NavigateResult navigate(
   }
 
   // The master is only regenerated when replanning, so the dump would otherwise miss late points.
-  if (accumulated.size() > accumulated_at_last_update) {
-    global_obstacles.set_points(accumulated);
+  if (observed_points.size() > observed_at_last_update) {
+    global_obstacles.set_points(observed_points);
     global.update();
     ++result.global_updates;
   }
@@ -727,7 +726,7 @@ inline bool write_trajectory_csv(
   return static_cast<bool>(out);
 }
 
-/// Cells the robot found occupied but the static map calls free, in discovery order.
+/// The observations, in discovery order.
 inline bool write_obstacles_csv(
   const std::filesystem::path & file, const std::vector<Observation> & observations)
 {
@@ -743,7 +742,7 @@ inline bool write_obstacles_csv(
 }
 
 /// Writes costmap.pgm, traversed.pgm, path.csv, trajectory.csv, obstacles.csv and meta.txt.
-inline bool write_navigate_artifacts(
+inline bool write_output_files(
   const std::filesystem::path & directory, const NavigateConfig & config, const RobotModel & robot,
   const NavigateResult & result)
 {

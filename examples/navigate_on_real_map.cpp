@@ -67,7 +67,7 @@ struct Arguments
 };
 
 /// True when `count` more arguments follow the option at `index`.
-bool needs_values(int argc, int index, int count) { return index + count < argc; }
+bool has_values(int argc, int index, int count) { return index + count < argc; }
 
 /// nullopt when the command line is unusable; the caller then prints the usage.
 std::optional<Arguments> parse(int argc, char ** argv)
@@ -84,21 +84,21 @@ std::optional<Arguments> parse(int argc, char ** argv)
   try {
     for (int i = 2; i < argc; ++i) {
       const std::string option = argv[i];
-      if (option == "--map" && needs_values(argc, i, 1)) {
+      if (option == "--map" && has_values(argc, i, 1)) {
         arguments.map = argv[++i];
-      } else if (option == "--start" && needs_values(argc, i, 2)) {
+      } else if (option == "--start" && has_values(argc, i, 2)) {
         start = Pose2D{Eigen::Vector2d{std::stod(argv[i + 1]), std::stod(argv[i + 2])}, 0.0};
         i += 2;
-      } else if (option == "--goal" && needs_values(argc, i, 2)) {
+      } else if (option == "--goal" && has_values(argc, i, 2)) {
         goal = Pose2D{Eigen::Vector2d{std::stod(argv[i + 1]), std::stod(argv[i + 2])}, 0.0};
         i += 2;
-      } else if (option == "--obstacle-fraction" && needs_values(argc, i, 1)) {
+      } else if (option == "--obstacle-fraction" && has_values(argc, i, 1)) {
         arguments.config.obstacle_fraction = std::stod(argv[++i]);
-      } else if (option == "--obstacle-half-width" && needs_values(argc, i, 1)) {
+      } else if (option == "--obstacle-half-width" && has_values(argc, i, 1)) {
         arguments.config.obstacle_half_width_cells = std::stoi(argv[++i]);
-      } else if (option == "--dt" && needs_values(argc, i, 1)) {
+      } else if (option == "--dt" && has_values(argc, i, 1)) {
         arguments.config.control_dt = std::stod(argv[++i]);
-      } else if (option == "--sensor-decimation" && needs_values(argc, i, 1)) {
+      } else if (option == "--sensor-decimation" && has_values(argc, i, 1)) {
         arguments.config.sensor_decimation = std::stoi(argv[++i]);
       } else {
         return std::nullopt;
@@ -184,7 +184,7 @@ int main(int argc, char ** argv)
     eltanin_examples::navigate(*static_map, *robot, arguments->config);
   print_summary(arguments->map, *static_map, arguments->config, result);
 
-  if (!eltanin_examples::write_navigate_artifacts(
+  if (!eltanin_examples::write_output_files(
         arguments->output_dir, arguments->config, *robot, result)) {
     return EXIT_FAILURE;
   }
