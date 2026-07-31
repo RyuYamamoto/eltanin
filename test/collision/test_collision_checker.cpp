@@ -28,8 +28,10 @@ using eltanin::Polygon2D;
 using eltanin::Pose2D;
 using eltanin::Traversability;
 using eltanin::collision::check_footprint;
+using eltanin::collision::check_footprint_exact;
 using eltanin::collision::CollisionCheck;
 using eltanin::collision::detail::classify_first_stage;
+using eltanin::collision::detail::classify_first_stage_exact;
 using eltanin::collision::detail::FirstStage;
 using eltanin_test::boundary_footprint;
 using eltanin_test::boundary_scenario;
@@ -38,6 +40,8 @@ using eltanin_test::free_scenario;
 using eltanin_test::reversed_footprint;
 using eltanin_test::CollisionScenario;
 using eltanin_test::single_obstacle_scenario;
+using eltanin_test::uninflated_scenario;
+using eltanin_test::wall_scenario;
 using Eigen::Vector2d;
 
 constexpr double kPi = std::numbers::pi;
@@ -59,6 +63,44 @@ Traversability centre_classification(const CollisionScenario & scenario, int mx,
   return scenario.model.classify(scenario.map(mx, my));
 }
 
+/// Sub-cell displacements in units of the resolution; 0.0 reproduces the on-centre poses.
+constexpr double SUBCELL_OFFSETS[] = {-0.4, -0.2, 0.0, 0.2, 0.4};
+
+/// Sweeps cells, sub-cell offsets and headings, returning how many collisions the exact check adds.
+int count_collisions_added_by_the_exact_check(
+  const CollisionScenario & scenario, const Polygon2D & footprint)
+{
+  const eltanin::map::MapGeometry & geometry = scenario.map.geometry();
+  const double resolution = geometry.resolution();
+  int added = 0;
+  for (int my = 0; my < geometry.size_y(); ++my) {
+    for (int mx = 0; mx < geometry.size_x(); ++mx) {
+      const Vector2d centre = geometry.map_to_world(mx, my);
+      for (const double offset_y : SUBCELL_OFFSETS) {
+        for (const double offset_x : SUBCELL_OFFSETS) {
+          for (const double yaw : EIGHT_HEADINGS) {
+            const Pose2D pose{
+              centre + Vector2d{resolution * offset_x, resolution * offset_y}, yaw};
+            const CollisionCheck two_stage =
+              check_footprint(scenario.map, scenario.model, footprint, pose);
+            const CollisionCheck exact =
+              check_footprint_exact(scenario.map, scenario.model, footprint, pose);
+            if (two_stage == CollisionCheck::Collision) {
+              EXPECT_EQ(exact, CollisionCheck::Collision) << "pose " << pose.position.transpose();
+            }
+            EXPECT_EQ(two_stage == CollisionCheck::OutsideMap, exact == CollisionCheck::OutsideMap)
+              << "pose " << pose.position.transpose();
+            if (two_stage == CollisionCheck::Free && exact == CollisionCheck::Collision) {
+              ++added;
+            }
+          }
+        }
+      }
+    }
+  }
+  return added;
+}
+
 }  // namespace
 
 TEST(FirstStage, EncodesTheTwoStagePolicy)
@@ -66,6 +108,14 @@ TEST(FirstStage, EncodesTheTwoStagePolicy)
   EXPECT_EQ(classify_first_stage(Traversability::Free), FirstStage::NoCollision);
   EXPECT_EQ(classify_first_stage(Traversability::Inscribed), FirstStage::Collision);
   EXPECT_EQ(classify_first_stage(Traversability::Circumscribed), FirstStage::NeedsExactCheck);
+}
+
+TEST(FirstStage, TheExactPolicyNeverDeniesACollision)
+{
+  EXPECT_EQ(classify_first_stage_exact(Traversability::Free), FirstStage::NeedsExactCheck);
+  EXPECT_EQ(classify_first_stage_exact(Traversability::Inscribed), FirstStage::Collision);
+  EXPECT_EQ(
+    classify_first_stage_exact(Traversability::Circumscribed), FirstStage::NeedsExactCheck);
 }
 
 TEST(CollisionChecker, ReportsOutsideMapForAPoseOffTheMap)
@@ -198,6 +248,83 @@ TEST(CollisionChecker, IsIndependentOfTheFootprintVertexOrder)
   EXPECT_EQ(
     check_footprint(boundary.map, boundary.model, boundary_footprint(), pose),
     check_footprint(boundary.map, boundary.model, reversed_footprint(boundary_footprint()), pose));
+}
+
+TEST(CollisionCheckerExact, CatchesTheFootprintOverlapTheFreeGateMissesOnARawMap)
+{
+  const CollisionScenario scenario = uninflated_scenario(5, 0);
+  const Pose2D pose = pose_at_cell(11, 11, 0.05, 0.0);
+  ASSERT_EQ(centre_classification(scenario, 11, 11), Traversability::Free);
+
+  // The lethal centre (0.825, 0.575) sits inside the 0.6 m square spanning x = [0.275, 0.875].
+  EXPECT_EQ(
+    check_footprint(scenario.map, scenario.model, default_footprint(), pose), CollisionCheck::Free);
+  EXPECT_EQ(
+    check_footprint_exact(scenario.map, scenario.model, default_footprint(), pose),
+    CollisionCheck::Collision);
+}
+
+TEST(CollisionCheckerExact, ReportsOutsideMapExactlyLikeTheTwoStageCheck)
+{
+  const CollisionScenario scenario = uninflated_scenario(-11, 0);
+  // The origin is off the map while the footprint still covers the lethal cell (0, 11).
+  const Pose2D outside{Vector2d{-0.01, 0.575}, 0.0};
+
+  EXPECT_EQ(
+    check_footprint_exact(scenario.map, scenario.model, default_footprint(), outside),
+    CollisionCheck::OutsideMap);
+  EXPECT_EQ(
+    check_footprint(scenario.map, scenario.model, default_footprint(), outside),
+    check_footprint_exact(scenario.map, scenario.model, default_footprint(), outside));
+
+  const Pose2D far_away{Vector2d{5.0, 5.0}, 0.0};
+  EXPECT_EQ(
+    check_footprint_exact(scenario.map, scenario.model, default_footprint(), far_away),
+    CollisionCheck::OutsideMap);
+}
+
+TEST(CollisionCheckerExact, KeepsTheInscribedShortCircuit)
+{
+  const CollisionScenario scenario = uninflated_scenario(0, 0);
+  ASSERT_EQ(centre_classification(scenario, 11, 11), Traversability::Inscribed);
+
+  for (const double yaw : EIGHT_HEADINGS) {
+    EXPECT_EQ(
+      check_footprint_exact(
+        scenario.map, scenario.model, default_footprint(), pose_at_cell(11, 11, 0.05, yaw)),
+      CollisionCheck::Collision)
+      << "yaw = " << yaw;
+  }
+}
+
+TEST(CollisionCheckerExact, StillDependsOnTheHeadingInTheCircumscribedBand)
+{
+  const CollisionScenario scenario = single_obstacle_scenario(5, 5);
+  ASSERT_EQ(centre_classification(scenario, 11, 11), Traversability::Circumscribed);
+
+  EXPECT_EQ(
+    check_footprint_exact(
+      scenario.map, scenario.model, default_footprint(), pose_at_cell(11, 11, 0.05, 0.0)),
+    CollisionCheck::Collision);
+  EXPECT_EQ(
+    check_footprint_exact(
+      scenario.map, scenario.model, default_footprint(), pose_at_cell(11, 11, 0.05, kPi / 4.0)),
+    CollisionCheck::Free);
+}
+
+TEST(CollisionCheckerExact, IsAConservativeSupersetOfTheTwoStageCheck)
+{
+  // Inflated at 0.05 m the residue band of docs/collision-design.md 2.4 is thinner than this grid.
+  EXPECT_EQ(count_collisions_added_by_the_exact_check(wall_scenario(true), default_footprint()), 0);
+  EXPECT_EQ(
+    count_collisions_added_by_the_exact_check(single_obstacle_scenario(5, 5), default_footprint()),
+    0);
+
+  // The 0.25 m cells widen that band, and without inflation the Free gate misses outright.
+  EXPECT_GT(
+    count_collisions_added_by_the_exact_check(boundary_scenario(2, 2), boundary_footprint()), 0);
+  EXPECT_GT(
+    count_collisions_added_by_the_exact_check(uninflated_scenario(5, 0), default_footprint()), 0);
 }
 
 TEST(CellsCovering, ReturnsTheClampedRectangleOfTheFootprint)

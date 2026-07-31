@@ -49,6 +49,9 @@ enum class FirstStage
 /// Maps the centre-cell classification onto the two-stage policy of docs/collision-design.md.
 FirstStage classify_first_stage(Traversability classification) noexcept;
 
+/// Same policy without the Free short-circuit; the centre cell can only confirm a collision.
+FirstStage classify_first_stage_exact(Traversability classification) noexcept;
+
 }  // namespace detail
 
 /// Clamped cell rectangle that can hold a centre inside the polygon; nullopt when it misses the map.
@@ -88,7 +91,30 @@ bool contains_occupied_cell(const Map & map, const Model & model, const Polygon2
   return false;
 }
 
-/// Two-stage check; the cheap classification of the centre cell gates the oriented polygon test.
+namespace detail
+{
+
+/// Shared tail of both entry points; stage already encodes the first-stage policy that was applied.
+template <map::CellMap Map, class Model>
+  requires ObstacleModel<Model, typename Map::value_type>
+CollisionCheck resolve_footprint_check(
+  const Map & map, const Model & model, const Polygon2D & footprint, const Pose2D & pose,
+  FirstStage stage)
+{
+  if (stage == FirstStage::NoCollision) {
+    return CollisionCheck::Free;
+  }
+  if (stage == FirstStage::Collision) {
+    return CollisionCheck::Collision;
+  }
+  return contains_occupied_cell(map, model, transform(footprint, pose))
+           ? CollisionCheck::Collision
+           : CollisionCheck::Free;
+}
+
+}  // namespace detail
+
+/// Two-stage check whose Free short-circuit assumes the map is inflated by this footprint's radii.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type> &&
            ObstacleModel<Model, typename Map::value_type>
@@ -99,18 +125,25 @@ CollisionCheck check_footprint(
   if (!centre.has_value()) {
     return CollisionCheck::OutsideMap;
   }
+  return detail::resolve_footprint_check(
+    map, model, footprint, pose,
+    detail::classify_first_stage(model.classify(map(centre->x, centre->y))));
+}
 
-  const detail::FirstStage stage =
-    detail::classify_first_stage(model.classify(map(centre->x, centre->y)));
-  if (stage == detail::FirstStage::NoCollision) {
-    return CollisionCheck::Free;
+/// Exact variant for maps without inflation; the centre cell can confirm a collision, never deny it.
+template <map::CellMap Map, class Model>
+  requires TraversabilityModel<Model, typename Map::value_type> &&
+           ObstacleModel<Model, typename Map::value_type>
+CollisionCheck check_footprint_exact(
+  const Map & map, const Model & model, const Polygon2D & footprint, const Pose2D & pose)
+{
+  const std::optional<map::MapIndex> centre = map.geometry().world_to_map(pose.position);
+  if (!centre.has_value()) {
+    return CollisionCheck::OutsideMap;
   }
-  if (stage == detail::FirstStage::Collision) {
-    return CollisionCheck::Collision;
-  }
-  return contains_occupied_cell(map, model, transform(footprint, pose))
-           ? CollisionCheck::Collision
-           : CollisionCheck::Free;
+  return detail::resolve_footprint_check(
+    map, model, footprint, pose,
+    detail::classify_first_stage_exact(model.classify(map(centre->x, centre->y))));
 }
 
 /// Footprint against a point set such as a projected scan; there is no map and so no OutsideMap.

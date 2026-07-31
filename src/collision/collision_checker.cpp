@@ -33,6 +33,13 @@ FirstStage classify_first_stage(Traversability classification) noexcept
   return FirstStage::NeedsExactCheck;
 }
 
+FirstStage classify_first_stage_exact(Traversability classification) noexcept
+{
+  return classify_first_stage(classification) == FirstStage::Collision
+           ? FirstStage::Collision
+           : FirstStage::NeedsExactCheck;
+}
+
 }  // namespace detail
 
 std::optional<map::CellRect> cells_covering(

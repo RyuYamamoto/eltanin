@@ -109,6 +109,16 @@ inline CollisionScenario single_obstacle_scenario(int offset_x, int offset_y)
   return inflate_into_scenario(std::move(map), inflation);
 }
 
+/// F-E: same geometry as F-B but with no inflation at all, the shape collision_predictor sees.
+inline CollisionScenario uninflated_scenario(int offset_x, int offset_y)
+{
+  eltanin::map::Costmap map(
+    eltanin::map::MapGeometry(24, 24, 0.05, Eigen::Vector2d::Zero()), eltanin::map::FREE_SPACE);
+  map(11 + offset_x, 11 + offset_y) = eltanin::map::LETHAL_OBSTACLE;
+  // Any threshold in (FREE_SPACE, INSCRIBED_INFLATED_OBSTACLE] classifies the three values alike.
+  return CollisionScenario{std::move(map), eltanin::map::CostTraversabilityModel(1)};
+}
+
 /// F-C: 0.25 m cells so that every cell centre 0.125 + 0.25 * i is exact in binary.
 inline eltanin::Polygon2D boundary_footprint()
 {
