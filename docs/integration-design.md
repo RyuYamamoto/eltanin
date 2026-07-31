@@ -1,11 +1,11 @@
-# 統合デモの設計 (`examples/navigate_demo` / `test/integration`)
+# 統合デモの設計 (`examples/navigate_on_real_map` / `test/integration`)
 
 ROS を一切使わずに `map_io` から `sim` までを 1 プロセスの閉ループとして回す統合デモと、その回帰テスト
 の設計記録。**ライブラリ (`include/` / `src/`) には 1 バイトも足していない。** 既存 API のまま全系が
 回ることを示すのが目的だからである。
 
-- 実装: `examples/navigate_pipeline.hpp` (パイプライン本体)、`examples/navigate_demo.cpp` (CLI)、
-  `test/integration/test_navigate_demo.cpp` (回帰テスト)
+- 実装: `examples/navigation_loop.hpp` (パイプライン本体)、`examples/navigate_on_real_map.cpp` (CLI)、
+  `test/integration/test_navigate_on_real_map.cpp` (回帰テスト)
 - 前提: `docs/costmap-design.md` (レイヤ機構)、`docs/sensor-design.md` (`project_scan` の契約)、
   `docs/planner-design.md`、`docs/control-design.md`、`docs/collision-design.md`
 
@@ -28,7 +28,7 @@ plant」を回している。統合デモが加えるのは次の 5 点である
 
 ## 2. パイプラインをヘッダオンリーの共有ヘッダに置いた理由
 
-`navigate()` は `examples/navigate_pipeline.hpp` の `inline` 関数で、CLI (`examples/`) と gtest
+`navigate()` は `examples/navigation_loop.hpp` の `inline` 関数で、CLI (`examples/`) と gtest
 (`test/integration/`) が同じ実体を呼ぶ。テストから example のバイナリを `add_test` で起動する案は
 採らなかった。
 
@@ -104,7 +104,7 @@ origin = o0 + k * res
 
 これでローカルのセル中心は `o0 + (k + mx + 0.5) * res` となり、静的地図側の
 `floor((w - o0)/res) = k + mx` が厳密に成り立つ (0.5 は整数境界から最も遠いので丸め差でずれない)。
-`StaticLayer` の再標本化が 1:1 になることを `NavigateWindow.SnapsTheLocalWindowOntoTheStaticGrid` が
+`StaticLayer` の再標本化が 1:1 になることを `NavigationLoopWindow.SnapsTheLocalWindowOntoTheStaticGrid` が
 固定している (実地図を必要としないので常に走る)。クランプが効いた周期数は `window_clamped_cycles`
 として出力する。
 

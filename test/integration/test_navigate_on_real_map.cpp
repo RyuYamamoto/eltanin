@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include <navigate_pipeline.hpp>
+#include <navigation_loop.hpp>
 
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
@@ -100,7 +100,7 @@ bool same_sample(const Sample & lhs, const Sample & rhs)
 }
 
 /// Loads the reference map once: at -O0 with sanitizers the load plus inflation costs seconds.
-class NavigateDemo : public ::testing::Test
+class NavigateOnRealMap : public ::testing::Test
 {
 protected:
   static void SetUpTestSuite()
@@ -128,12 +128,12 @@ protected:
   static std::optional<RobotModel> robot_;
 };
 
-std::optional<Costmap> NavigateDemo::static_map_;
-std::optional<RobotModel> NavigateDemo::robot_;
+std::optional<Costmap> NavigateOnRealMap::static_map_;
+std::optional<RobotModel> NavigateOnRealMap::robot_;
 
 }  // namespace
 
-TEST_F(NavigateDemo, ReachesTheGoalOnTheCleanMap)
+TEST_F(NavigateOnRealMap, ReachesTheGoalOnTheCleanMap)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -153,7 +153,7 @@ TEST_F(NavigateDemo, ReachesTheGoalOnTheCleanMap)
   EXPECT_FALSE(result.samples.empty());
 }
 
-TEST_F(NavigateDemo, StopsForAnUnknownObstacleThenReplansToTheGoal)
+TEST_F(NavigateOnRealMap, StopsForAnUnknownObstacleThenReplansToTheGoal)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -182,7 +182,7 @@ TEST_F(NavigateDemo, StopsForAnUnknownObstacleThenReplansToTheGoal)
   EXPECT_GE(result.stop_clearance, config.limiter.collision_margin);
 }
 
-TEST_F(NavigateDemo, WritesTheDocumentedArtifacts)
+TEST_F(NavigateOnRealMap, WritesTheDocumentedArtifacts)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -227,7 +227,7 @@ TEST_F(NavigateDemo, WritesTheDocumentedArtifacts)
   }
 }
 
-TEST_F(NavigateDemo, IsDeterministic)
+TEST_F(NavigateOnRealMap, IsDeterministic)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -252,7 +252,7 @@ TEST_F(NavigateDemo, IsDeterministic)
   EXPECT_EQ(read_file(first_dir / "trajectory.csv"), read_file(second_dir / "trajectory.csv"));
 }
 
-TEST_F(NavigateDemo, ReportsAStallInsteadOfSpinning)
+TEST_F(NavigateOnRealMap, ReportsAStallInsteadOfSpinning)
 {
   if (!map_available()) {
     GTEST_SKIP() << "reference map not available at " << map_yaml();
@@ -272,7 +272,7 @@ TEST_F(NavigateDemo, ReportsAStallInsteadOfSpinning)
 }
 
 /// An unreachable goal has to be reported with the failing stage, not run to the cycle limit.
-TEST(NavigatePipeline, ReportsAFailedPlanOnASplitMap)
+TEST(NavigationLoop, ReportsAFailedPlanOnASplitMap)
 {
   constexpr int CELLS = 160;
   constexpr double RESOLUTION = 0.05;
@@ -296,7 +296,7 @@ TEST(NavigatePipeline, ReportsAFailedPlanOnASplitMap)
 }
 
 /// The window origin has to land on the static grid, or StaticLayer resamples a shifted map.
-TEST(NavigateWindow, SnapsTheLocalWindowOntoTheStaticGrid)
+TEST(NavigationLoopWindow, SnapsTheLocalWindowOntoTheStaticGrid)
 {
   constexpr int STATIC_CELLS = 40;
   constexpr int WINDOW_CELLS = 8;
@@ -337,7 +337,7 @@ TEST(NavigateWindow, SnapsTheLocalWindowOntoTheStaticGrid)
 }
 
 /// Clamping keeps the window inside the static map even when the robot sits near an edge.
-TEST(NavigateWindow, ClampsTheWindowToTheStaticMap)
+TEST(NavigationLoopWindow, ClampsTheWindowToTheStaticMap)
 {
   constexpr int STATIC_CELLS = 20;
   constexpr int WINDOW_CELLS = 8;

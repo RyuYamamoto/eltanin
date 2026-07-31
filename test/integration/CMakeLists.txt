@@ -1,4 +1,4 @@
-add_executable(eltanin_test_integration test_navigate_demo.cpp)
+add_executable(eltanin_test_integration test_navigate_on_real_map.cpp)
 
 target_link_libraries(eltanin_test_integration PRIVATE
   eltanin::map_io eltanin::map eltanin::sensor eltanin::planner

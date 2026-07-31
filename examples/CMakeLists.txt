@@ -24,11 +24,11 @@ target_link_libraries(eltanin_limit_on_real_map PRIVATE
 target_include_directories(eltanin_limit_on_real_map PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(eltanin_limit_on_real_map PRIVATE ${ELTANIN_WARNING_FLAGS})
 
-add_executable(eltanin_navigate_demo navigate_demo.cpp)
-target_link_libraries(eltanin_navigate_demo PRIVATE
+add_executable(eltanin_navigate_on_real_map navigate_on_real_map.cpp)
+target_link_libraries(eltanin_navigate_on_real_map PRIVATE
   eltanin::map_io eltanin::map eltanin::sensor eltanin::planner
   eltanin::control eltanin::collision eltanin::sim)
-target_include_directories(eltanin_navigate_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(eltanin_navigate_demo PRIVATE ${ELTANIN_WARNING_FLAGS})
-target_compile_definitions(eltanin_navigate_demo PRIVATE
+target_include_directories(eltanin_navigate_on_real_map PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(eltanin_navigate_on_real_map PRIVATE ${ELTANIN_WARNING_FLAGS})
+target_compile_definitions(eltanin_navigate_on_real_map PRIVATE
   ELTANIN_TEST_MAP_DIR="${ELTANIN_TEST_MAP_DIR}")

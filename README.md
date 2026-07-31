@@ -55,7 +55,7 @@ build; note that this disables those checks.
 | `ELTANIN_ENABLE_WERROR` | OFF | Add `-Werror` |
 | `ELTANIN_ENABLE_ASAN` | OFF | AddressSanitizer |
 | `ELTANIN_ENABLE_UBSAN` | OFF | UndefinedBehaviorSanitizer |
-| `ELTANIN_TEST_MAP_DIR` | navyu map directory | Directory holding `map.pgm` / `map.yaml` used by the real-map tests and as the default map of `eltanin_navigate_demo`; those tests are skipped when it is absent |
+| `ELTANIN_TEST_MAP_DIR` | navyu map directory | Directory holding `map.pgm` / `map.yaml` used by the real-map tests and as the default map of `eltanin_navigate_on_real_map`; those tests are skipped when it is absent |
 
 ### Sanitizer build
 
@@ -137,8 +137,8 @@ described in [docs/collision-design.md](docs/collision-design.md) §11.
 
 ## Running the whole stack without ROS
 
-`eltanin_navigate_demo` closes the loop over every module in a single process. No ROS node, no tf, no
-topic, no simulator process:
+`eltanin_navigate_on_real_map` closes the loop over every module in a single process. No ROS node, no
+tf, no topic, no simulator process:
 
 ```
 map_io::load_map
@@ -154,7 +154,7 @@ map_io::load_map
 ```bash
 cmake -B build -DELTANIN_BUILD_EXAMPLES=ON
 cmake --build build -j
-./build/examples/eltanin_navigate_demo out_dir
+./build/examples/eltanin_navigate_on_real_map out_dir
 ```
 
 The map defaults to `${ELTANIN_TEST_MAP_DIR}/map.yaml`, so the command above runs as it is; pass

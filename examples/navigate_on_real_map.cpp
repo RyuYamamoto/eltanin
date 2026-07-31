@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include <navigate_pipeline.hpp>
+#include <navigation_loop.hpp>
 
 #include <eltanin/map/grid_map.hpp>
 

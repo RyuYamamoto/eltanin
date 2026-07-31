@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#ifndef ELTANIN_EXAMPLES__NAVIGATE_PIPELINE_HPP_
-#define ELTANIN_EXAMPLES__NAVIGATE_PIPELINE_HPP_
+#ifndef ELTANIN_EXAMPLES__NAVIGATION_LOOP_HPP_
+#define ELTANIN_EXAMPLES__NAVIGATION_LOOP_HPP_
 
 #include <real_map_fixture.hpp>
 
@@ -860,4 +860,4 @@ inline bool write_navigate_artifacts(
 
 }  // namespace eltanin_examples
 
-#endif  // ELTANIN_EXAMPLES__NAVIGATE_PIPELINE_HPP_
+#endif  // ELTANIN_EXAMPLES__NAVIGATION_LOOP_HPP_
