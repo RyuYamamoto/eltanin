@@ -16,6 +16,11 @@ option(ELTANIN_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
 option(ELTANIN_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(ELTANIN_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
+# Defined outside ELTANIN_BUILD_TESTS so that examples/ can use it as its default map too.
+set(ELTANIN_TEST_MAP_DIR
+  "/home/pfr-ryu/workspace/eltanin_ws/src/navyu/navyu_navigation/map"
+  CACHE PATH "Directory containing map.pgm / map.yaml used by the real-map tests and the demo")
+
 # CMAKE_BUILD_TYPE is intentionally left empty by default so that NDEBUG is not
 # defined and the assert()-based precondition checks stay active. Pass
 # -DCMAKE_BUILD_TYPE=Release explicitly for optimized builds.
