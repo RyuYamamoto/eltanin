@@ -43,18 +43,19 @@ namespace detail
 /// Sets pose[i].yaw to the tangent towards pose[i+1] for i = 0..n-2; pose[n-1].yaw is left alone.
 void assign_tangent_yaw(Path & path);
 
-/// Preconditions on the smoother weights; the convergence bound is weight_data + 4 * ws < 2.
-void assert_smoother_params(const SmootherParams & params);
+/// Throws std::invalid_argument for invalid weights; convergence requires weight_data + 4 * ws < 2.
+void validate_smoother_params(const SmootherParams & params);
 
 }  // namespace detail
 
 /// Iterative smoothing with a per-point collision check; the two end points never move.
+/// Throws std::invalid_argument when params are invalid.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 Path smooth(
   const Path & path, const Map & map, const Model & model, const SmootherParams & params = {})
 {
-  detail::assert_smoother_params(params);
+  detail::validate_smoother_params(params);
   if (path.size() <= 1) {
     return path;
   }

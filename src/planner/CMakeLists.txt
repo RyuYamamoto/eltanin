@@ -1,5 +1,7 @@
 add_library(eltanin_planner STATIC
   astar_planner.cpp
+  dubins_path.cpp
+  hybrid_astar_planner.cpp
   path_smoother.cpp)
 add_library(eltanin::planner ALIAS eltanin_planner)
 

@@ -33,7 +33,7 @@ namespace eltanin::map
 class LayeredCostmap
 {
 public:
-  /// Precondition: geometry.cell_count() > 0 and geometry.resolution() > 0.
+  /// Throws std::invalid_argument unless geometry describes a usable map.
   LayeredCostmap(const MapGeometry & geometry, std::uint8_t default_cost);
 
   /// Layers are applied in registration order; the reference stays valid for this object's life.
@@ -55,10 +55,10 @@ public:
   const MapGeometry & geometry() const noexcept { return costmap_.geometry(); }
 
   /// Moves the window without shifting the cells; update() regenerates them anyway.
-  void set_origin(const Eigen::Vector2d & origin) noexcept;
+  void set_origin(const Eigen::Vector2d & origin);
 
   /// Places the robot at the centre of the window.
-  void center_on(const Eigen::Vector2d & robot_position) noexcept;
+  void center_on(const Eigen::Vector2d & robot_position);
 
 private:
   Costmap costmap_;

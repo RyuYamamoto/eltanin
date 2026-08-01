@@ -19,6 +19,7 @@
 
 #include <eltanin/collision/collision_checker.hpp>
 #include <eltanin/collision/velocity_limiter.hpp>
+#include <eltanin/control/goal_approach.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/geometry.hpp>
 #include <eltanin/core/path.hpp>
@@ -31,12 +32,12 @@
 #include <eltanin/map/layers/static_layer.hpp>
 #include <eltanin/map_io/pgm.hpp>
 #include <eltanin/planner/astar_planner.hpp>
+#include <eltanin/planner/hybrid_astar_planner.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/sensor/scan_projection.hpp>
 #include <eltanin/sim/simple_simulator.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -47,6 +48,7 @@
 #include <optional>
 #include <ostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -55,9 +57,22 @@
 namespace eltanin_examples
 {
 
+enum class PlannerType
+{
+  AStar,
+  HybridAStar
+};
+
+inline const char * planner_name(PlannerType planner) noexcept
+{
+  return planner == PlannerType::HybridAStar ? "hybrid_astar" : "astar";
+}
+
 /// Every knob of the closed loop, so that the loop itself holds no magic number.
 struct NavigateConfig
 {
+  PlannerType planner{PlannerType::AStar};
+  eltanin::planner::HybridAStarParams hybrid_astar{};
   /// Control period [s]; docs/control-design.md §5 measures the same tracking quality as 0.01.
   double control_dt{0.05};
   /// Cycles between two synthetic scans; 4 means 5 Hz at the default control period.
@@ -94,6 +109,7 @@ struct NavigateConfig
   /// Footprint aside, these are the limiter defaults docs/collision-design.md was measured with.
   eltanin::collision::VelocityLimiterParams limiter{.footprint = robot_footprint()};
   eltanin::control::PurePursuitParams tracker{};
+  eltanin::control::GoalApproachParams goal_approach{};
 };
 
 /// Extra distance searched around the robot when measuring the clearance at a stop [m].
@@ -405,16 +421,24 @@ inline double lateral_error(const eltanin::Path & path, const Eigen::Vector2d & 
   return minimum;
 }
 
-/// A* plus smoothing on the belief costmap; nullopt when the search found nothing.
+/// Plans one leg on the belief costmap; nullopt when the selected planner found nothing.
 inline std::optional<eltanin::Path> plan_leg(
   const eltanin::map::Costmap & belief, const RobotModel & robot, const eltanin::Pose2D & from,
-  const eltanin::Pose2D & to)
+  const eltanin::Pose2D & to, const NavigateConfig & config)
 {
-  const std::optional<eltanin::Path> raw = eltanin::planner::plan(belief, robot.model, from, to);
-  if (!raw.has_value()) {
+  const auto guide = eltanin::planner::plan(belief, robot.model, from, to);
+  if (!guide.has_value()) {
     return std::nullopt;
   }
-  return eltanin::planner::smooth(*raw, belief, robot.model);
+  if (config.planner == PlannerType::AStar) {
+    return eltanin::planner::smooth(*guide, belief, robot.model);
+  }
+
+  eltanin::map::MapIndex lower_left{0, 0};
+  const eltanin::map::Costmap corridor =
+    crop_around(belief, positions_of(*guide), lower_left);
+  return eltanin::planner::plan_hybrid_astar(
+    corridor, robot.model, from, to, config.hybrid_astar);
 }
 
 inline LegStats leg_stats_for(const eltanin::Path & path)
@@ -463,6 +487,7 @@ inline NavigateResult navigate(
   using eltanin::Pose2D;
   using eltanin::collision::CollisionCheck;
   using eltanin::collision::VelocityLimiter;
+  using eltanin::control::GoalApproach;
   using eltanin::control::PurePursuit;
   using eltanin::map::Costmap;
   using eltanin::map::InflationLayer;
@@ -472,21 +497,51 @@ inline NavigateResult navigate(
   using eltanin::map::ObstacleLayer;
   using eltanin::map::StaticLayer;
 
-  assert(config.control_dt > 0.0);
-  assert(config.sensor_decimation >= 1);
-  assert(config.lidar_beams >= 1);
-  assert(config.stop_cycles_to_replan >= 1);
-  assert(config.max_replans >= 0);
-
   NavigateResult result;
   const MapGeometry & static_geometry = static_map.geometry();
   const double resolution = static_geometry.resolution();
-
-  std::optional<PurePursuit> tracker = PurePursuit::create(config.tracker);
-  std::optional<VelocityLimiter> limiter = VelocityLimiter::create(config.limiter);
-  if (!tracker.has_value() || !limiter.has_value()) {
+  const bool valid_config =
+    std::isfinite(config.control_dt) && config.control_dt > 0.0 &&
+    config.sensor_decimation >= 1 && std::isfinite(config.local_window_size) &&
+    config.local_window_size > 0.0 && config.lidar_beams >= 1 &&
+    std::isfinite(config.lidar_range_min) && config.lidar_range_min >= 0.0 &&
+    std::isfinite(config.lidar_range_max) &&
+    config.lidar_range_max >= config.lidar_range_min &&
+    std::isfinite(config.raycast_step_scale) && config.raycast_step_scale > 0.0 &&
+    std::isfinite(config.goal_tolerance) && config.goal_tolerance > 0.0 &&
+    std::isfinite(config.max_sim_time) && config.max_sim_time > 0.0 &&
+    config.max_replans >= 0 && std::isfinite(config.path_check_distance) &&
+    config.path_check_distance >= 0.0 && config.stop_cycles_to_replan >= 1 &&
+    std::isfinite(config.stall_min_progress) && config.stall_min_progress >= 0.0 &&
+    std::isfinite(config.obstacle_fraction) && config.obstacle_fraction >= 0.0 &&
+    config.obstacle_fraction <= 1.0 && config.obstacle_half_width_cells >= 0 &&
+    resolution > 0.0 && static_geometry.cell_count() > 0;
+  if (!valid_config) {
     result.outcome = NavigateOutcome::ModelFailed;
-    result.message = "PurePursuit::create or VelocityLimiter::create rejected its parameters";
+    result.message = "invalid navigation configuration or empty static map";
+    return result;
+  }
+  if (
+    config.start_goal.has_value() &&
+    (!config.start_goal->first.position.allFinite() ||
+     !std::isfinite(config.start_goal->first.yaw) ||
+     !config.start_goal->second.position.allFinite() ||
+     !std::isfinite(config.start_goal->second.yaw))) {
+    result.outcome = NavigateOutcome::StartGoalFailed;
+    result.message = "start and goal poses must be finite";
+    return result;
+  }
+
+  eltanin::control::GoalApproachParams goal_approach_params = config.goal_approach;
+  goal_approach_params.xy_goal_tolerance = config.goal_tolerance;
+  std::optional<PurePursuit> tracker = PurePursuit::create(config.tracker);
+  std::optional<GoalApproach> goal_approach = GoalApproach::create(goal_approach_params);
+  std::optional<VelocityLimiter> limiter = VelocityLimiter::create(config.limiter);
+  if (!tracker.has_value() || !goal_approach.has_value() || !limiter.has_value()) {
+    result.outcome = NavigateOutcome::ModelFailed;
+    result.message =
+      "PurePursuit::create, GoalApproach::create, or VelocityLimiter::create rejected its "
+      "parameters";
     return result;
   }
   const eltanin::Polygon2D & footprint = limiter->footprint();
@@ -516,16 +571,24 @@ inline NavigateResult navigate(
   result.start = start;
   result.goal = goal;
 
-  std::optional<eltanin::Path> path = detail::plan_leg(global.costmap(), robot, start, goal);
+  std::optional<eltanin::Path> path;
+  try {
+    path = detail::plan_leg(global.costmap(), robot, start, goal, config);
+  } catch (const std::invalid_argument & error) {
+    result.outcome = NavigateOutcome::ModelFailed;
+    result.message = error.what();
+    return result;
+  }
   if (!path.has_value()) {
     result.outcome = NavigateOutcome::PlanFailed;
     result.message =
-      "plan() found no path from " + detail::pose_text(start) + " to " + detail::pose_text(goal);
+      std::string(planner_name(config.planner)) + " found no path from " +
+      detail::pose_text(start) + " to " + detail::pose_text(goal);
     return result;
   }
   if (path->size() < 2) {
     result.outcome = NavigateOutcome::PathTooShort;
-    result.message = "the smoothed initial path has fewer than two poses";
+    result.message = "the initial path has fewer than two poses";
     return result;
   }
 
@@ -540,10 +603,15 @@ inline NavigateResult navigate(
       (static_cast<double>(config.obstacle_half_width_cells) + 0.5) * resolution;
   }
 
-  const int window_cells = static_cast<int>(std::lround(config.local_window_size / resolution));
   // A window wider than the map would leave NO_INFORMATION cells the limiter reads as obstacles.
-  assert(window_cells >= 1);
-  assert(window_cells <= static_geometry.size_x() && window_cells <= static_geometry.size_y());
+  const double max_window_size =
+    static_cast<double>(std::min(static_geometry.size_x(), static_geometry.size_y())) * resolution;
+  if (config.local_window_size < resolution || config.local_window_size > max_window_size) {
+    result.outcome = NavigateOutcome::ModelFailed;
+    result.message = "local window must fit inside the static map";
+    return result;
+  }
+  const int window_cells = static_cast<int>(std::lround(config.local_window_size / resolution));
   LayeredCostmap local(
     MapGeometry(window_cells, window_cells, resolution, static_geometry.origin()),
     eltanin::map::NO_INFORMATION);
@@ -612,22 +680,43 @@ inline NavigateResult navigate(
       local.update();
     }
 
-    const PurePursuit::Result tracking = tracker->compute(plant.pose(), *path, config.control_dt);
-    if (tracking.status == PurePursuit::Status::NoPath) {
-      result.outcome = NavigateOutcome::NoPath;
-      result.message = "PurePursuit reported NoPath on leg " + std::to_string(leg);
-      break;
-    }
-    if (tracking.status == PurePursuit::Status::GoalReached) {
+    const GoalApproach::Result approach =
+      goal_approach->compute(plant.pose(), *path, config.control_dt);
+    if (approach.state == GoalApproach::State::Reached) {
       at_goal = true;
       break;
     }
+    if (approach.state == GoalApproach::State::AlignmentTimeout) {
+      result.outcome = NavigateOutcome::GoalToleranceFailed;
+      result.message = "goal yaw alignment timed out on leg " + std::to_string(leg);
+      break;
+    }
+
+    eltanin::Twist2D requested;
+    if (approach.state == GoalApproach::State::Aligning) {
+      requested = approach.command;
+    } else {
+      const PurePursuit::Result tracking = tracker->compute(plant.pose(), *path, config.control_dt);
+      if (tracking.status == PurePursuit::Status::NoPath) {
+        result.outcome = NavigateOutcome::NoPath;
+        result.message = "PurePursuit reported NoPath on leg " + std::to_string(leg);
+        break;
+      }
+      if (tracking.status == PurePursuit::Status::GoalReached) {
+        result.outcome = NavigateOutcome::GoalToleranceFailed;
+        result.message =
+          "PurePursuit reached the last path pose before GoalApproach accepted the goal";
+        break;
+      }
+      requested = eltanin::control::detail::apply_linear_limit(
+        tracking.command, approach.linear_vel_limit);
+    }
 
     const VelocityLimiter::Result limited =
-      limiter->limit(local.costmap(), robot.model, plant.pose(), tracking.command);
+      limiter->limit(local.costmap(), robot.model, plant.pose(), requested);
 
     result.samples.push_back(Sample{
-      leg, t, plant.pose(), tracking.command, limited.command, limited.collision_distance,
+      leg, t, plant.pose(), requested, limited.command, limited.collision_distance,
       limited.has_collision, limited.predicted_poses.size()});
     detail::accumulate_sample(result.legs[leg], result.samples.back(), *path, full_prediction);
 
@@ -668,25 +757,26 @@ inline NavigateResult navigate(
       ++result.global_updates;
       observed_at_last_update = observed_points.size();
       std::optional<eltanin::Path> replanned =
-        detail::plan_leg(global.costmap(), robot, plant.pose(), goal);
+        detail::plan_leg(global.costmap(), robot, plant.pose(), goal, config);
       if (!replanned.has_value()) {
         result.outcome = NavigateOutcome::ReplanFailed;
         result.message = "replan " + std::to_string(result.replans + 1) +
-                         " failed: plan() found no path from " + detail::pose_text(plant.pose()) +
+                         " failed: " + planner_name(config.planner) +
+                         " found no path from " + detail::pose_text(plant.pose()) +
                          " to " + detail::pose_text(goal);
         break;
       }
       if (replanned->size() < 2) {
         result.outcome = NavigateOutcome::PathTooShort;
-        result.message = "the smoothed path of replan " + std::to_string(result.replans + 1) +
+        result.message = "the path of replan " + std::to_string(result.replans + 1) +
                          " has fewer than two poses";
         break;
       }
       path = std::move(replanned);
-      // Resetting mid-motion would dip the speed to zero, and the robot is already aligned.
-      if (stopped_too_long) {
-        tracker->reset();
-      } else {
+      goal_approach->reset();
+      // PurePursuit owns progress and heading state for one path; a replacement must reset both.
+      tracker->reset();
+      if (!stopped_too_long) {
         ++result.replans_on_blocked_path;
       }
       ++result.replans;
@@ -850,7 +940,8 @@ inline bool write_output_files(
   }
   write_meta(meta, crop, lower_left, robot.inflation, robot.radii);
   const eltanin::collision::VelocityLimiterParams & limits = config.limiter;
-  meta << "control_dt " << config.control_dt << '\n'
+  meta << "planner " << planner_name(config.planner) << '\n'
+       << "control_dt " << config.control_dt << '\n'
        << "sensor_decimation " << config.sensor_decimation << '\n'
        << "local_window_size " << config.local_window_size << '\n'
        << "lidar_beams " << config.lidar_beams << '\n'

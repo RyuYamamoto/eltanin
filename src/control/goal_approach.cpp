@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstddef>
 #include <numbers>
+#include <stdexcept>
 
 namespace eltanin::control
 {
@@ -109,14 +110,18 @@ std::optional<GoalApproach> GoalApproach::create(const GoalApproachParams & para
 
 GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & path, double dt)
 {
-  assert(std::isfinite(dt) && dt > 0.0);
-  assert(robot.position.allFinite() && std::isfinite(robot.yaw));
+  if (!std::isfinite(dt) || dt <= 0.0 || !robot.position.allFinite() ||
+      !std::isfinite(robot.yaw)) {
+    throw std::invalid_argument("GoalApproach requires a finite pose and positive finite dt");
+  }
 
   Result result;
   if (!path.empty()) {
     const Pose2D & goal = path[path.size() - 1];
-    result.remaining_arc = remaining_arc_from(path, nearest_index(path, robot.position));
+    const std::size_t nearest = nearest_index(path, robot.position);
     result.position_error = (goal.position - robot.position).norm();
+    result.remaining_arc =
+      std::max(remaining_arc_from(path, nearest), result.position_error);
     result.yaw_error = normalize_angle(goal.yaw - robot.yaw);
   }
 

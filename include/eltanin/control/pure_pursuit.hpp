@@ -60,9 +60,10 @@ public:
   static std::optional<PurePursuit> create(const PurePursuitParams & params);
 
   /// Reads `path` only; goal arrival is reported through Status, never by clearing the path.
+  /// Throws std::invalid_argument when the robot pose or dt is invalid.
   Result compute(const Pose2D & robot, const Path & path, double dt);
 
-  /// Clears the velocity ramp and the alignment latch; call it when a new path is handed in.
+  /// Clears path progress, the velocity ramp, and the alignment latch; call for every new path.
   void reset() noexcept;
 
   const PurePursuitParams & params() const noexcept { return params_; }
@@ -71,6 +72,8 @@ private:
   explicit PurePursuit(const PurePursuitParams & params) : params_(params) {}
 
   PurePursuitParams params_{};
+  /// Search progress on the current path; reset() is required when the path changes.
+  std::size_t nearest_index_{0};
   double linear_vel_{0.0};
   bool yaw_aligned_{false};
 };

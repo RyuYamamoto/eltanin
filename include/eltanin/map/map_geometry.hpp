@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 
 namespace eltanin::map
 {
@@ -48,9 +49,19 @@ class MapGeometry
 public:
   MapGeometry() = default;
 
+  /// Throws std::invalid_argument unless dimensions, resolution, and origin form a usable map.
   MapGeometry(int size_x, int size_y, double resolution, const Eigen::Vector2d & origin)
   : size_x_(size_x), size_y_(size_y), resolution_(resolution), origin_(origin)
   {
+    if (size_x_ <= 0 || size_y_ <= 0) {
+      throw std::invalid_argument("map dimensions must be positive");
+    }
+    if (!std::isfinite(resolution_) || resolution_ <= 0.0) {
+      throw std::invalid_argument("map resolution must be finite and positive");
+    }
+    if (!origin_.allFinite()) {
+      throw std::invalid_argument("map origin must be finite");
+    }
   }
 
   int size_x() const noexcept { return size_x_; }
@@ -62,7 +73,13 @@ public:
   const Eigen::Vector2d & origin() const noexcept { return origin_; }
 
   /// Moves the window; size and resolution are unchanged, so cell indices stay valid.
-  void set_origin(const Eigen::Vector2d & origin) noexcept { origin_ = origin; }
+  void set_origin(const Eigen::Vector2d & origin)
+  {
+    if (!origin.allFinite()) {
+      throw std::invalid_argument("map origin must be finite");
+    }
+    origin_ = origin;
+  }
 
   std::size_t cell_count() const noexcept
   {
@@ -97,6 +114,9 @@ public:
   /// The only world-to-cell conversion; nullopt when the point lies outside the map.
   std::optional<MapIndex> world_to_map(const Eigen::Vector2d & world) const noexcept
   {
+    if (cell_count() == 0 || resolution_ <= 0.0 || !world.allFinite()) {
+      return std::nullopt;
+    }
     const MapIndex index = floor_to_index(world);
     if (!in_bounds(index.x, index.y)) {
       return std::nullopt;
@@ -108,7 +128,11 @@ public:
   std::optional<CellRect> world_rect_to_cells(
     const Eigen::Vector2d & min, const Eigen::Vector2d & max) const noexcept
   {
-    assert(min.x() <= max.x() && min.y() <= max.y());
+    if (
+      cell_count() == 0 || resolution_ <= 0.0 || !min.allFinite() || !max.allFinite() ||
+      min.x() > max.x() || min.y() > max.y()) {
+      return std::nullopt;
+    }
     const MapIndex lower = floor_to_index(min);
     const MapIndex upper = floor_to_index(max);
     if (upper.x < 0 || upper.y < 0 || lower.x >= size_x_ || lower.y >= size_y_) {

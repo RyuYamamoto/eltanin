@@ -13,7 +13,7 @@ that needs ROS 2, visualization or file I/O lives in a separate target.
 | `eltanin_map` | `eltanin::map` | `eltanin::core` | `MapGeometry` (the only world/map conversion), `GridMap<T>`, nav2-scale cost constants, cost model |
 | `eltanin_map_io` | `eltanin::map_io` | `eltanin::map`, yaml-cpp | PGM + YAML map loading, PGM debug dump |
 | `eltanin_sensor` | `eltanin::sensor` | `eltanin::core` | Laser scan projection into planar points (`ScanData` / `ScanFilter` / `project_scan`) |
-| `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\* global planner, nearest traversable cell search, iterative path smoother |
+| `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\*, forward-only Hybrid A\*, Dubins path, nearest traversable cell search, iterative path smoother |
 | `eltanin_control` | `eltanin::control` | `eltanin::core` | Pure pursuit path tracking (`PurePursuit`), goal approach deceleration and final yaw alignment (`GoalApproach`) |
 | `eltanin_sim` | `eltanin::sim` | `eltanin::core` | Deterministic differential-drive plant (`SimpleSimulator`) |
 | `eltanin_collision` | `eltanin::collision` | `eltanin::core`, `eltanin::map` | Two-stage and exact footprint collision checking, braking-distance velocity limiting (`VelocityLimiter`) |
@@ -104,6 +104,24 @@ cmake --build build -j
 Prints the map geometry and a histogram of cost values, which is handy for checking that a map was
 loaded with the expected resolution, origin and occupancy thresholds.
 
+The Hybrid A* example loads and inflates a YAML/PGM map for the configured robot footprint. It uses
+an A* path only to crop the large input map, then runs Hybrid A* on that real-map corridor. Start and
+goal include yaw in radians:
+
+```bash
+./build/examples/eltanin_hybrid_astar_demo \
+  path/to/map.yaml /tmp/eltanin-hybrid \
+  36.175 -15.925 1.5708 34.675 -9.025 1.5708
+python3 examples/plot_hybrid_astar.py /tmp/eltanin-hybrid \
+  --out /tmp/eltanin-hybrid/hybrid_astar.png --animate
+```
+
+The static figure draws the footprint at every path sample, producing the dense swept-path view
+commonly used for Hybrid A*. `--footprint-step N` can thin the outlines for a very long path.
+`--animate` also writes `hybrid_astar.gif`, with the footprint moving over the map and a following
+local view. The script needs matplotlib, numpy and Pillow. They are developer-only dependencies and
+are not linked into `eltanin_planner` or any other library target.
+
 ```bash
 ./build/examples/eltanin_plan_on_real_map path/to/map.yaml out_dir
 ./build/examples/eltanin_track_on_real_map path/to/map.yaml out_dir
@@ -137,6 +155,26 @@ described in [docs/collision-design.md](docs/collision-design.md) §11.
 
 ## Running the whole stack without ROS
 
+The planner module provides a runtime-polymorphic seam while keeping map/model adaptation
+compile-time checked. Algorithm-specific parameters stay in each concrete planner:
+
+```cpp
+#include <eltanin/planner/astar_planner.hpp>
+#include <eltanin/planner/hybrid_astar_planner.hpp>
+
+#include <memory>
+
+std::unique_ptr<eltanin::planner::Planner> planner =
+  std::make_unique<eltanin::planner::AStarPlanner>();
+auto path = planner->plan(map, model, start, goal);
+
+planner = std::make_unique<eltanin::planner::HybridAStarPlanner>(hybrid_params);
+path = planner->plan(map, model, start, goal);
+```
+
+The existing `planner::plan(...)` free function remains the A* convenience API;
+`planner::plan_hybrid_astar(...)` is the corresponding Hybrid A* convenience API.
+
 `eltanin_navigate_on_real_map` closes the loop over every module in a single process. No ROS node, no
 tf, no topic, no simulator process:
 
@@ -144,8 +182,8 @@ tf, no topic, no simulator process:
 map_io::load_map
   -> LayeredCostmap (static + obstacle + inflation), global for planning and local for the limiter
   -> synthetic LiDAR -> sensor::project_scan -> ObstacleLayer
-  -> planner::plan (A*) -> planner::smooth
-  -> control::PurePursuit
+  -> selected global planner (A* + smoothing, or Hybrid A* in an A*-guided corridor)
+  -> control::PurePursuit + control::GoalApproach
   -> collision::VelocityLimiter (footprint prediction, braking-distance law)
   -> sim::SimpleSimulator (differential-drive integration)
   -> repeat, replanning once the observations block the path ahead
@@ -161,6 +199,7 @@ exercises the limiter.
 cmake -B build -DELTANIN_BUILD_EXAMPLES=ON
 cmake --build build -j
 ./build/examples/eltanin_navigate_on_real_map out_dir
+./build/examples/eltanin_navigate_on_real_map out_dir --planner hybrid-astar
 ```
 
 The map defaults to `${ELTANIN_TEST_MAP_DIR}/map.yaml`, so the command above runs as it is; pass
@@ -190,6 +229,8 @@ python3 examples/plot_navigation_results.py --run out_dir --out plots
 Turns those files into four figures: the whole route over the costmap, a zoom on the unknown obstacle,
 the requested against the limited command over time, and the traversed cells over the costmap. Add
 `--animate` for a `navigation.gif` that plays the run back next to the local window the limiter sees.
+For a Hybrid A* run, the overview, obstacle zoom and animation draw the footprint at every planned
+pose; no footprint thinning is applied.
 Like `plot_collision_results.py` it is a developer tool that CMake never refers to. What each figure
 shows, and what reading them revealed, is in
 [docs/integration-design.md](docs/integration-design.md) §15.
@@ -206,8 +247,8 @@ That takes about 95 s and needs about 500 MB. The cases that use the reference m
 `ELTANIN_TEST_MAP_DIR` does not hold one; the two that fix the local window snapping always run.
 
 Known gaps, since the demo is honest about them: there is no local planner (a detour comes from
-global replanning only), and nothing decelerates on the final approach to the goal, so the requested
-command is still 0.5 m/s when `PurePursuit` reports `GoalReached` and the goal yaw does not converge.
+global replanning only), and the injected obstacle is stationary after planning rather than a moving
+obstacle. `GoalApproach` handles final deceleration and goal-yaw alignment.
 [docs/integration-design.md](docs/integration-design.md) records the design decisions and the
 measured numbers.
 

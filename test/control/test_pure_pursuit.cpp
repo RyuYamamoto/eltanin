@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
 
 namespace
 {
@@ -174,6 +175,17 @@ TEST(PurePursuit, EmptyPathReturnsNoPathAndZeroCommand)
   expect_zero_command(result);
 }
 
+TEST(PurePursuit, ComputeRejectsInvalidRuntimeInput)
+{
+  PurePursuit tracker = make_tracker();
+  const Path path = make_straight_path(1.0, 0.05);
+  EXPECT_THROW(tracker.compute(Pose2D{}, path, 0.0), std::invalid_argument);
+  EXPECT_THROW(tracker.compute(Pose2D{}, path, kInf), std::invalid_argument);
+  EXPECT_THROW(
+    tracker.compute(Pose2D{Vector2d{kNan, 0.0}, 0.0}, path, SIMULATION_DT),
+    std::invalid_argument);
+}
+
 TEST(PurePursuit, SinglePosePathReturnsGoalReached)
 {
   PurePursuit tracker = make_tracker();
@@ -194,6 +206,63 @@ TEST(PurePursuit, GoalReachedIsIdempotent)
     EXPECT_EQ(result.status, PurePursuit::Status::GoalReached) << "call " << i;
     expect_zero_command(result);
   }
+}
+
+TEST(PurePursuit, LastPoseNearestButOutsideTerminalToleranceKeepsTracking)
+{
+  PurePursuit tracker = make_tracker();
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{0.05, 0.0}, 0.0},
+    Pose2D{Vector2d{0.10, 0.0}, 0.0}};
+  const Pose2D robot{Vector2d{0.10, 0.25}, 0.0};
+
+  const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
+
+  EXPECT_EQ(result.status, PurePursuit::Status::Tracking);
+  EXPECT_EQ(result.target_index, path.size() - 1);
+  EXPECT_EQ(result.lookahead_point, path[path.size() - 1].position);
+}
+
+TEST(PurePursuit, RealignsInPlaceWhenTheCloseTerminalPointMovesToTheSide)
+{
+  PurePursuit tracker = make_tracker();
+  const Path path{
+    Pose2D{Vector2d{0.00, 0.0}, 0.0}, Pose2D{Vector2d{0.05, 0.0}, 0.0},
+    Pose2D{Vector2d{0.10, 0.0}, 0.0}};
+
+  const PurePursuit::Result initial =
+    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  ASSERT_GT(initial.command.linear.x(), 0.0);
+
+  const PurePursuit::Result terminal =
+    tracker.compute(Pose2D{Vector2d{0.10, 0.25}, 0.0}, path, SIMULATION_DT);
+
+  EXPECT_EQ(terminal.status, PurePursuit::Status::Tracking);
+  EXPECT_EQ(terminal.target_index, path.size() - 1);
+  EXPECT_DOUBLE_EQ(terminal.command.linear.x(), 0.0);
+  EXPECT_LT(terminal.command.angular, 0.0);
+}
+
+TEST(PurePursuit, NearestPathProgressDoesNotRegressAndResetClearsIt)
+{
+  PurePursuit tracker = make_tracker();
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}, Pose2D{Vector2d{2.0, 1.0}, 0.0},
+    Pose2D{Vector2d{1.0, 1.0}, 0.0}, Pose2D{Vector2d{0.0, 1.0}, 0.0}};
+
+  const PurePursuit::Result later =
+    tracker.compute(Pose2D{Vector2d{1.0, 1.0}, std::numbers::pi}, path, SIMULATION_DT);
+  ASSERT_EQ(later.target_index, 5u);
+
+  const PurePursuit::Result after_jump =
+    tracker.compute(Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  EXPECT_EQ(after_jump.target_index, 4u);
+
+  tracker.reset();
+  const PurePursuit::Result after_reset =
+    tracker.compute(Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  EXPECT_EQ(after_reset.target_index, 2u);
 }
 
 TEST(PurePursuit, ResultObservablesAreZeroWhenNotTracking)
@@ -398,7 +467,7 @@ TEST(PurePursuit, AlignmentCompletionDrivesSameCycle)
   EXPECT_TRUE(driving);
 }
 
-TEST(PurePursuit, OnceAlignedNeverTurnsInPlaceAgain)
+TEST(PurePursuit, OnceAlignedDoesNotRealignAwayFromTheEndpoint)
 {
   PurePursuit tracker = make_tracker();
   const Path path = make_straight_path(2.0, 0.05);

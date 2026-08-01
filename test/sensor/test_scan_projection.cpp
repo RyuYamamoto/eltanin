@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -67,6 +68,30 @@ void expect_bearing_near(const Eigen::Vector2d & point, double expected_angle)
 }
 
 }  // namespace
+
+TEST(ScanProjection, RejectsInvalidScanAndFilterArguments)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  std::vector<Eigen::Vector2d> points;
+
+  ScanData scan = uniform_scan(0.0, 0.1, 4, 1.0);
+  scan.angle_min = nan;
+  EXPECT_THROW(project_scan(scan, ScanFilter{}, points), std::invalid_argument);
+  scan = uniform_scan(0.0, nan, 4, 1.0);
+  EXPECT_THROW(project_scan(scan, ScanFilter{}, points), std::invalid_argument);
+
+  scan = uniform_scan(0.0, 0.1, 4, 1.0);
+  ScanFilter filter;
+  filter.min_range = -0.1;
+  EXPECT_THROW(project_scan(scan, filter, points), std::invalid_argument);
+  filter = ScanFilter{};
+  filter.min_range = 2.0;
+  filter.max_range = 1.0;
+  EXPECT_THROW(project_scan(scan, filter, points), std::invalid_argument);
+  filter = ScanFilter{};
+  filter.angle_range = AngleRange{0.0, nan};
+  EXPECT_THROW(project_scan(scan, filter, points), std::invalid_argument);
+}
 
 TEST(ScanProjection, QuadrantBeamsLandOnTheAxes)
 {

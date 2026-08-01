@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
+#include <stdexcept>
 
 namespace eltanin::map
 {
@@ -41,7 +42,9 @@ InflationLayer::InflationLayer(const InflationCostModel & model, bool inflate_un
 void InflationLayer::update_costs(Costmap & master)
 {
   const double resolution = master.geometry().resolution();
-  assert(resolution > 0.0);
+  if (resolution <= 0.0 || master.cell_count() == 0) {
+    throw std::invalid_argument("InflationLayer requires a usable map");
+  }
   if (resolution != lut_resolution_) {
     rebuild_cost_lut(resolution);
   }
@@ -59,12 +62,15 @@ void InflationLayer::update_costs(Costmap & master)
 
 void InflationLayer::rebuild_cost_lut(double resolution)
 {
-  constexpr double MAX_RADIUS_IN_CELLS = static_cast<double>(std::numeric_limits<int>::max());
+  constexpr double max_radius_in_cells =
+    static_cast<double>(std::numeric_limits<int>::max());
   const double inflation_radius = model_.radii().inflation_radius();
   const double radius_in_cells = std::ceil(inflation_radius / resolution);
-  assert(radius_in_cells <= MAX_RADIUS_IN_CELLS);
+  if (radius_in_cells > max_radius_in_cells) {
+    throw std::length_error("inflation radius exceeds the supported cell count");
+  }
 
-  cell_inflation_radius_ = static_cast<int>(std::min(radius_in_cells, MAX_RADIUS_IN_CELLS));
+  cell_inflation_radius_ = static_cast<int>(radius_in_cells);
   lut_resolution_ = resolution;
 
   const std::size_t side = static_cast<std::size_t>(cell_inflation_radius_) + 1;

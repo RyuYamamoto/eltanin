@@ -17,7 +17,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <numbers>
+#include <stdexcept>
 
 namespace
 {
@@ -33,6 +35,17 @@ constexpr double kPi = std::numbers::pi;
 Twist2D twist(double v, double w) { return Twist2D{Vector2d{v, 0.0}, w}; }
 
 }  // namespace
+
+TEST(DifferentialDrive, RejectsInvalidRuntimeInput)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(integrate_differential_drive(Pose2D{}, twist(0.5, 0.0), 0.0), std::invalid_argument);
+  EXPECT_THROW(
+    integrate_differential_drive(Pose2D{Vector2d{nan, 0.0}, 0.0}, twist(0.5, 0.0), 0.1),
+    std::invalid_argument);
+  EXPECT_THROW(
+    integrate_differential_drive(Pose2D{}, twist(0.5, nan), 0.1), std::invalid_argument);
+}
 
 TEST(DifferentialDrive, StraightMotionFollowsTheHeading)
 {
@@ -57,10 +70,10 @@ TEST(DifferentialDrive, InPlaceRotationKeepsThePosition)
 TEST(DifferentialDrive, FullCircleReturnsToTheStart)
 {
   const Pose2D start{Vector2d{1.0, 2.0}, 0.3};
-  constexpr double DT = 0.001;
+  constexpr double dt = 0.001;
   Pose2D pose = start;
   for (int i = 0; i < 1000; ++i) {
-    pose = integrate_differential_drive(pose, twist(0.5, 2.0 * kPi), DT);
+    pose = integrate_differential_drive(pose, twist(0.5, 2.0 * kPi), dt);
   }
 
   EXPECT_NEAR(pose.position.x(), start.position.x(), 1e-9);
@@ -71,15 +84,15 @@ TEST(DifferentialDrive, FullCircleReturnsToTheStart)
 TEST(DifferentialDrive, ArcStaysOnTheInstantaneousCircle)
 {
   const Pose2D start{Vector2d{1.0, 2.0}, 0.3};
-  constexpr double V = 0.6;
-  constexpr double W = 0.4;
-  const double radius = V / W;
+  constexpr double linear_velocity = 0.6;
+  constexpr double angular_velocity = 0.4;
+  const double radius = linear_velocity / angular_velocity;
   const Vector2d center =
     start.position + radius * Vector2d{std::cos(start.yaw + kPi / 2.0), std::sin(start.yaw + kPi / 2.0)};
 
   Pose2D pose = start;
   for (int i = 0; i < 5; ++i) {
-    pose = integrate_differential_drive(pose, twist(V, W), 0.2);
+    pose = integrate_differential_drive(pose, twist(linear_velocity, angular_velocity), 0.2);
     EXPECT_NEAR((pose.position - center).norm(), std::abs(radius), 1e-12);
   }
 }
@@ -87,15 +100,16 @@ TEST(DifferentialDrive, ArcStaysOnTheInstantaneousCircle)
 TEST(DifferentialDrive, BothSidesOfTheBranchAgreeWithinTheTruncationBound)
 {
   const Pose2D start{Vector2d{1.0, 2.0}, 1.0};
-  constexpr double V = 0.5;
-  constexpr double DT = 0.2;
+  constexpr double linear_velocity = 0.5;
+  constexpr double dt = 0.2;
   const double arc_side = ANGULAR_VEL_EPSILON;
   const double straight_side = ANGULAR_VEL_EPSILON * (1.0 - 1e-12);
 
-  const Pose2D arc = integrate_differential_drive(start, twist(V, arc_side), DT);
-  const Pose2D straight = integrate_differential_drive(start, twist(V, straight_side), DT);
+  const Pose2D arc = integrate_differential_drive(start, twist(linear_velocity, arc_side), dt);
+  const Pose2D straight =
+    integrate_differential_drive(start, twist(linear_velocity, straight_side), dt);
 
-  const double bound = V * arc_side * DT * DT;
+  const double bound = linear_velocity * arc_side * dt * dt;
   EXPECT_LE((arc.position - straight.position).norm(), bound);
   EXPECT_NEAR(arc.yaw, straight.yaw, 1e-15);
 }
@@ -103,14 +117,16 @@ TEST(DifferentialDrive, BothSidesOfTheBranchAgreeWithinTheTruncationBound)
 TEST(DifferentialDrive, ZeroAngularVelocityIsTheLimitOfSmallAngularVelocity)
 {
   const Pose2D start{Vector2d{1.0, 2.0}, 1.0};
-  constexpr double V = 0.5;
-  constexpr double DT = 0.2;
-  constexpr double W = 1e-6;
+  constexpr double linear_velocity = 0.5;
+  constexpr double dt = 0.2;
+  constexpr double angular_velocity = 1e-6;
 
-  const Pose2D zero = integrate_differential_drive(start, twist(V, 0.0), DT);
-  const Pose2D small = integrate_differential_drive(start, twist(V, W), DT);
+  const Pose2D zero = integrate_differential_drive(start, twist(linear_velocity, 0.0), dt);
+  const Pose2D small =
+    integrate_differential_drive(start, twist(linear_velocity, angular_velocity), dt);
 
-  EXPECT_LE((zero.position - small.position).norm(), V * W * DT * DT);
+  EXPECT_LE(
+    (zero.position - small.position).norm(), linear_velocity * angular_velocity * dt * dt);
   ASSERT_TRUE(std::isfinite(small.position.x()));
   ASSERT_TRUE(std::isfinite(small.position.y()));
 }

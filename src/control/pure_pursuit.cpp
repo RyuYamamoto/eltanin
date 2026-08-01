@@ -17,9 +17,9 @@
 #include <eltanin/core/angle.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <numbers>
+#include <stdexcept>
 
 namespace eltanin::control
 {
@@ -36,12 +36,13 @@ constexpr double ALIGNMENT_ANGULAR_VEL_RATIO = 0.5;
 /// Below this the bearing to the target pose is undefined, so the heading error is taken as 0 [m].
 constexpr double MIN_TARGET_DISTANCE = 1e-9;
 
-/// Global nearest pose; ties resolve to the smallest index so the result is deterministic.
-std::size_t nearest_index(const Path & path, const Eigen::Vector2d & position)
+/// Nearest pose at or after the saved progress; loops and endpoints cannot move it backwards.
+std::size_t nearest_index(
+  const Path & path, const Eigen::Vector2d & position, std::size_t from)
 {
-  std::size_t nearest = 0;
-  double min_distance = (path[0].position - position).squaredNorm();
-  for (std::size_t i = 1; i < path.size(); ++i) {
+  std::size_t nearest = std::min(from, path.size() - 1);
+  double min_distance = (path[nearest].position - position).squaredNorm();
+  for (std::size_t i = nearest + 1; i < path.size(); ++i) {
     const double distance = (path[i].position - position).squaredNorm();
     if (distance < min_distance) {
       min_distance = distance;
@@ -49,6 +50,13 @@ std::size_t nearest_index(const Path & path, const Eigen::Vector2d & position)
     }
   }
   return nearest;
+}
+
+Twist2D alignment_command(double heading_error, double max_angular_vel)
+{
+  return Twist2D{
+    Eigen::Vector2d::Zero(),
+    std::copysign(max_angular_vel * ALIGNMENT_ANGULAR_VEL_RATIO, heading_error)};
 }
 
 /// First pose at or beyond `lookahead` when walking forward from `from`; the last pose otherwise.
@@ -90,18 +98,30 @@ std::optional<PurePursuit> PurePursuit::create(const PurePursuitParams & params)
 
 PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path, double dt)
 {
-  assert(std::isfinite(dt) && dt > 0.0);
-  assert(robot.position.allFinite() && std::isfinite(robot.yaw));
+  if (!std::isfinite(dt) || dt <= 0.0 || !robot.position.allFinite() ||
+      !std::isfinite(robot.yaw)) {
+    throw std::invalid_argument("PurePursuit requires a finite pose and positive finite dt");
+  }
 
   if (path.empty()) {
     reset();
     return Result{Twist2D{}, Status::NoPath, 0, Eigen::Vector2d::Zero()};
   }
-
-  const std::size_t nearest = nearest_index(path, robot.position);
-  if (nearest + 1 == path.size()) {
+  if (path.size() == 1) {
     reset();
     return Result{Twist2D{}, Status::GoalReached, 0, Eigen::Vector2d::Zero()};
+  }
+
+  const std::size_t nearest = nearest_index(path, robot.position, nearest_index_);
+  nearest_index_ = nearest;
+  if (nearest + 1 == path.size()) {
+    const double terminal_spacing =
+      (path[path.size() - 1].position - path[path.size() - 2].position).norm();
+    const double distance_to_goal = (path[path.size() - 1].position - robot.position).norm();
+    if (distance_to_goal <= 0.5 * terminal_spacing) {
+      reset();
+      return Result{Twist2D{}, Status::GoalReached, 0, Eigen::Vector2d::Zero()};
+    }
   }
 
   const double lookahead = params_.lookahead_time * linear_vel_ + params_.min_lookahead_dist;
@@ -112,15 +132,23 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
                          ? 0.0
                          : normalize_angle(std::atan2(delta.y(), delta.x()) - robot.yaw);
 
+  // Once the endpoint is the only remaining target, driving with a large bearing error creates
+  // an orbit around it. A differential-drive robot can instead face the endpoint before moving.
+  if (
+    target + 1 == path.size() && distance <= params_.min_lookahead_dist &&
+    std::abs(alpha) >= params_.yaw_tolerance) {
+    linear_vel_ = 0.0;
+    return Result{
+      alignment_command(alpha, params_.max_angular_vel), Status::Tracking, target,
+      path[target].position};
+  }
+
   if (!yaw_aligned_) {
     if (std::abs(alpha) < params_.yaw_tolerance) {
       // Latched inside the tolerance; drive in the same cycle instead of turning once more.
       yaw_aligned_ = true;
     } else {
-      const double sign = (alpha > 0.0) ? 1.0 : -1.0;
-      const Twist2D command{
-        Eigen::Vector2d::Zero(),
-        sign * params_.max_angular_vel * ALIGNMENT_ANGULAR_VEL_RATIO};
+      const Twist2D command = alignment_command(alpha, params_.max_angular_vel);
       return Result{command, Status::Tracking, target, path[target].position};
     }
   }
@@ -139,6 +167,7 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
 
 void PurePursuit::reset() noexcept
 {
+  nearest_index_ = 0;
   linear_vel_ = 0.0;
   yaw_aligned_ = false;
 }

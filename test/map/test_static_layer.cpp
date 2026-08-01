@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,11 @@ Costmap source_map()
 }
 
 }  // namespace
+
+TEST(StaticLayer, RejectsAnEmptyMap)
+{
+  EXPECT_THROW(StaticLayer(Costmap{}), std::invalid_argument);
+}
 
 TEST(StaticLayer, CopiesEveryCellWhenGeometriesMatch)
 {

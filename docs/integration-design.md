@@ -1,8 +1,7 @@
 # 統合デモの設計 (`examples/navigate_on_real_map` / `test/integration`)
 
 ROS を一切使わずに `map_io` から `sim` までを 1 プロセスの閉ループとして回す統合デモと、その回帰テスト
-の設計記録。**ライブラリ (`include/` / `src/`) には 1 バイトも足していない。** 既存 API のまま全系が
-回ることを示すのが目的だからである。
+の設計記録。コアは可視化やシミュレーション実行系に依存せず、公開 API をデモ側で接続する。
 
 - 実装: `examples/navigation_loop.hpp` (閉ループ本体)、`examples/navigate_on_real_map.cpp` (CLI)、
   `test/integration/test_navigate_on_real_map.cpp` (回帰テスト)
@@ -47,9 +46,9 @@ MAX_STEPS = max_sim_time / control_dt
 for step in 0 .. MAX_STEPS-1:
   1. センサ周期なら: 合成 LiDAR -> project_scan -> 占有セル上への絞り込み -> 蓄積 ->
                      前方経路が塞がれたかの判定 -> ローカル窓の原点スナップ -> local.update()
-  2. tracker.compute(plant.pose(), path, dt)
-  3. Status で分岐 (NoPath / GoalReached / Tracking)
-  4. limiter.limit(local.costmap(), model, plant.pose(), tracking.command)
+  2. GoalApproach で終端減速または最終 yaw 合わせを決める
+  3. 通常追従なら tracker.compute() の指令を GoalApproach の速度上限で制限する
+  4. limiter.limit(local.costmap(), model, plant.pose(), requested_command)
   5. Sample と leg 統計、停止カウンタを更新
   6. 経路が塞がれた、または停止が連続したら再計画 (失敗なら終了)
   7. plant.update(limited.command, dt)
@@ -228,8 +227,9 @@ world → cell 変換の重複を禁じる規約である。ここで求めて�
 ### 9.3 再計画の手順とストール検出
 
 **再計画**: 蓄積点をグローバル `ObstacleLayer` に全量反映 → `update()` → 現在姿勢を start として
-`plan` + `smooth` → 新しい leg として追従を継続。上限 3 回。停止トリガのときだけ
-`PurePursuit::reset()` を呼ぶ (§9.0)。
+選択中の planner で計画 → 新しい leg として追従を継続。A* は `smooth` を適用し、Hybrid A* は
+A* の経路で切り出した corridor 内を車両姿勢つきで探索して平滑化しない。上限 3 回。
+経路交換時はトリガ種別によらず `PurePursuit::reset()` を呼び、旧経路の進捗indexと向き合わせ状態を破棄する。
 
 **ストール検出**: **1 回以上再計画したうえで、停止トリガが立ち**、前回再計画以降の走行弧長が 0.20 m
 未満なら `NavigateOutcome::Stalled` で終了する。ストールは「再計画しても解決しなかった」ことなので、
@@ -243,10 +243,10 @@ world → cell 変換の重複を禁じる規約である。ここで求めて�
 ままだから) → 5 周期でまた停止 → `Stalled`。**合計 10 周期**で、上限 20,000 周期には遠く届かない。
 「信念では通れるのに真の世界では通れない」という状況をストール検出が正しく打ち切っている。
 
-**到達判定**: `PurePursuit::Status::GoalReached` **かつ**最終位置誤差 ≤ 0.10 m。`nearest_index()` は
-経路全体の最近傍なので、迂回路が自分の終端付近を通ると誤って `GoalReached` になりうる。位置誤差を
-必須にすることで「黙って成功する」ことは防げる。**goal yaw は判定しない** (`PurePursuit` は yaw を
-収束させない)。
+**到達判定**: `GoalApproach` が位置誤差 ≤ 0.10 m、yaw 誤差 ≤ 0.10 rad を満たしたときに到達とする。
+Pure Pursuit は最近傍点が終端でも、終端区間長の半分より遠ければ終端点への追従を続ける。
+`GoalApproach::remaining_arc` は残り折れ線長と目標直線距離の大きい方なので、終端の横へ外れたときも
+残距離が 0 にならず、減速しながら復帰できる。
 
 ## 10. ground truth を 1 枚で済ませた理由
 
@@ -335,7 +335,7 @@ ASan で 56.9 s、7 件合計が 200 s を超えて受け入れ条件 (120 s) �
 |---|---|
 | 0 | **`Layer` に境界付き更新が無い** ため `LayeredCostmap::update()` は全域再生成しかできず (1600 万セルで 0.285 s / `-O2`)、グローバルコストマップを制御周期で更新できない。だから観測トリガは「経路が塞がれたか」の安い判定で代用し、全域 `update()` は再計画のときだけ呼んでいる。nav2 相当の `updateBounds()` / `updateCosts(master, min_i, min_j, max_i, max_j)` を `eltanin_map` に入れるのが本筋で、それは §16 の申し送り |
 | 1 | **ローカルプランナが無い** (`planner` は未着手)。局所回避は `PurePursuit` + `VelocityLimiter` だけで、迂回はグローバル再計画でしか実現できない |
-| 2 | **ゴール最終接近の減速・停止制御が無い。** `GoalReached` の時点でも要求指令は 0.5 m/s のままで、デモはそこで打ち切る。goal yaw も収束しない |
+| 2 | 未知障害物は計画後に追加されるが、その後は動かない。速度・位置が時間変化する障害物モデルは未実装 |
 | 3 | 観測面だけが `ObstacleLayer` に入るため、A\* が障害物の未観測な内部を通る経路を出しうる。近づけば再観測して再び停止 → 再計画になり、上限で打ち切られる。通過姿勢が無衝突であることは検証で保証する |
 | 4 | 自己位置は plant の真値。推定誤差・オドメトリ誤差・センサノイズを入れていない |
 | 5 | `ObstacleLayer` に clearing が無いので観測点は消えない。動く障害物は扱えない |
@@ -368,16 +368,21 @@ ASan で 56.9 s、7 件合計が 200 s を超えて受け入れ条件 (120 s) �
 と同じ扱いで、**CMake からは参照されない開発ツール**である (Python がビルド依存にならない)。
 
 ```bash
-./build/examples/eltanin_navigate_on_real_map /tmp/nav
+./build/examples/eltanin_navigate_on_real_map /tmp/nav --planner hybrid-astar
 python3 examples/plot_navigation_results.py --run /tmp/nav --out /tmp/nav-plots
 ```
 
 | 図 | 内容 |
 |---|---|
-| `overview.png` | コストマップ全体に leg ごとの計画経路・走行軌跡・観測セル・start / goal を重ねる |
-| `stop.png` | 障害物周辺の拡大。停止した周期・観測セル・真の障害物矩形・迂回路 |
+| `overview.png` | コストマップ全体に leg ごとの計画経路・走行軌跡・観測セル・start / goal を重ねる。Hybrid A* は全姿勢の footprint も描く |
+| `stop.png` | 障害物周辺の拡大。停止した周期・観測セル・真の障害物矩形・迂回路。Hybrid A* は全姿勢の footprint も描く |
 | `commands.png` | 要求指令と制限後指令の時系列 + `collision_distance`。再計画時刻を破線で示す |
 | `traversed.png` | `traversed.pgm` を `costmap.pgm` に重ねる (両者が同一 `geometry` でなければ重ならない) |
+
+`--animate` を付けると、計画済み leg の密な footprint 列、走行軌跡、観測セル、現在 footprint を
+`navigation.gif` に出す。footprint 列は中心移動と角度変化による頂点移動が既定で 0.05 m 以下になるよう
+補間するため、Hybrid A* の長い経路でも隙間のない swept-path として見える。
+`--footprint-spacing` でこの間隔を変更できる。再計画前に将来の leg は表示しない。
 
 図は `--replan-on-stop-only` の走行に対するものである (既定の観測トリガでは停止しないので `stop.png` の
 タイトルがその旨に変わる)。

@@ -14,7 +14,7 @@
 
 #include <eltanin/map/layered_costmap.hpp>
 
-#include <cassert>
+#include <stdexcept>
 
 namespace eltanin::map
 {
@@ -22,8 +22,9 @@ namespace eltanin::map
 LayeredCostmap::LayeredCostmap(const MapGeometry & geometry, std::uint8_t default_cost)
 : costmap_(geometry, default_cost), default_cost_(default_cost)
 {
-  assert(geometry.cell_count() > 0);
-  assert(geometry.resolution() > 0.0);
+  if (geometry.cell_count() == 0 || geometry.resolution() <= 0.0) {
+    throw std::invalid_argument("LayeredCostmap requires a usable geometry");
+  }
 }
 
 void LayeredCostmap::update()
@@ -34,12 +35,12 @@ void LayeredCostmap::update()
   }
 }
 
-void LayeredCostmap::set_origin(const Eigen::Vector2d & origin) noexcept
+void LayeredCostmap::set_origin(const Eigen::Vector2d & origin)
 {
   costmap_.set_origin(origin);
 }
 
-void LayeredCostmap::center_on(const Eigen::Vector2d & robot_position) noexcept
+void LayeredCostmap::center_on(const Eigen::Vector2d & robot_position)
 {
   const MapGeometry & map_geometry = costmap_.geometry();
   const Eigen::Vector2d extent{

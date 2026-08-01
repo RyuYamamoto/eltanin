@@ -23,6 +23,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -105,6 +107,29 @@ TEST(PathSmoother, KeepsBothEndPointsBitIdentical)
   const std::size_t last = input.size() - 1;
   EXPECT_EQ(output[last].position.x(), input[last].position.x());
   EXPECT_EQ(output[last].position.y(), input[last].position.y());
+}
+
+TEST(PathSmoother, RejectsInvalidParameters)
+{
+  const Costmap map = open_map(10, 10);
+  const Path input = make_path({Vector2d{0.1, 0.1}, Vector2d{0.2, 0.2}});
+
+  SmootherParams params;
+  params.weight_data = -0.1;
+  EXPECT_THROW(smooth(input, map, make_cost_model(), params), std::invalid_argument);
+  params = SmootherParams{};
+  params.weight_smooth = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(smooth(input, map, make_cost_model(), params), std::invalid_argument);
+  params = SmootherParams{};
+  params.weight_data = 1.0;
+  params.weight_smooth = 0.25;
+  EXPECT_THROW(smooth(input, map, make_cost_model(), params), std::invalid_argument);
+  params = SmootherParams{};
+  params.tolerance = -1.0;
+  EXPECT_THROW(smooth(input, map, make_cost_model(), params), std::invalid_argument);
+  params = SmootherParams{};
+  params.max_iterations = -1;
+  EXPECT_THROW(smooth(input, map, make_cost_model(), params), std::invalid_argument);
 }
 
 TEST(PathSmoother, KeepsTheTerminalYaw)

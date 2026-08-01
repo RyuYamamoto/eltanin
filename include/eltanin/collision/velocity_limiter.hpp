@@ -22,11 +22,11 @@
 #include <eltanin/map/cell_map.hpp>
 #include <eltanin/collision/collision_checker.hpp>
 
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace eltanin::collision
@@ -80,7 +80,7 @@ public:
   /// nullopt when the footprint is degenerate, non-convex, excludes the origin, or a value is bad.
   static std::optional<VelocityLimiter> create(const VelocityLimiterParams & params);
 
-  /// Predicts prediction_steps ahead and caps the command magnitude. Preconditions: a usable map.
+  /// Predicts ahead and caps the command magnitude; throws std::invalid_argument for an unusable map.
   template <map::CellMap Map, class Model>
     requires TraversabilityModel<Model, typename Map::value_type> &&
              ObstacleModel<Model, typename Map::value_type>
@@ -110,8 +110,9 @@ template <map::CellMap Map, class Model>
 VelocityLimiter::Result VelocityLimiter::limit(
   const Map & map, const Model & model, const Pose2D & robot, const Twist2D & cmd_in) const
 {
-  assert(map.geometry().resolution() > 0.0);
-  assert(map.geometry().cell_count() > 0);
+  if (map.geometry().resolution() <= 0.0 || map.geometry().cell_count() == 0) {
+    throw std::invalid_argument("VelocityLimiter requires a usable map");
+  }
 
   Result result;
   result.predicted_poses.reserve(static_cast<std::size_t>(params_.prediction_steps) + 1);

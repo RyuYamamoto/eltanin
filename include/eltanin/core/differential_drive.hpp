@@ -23,7 +23,7 @@ namespace eltanin
 /// Below this angular velocity [rad/s] the straight-line approximation replaces the arc integral.
 inline constexpr double ANGULAR_VEL_EPSILON = 1e-6;
 
-/// One differential-drive step; linear.y() is ignored. Precondition: dt > 0.
+/// One differential-drive step; linear.y() is ignored. Throws std::invalid_argument on bad input.
 Pose2D integrate_differential_drive(const Pose2D & pose, const Twist2D & twist, double dt);
 
 }  // namespace eltanin

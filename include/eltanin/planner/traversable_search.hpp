@@ -20,7 +20,6 @@
 #include <eltanin/map/cell_map.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -34,9 +33,9 @@ namespace detail
 /// Saturates to int so that in_bounds() can be evaluated without signed overflow.
 inline int saturate_to_int(std::int64_t value) noexcept
 {
-  constexpr std::int64_t LOWEST = std::numeric_limits<int>::min();
-  constexpr std::int64_t HIGHEST = std::numeric_limits<int>::max();
-  return static_cast<int>(std::clamp(value, LOWEST, HIGHEST));
+  constexpr std::int64_t lowest = std::numeric_limits<int>::min();
+  constexpr std::int64_t highest = std::numeric_limits<int>::max();
+  return static_cast<int>(std::clamp(value, lowest, highest));
 }
 
 }  // namespace detail
@@ -47,7 +46,9 @@ template <map::CellMap Map, class Model>
 std::optional<map::MapIndex> find_nearest_traversable(
   const Map & map, const Model & model, const map::MapIndex & from, int max_radius_cells)
 {
-  assert(max_radius_cells >= 0);
+  if (max_radius_cells < 0) {
+    return std::nullopt;
+  }
 
   const map::MapGeometry & geometry = map.geometry();
   std::optional<map::MapIndex> best;

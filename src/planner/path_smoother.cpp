@@ -14,8 +14,8 @@
 
 #include <eltanin/planner/path_smoother.hpp>
 
-#include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 namespace eltanin::planner::detail
 {
@@ -57,14 +57,16 @@ void assign_tangent_yaw(Path & path)
   }
 }
 
-void assert_smoother_params(const SmootherParams & params)
+void validate_smoother_params(const SmootherParams & params)
 {
-  assert(params.weight_data >= 0.0);
-  assert(params.weight_smooth >= 0.0);
-  assert(params.weight_data + 4.0 * params.weight_smooth < 2.0);
-  assert(params.tolerance >= 0.0);
-  assert(params.max_iterations >= 0);
-  static_cast<void>(params);
+  const bool valid = std::isfinite(params.weight_data) && params.weight_data >= 0.0 &&
+                     std::isfinite(params.weight_smooth) && params.weight_smooth >= 0.0 &&
+                     params.weight_data + 4.0 * params.weight_smooth < 2.0 &&
+                     std::isfinite(params.tolerance) && params.tolerance >= 0.0 &&
+                     params.max_iterations >= 0;
+  if (!valid) {
+    throw std::invalid_argument("invalid SmootherParams");
+  }
 }
 
 }  // namespace eltanin::planner::detail

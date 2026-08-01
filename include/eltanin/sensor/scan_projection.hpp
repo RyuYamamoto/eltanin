@@ -46,6 +46,7 @@ struct ScanFilter
 };
 
 /// Projects the surviving beams into the sensor frame; `out` is cleared first, never appended to.
+/// Throws std::invalid_argument when scan angles or filter bounds are invalid.
 void project_scan(
   const ScanData & scan, const ScanFilter & filter, std::vector<Eigen::Vector2d> & out);
 
@@ -66,6 +67,9 @@ struct RangeBounds
 
 /// Folds the sensor's own limits into the filter's; a non-finite scan limit means "no limit".
 RangeBounds effective_bounds(const ScanData & scan, const ScanFilter & filter);
+
+/// Shared runtime validation for marking and clearing projection entry points.
+void validate_scan_arguments(const ScanData & scan, const ScanFilter & filter);
 
 }  // namespace detail
 

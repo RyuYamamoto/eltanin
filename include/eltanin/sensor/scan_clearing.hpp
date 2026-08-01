@@ -26,6 +26,7 @@ namespace eltanin::sensor
 {
 
 /// Far end of each beam's free segment, in the sensor frame; see `docs/sensor-design.md` §11.
+/// Throws std::invalid_argument when scan angles, filter bounds, or clearing range are invalid.
 void project_scan_for_clearing(
   const ScanData & scan, const ScanFilter & marking_filter, double clearing_max_range,
   std::vector<Eigen::Vector2d> & out);

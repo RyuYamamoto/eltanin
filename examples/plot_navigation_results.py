@@ -37,6 +37,7 @@ matplotlib.use("Agg")
 
 import matplotlib.animation
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
 
 import numpy as np
 
@@ -50,10 +51,68 @@ NO_INFORMATION = 255
 LEG_COLOURS = ("tab:blue", "tab:green", "tab:purple", "tab:brown")
 DRIVEN_COLOUR = "crimson"
 OBSERVED_COLOUR = "magenta"
+ROBOT_FOOTPRINT = np.array(
+    [[0.22, 0.15], [-0.22, 0.15], [-0.22, -0.15], [0.22, -0.15]]
+)
+DEFAULT_FOOTPRINT_SPACING = 0.05
 
 
 def leg_colour(leg):
     return LEG_COLOURS[int(leg) % len(LEG_COLOURS)]
+
+
+def transformed_footprint(x, y, yaw):
+    cosine, sine = np.cos(yaw), np.sin(yaw)
+    return ROBOT_FOOTPRINT @ np.array([[cosine, sine], [-sine, cosine]]) + [x, y]
+
+
+def interpolate_path_poses(path, selected, max_motion):
+    """Densify translation and rotation so adjacent footprints form a continuous sweep."""
+    x = path["x"][selected]
+    y = path["y"][selected]
+    yaw = path["yaw"][selected]
+    if x.size == 0:
+        return np.empty((0, 3))
+
+    footprint_radius = float(np.max(np.linalg.norm(ROBOT_FOOTPRINT, axis=1)))
+    poses = [(x[0], y[0], yaw[0])]
+    for index in range(1, x.size):
+        delta_x = x[index] - x[index - 1]
+        delta_y = y[index] - y[index - 1]
+        delta_yaw = np.arctan2(
+            np.sin(yaw[index] - yaw[index - 1]),
+            np.cos(yaw[index] - yaw[index - 1]),
+        )
+        corner_motion = np.hypot(delta_x, delta_y) + footprint_radius * abs(delta_yaw)
+        steps = max(1, int(np.ceil(corner_motion / max_motion)))
+        for step in range(1, steps + 1):
+            ratio = step / steps
+            poses.append(
+                (
+                    x[index - 1] + ratio * delta_x,
+                    y[index - 1] + ratio * delta_y,
+                    yaw[index - 1] + ratio * delta_yaw,
+                )
+            )
+    return np.asarray(poses)
+
+
+def add_path_footprints(axes, path, selected, colour, max_motion):
+    """Draw a dense footprint sweep, as commonly used for Hybrid A*."""
+    poses = interpolate_path_poses(path, selected, max_motion)
+    patches = [
+        plt.Polygon(transformed_footprint(x, y, yaw), closed=True)
+        for x, y, yaw in poses
+    ]
+    collection = PatchCollection(
+        patches,
+        facecolor=matplotlib.colors.to_rgba(colour, 0.025),
+        edgecolor=matplotlib.colors.to_rgba(colour, 0.42),
+        linewidth=0.28,
+        zorder=3,
+    )
+    axes.add_collection(collection)
+    return collection
 
 
 def read_meta(path):
@@ -124,7 +183,7 @@ def extent_of(meta, costmap):
     ]
 
 
-def plot_overview(run, out, meta):
+def plot_overview(run, out, meta, footprint_spacing):
     """Costmap with the planned legs, the driven trajectory and the observed cells on top."""
     costmap = read_pgm(run / "costmap.pgm")
     path = read_csv_columns(run / "path.csv")
@@ -136,6 +195,8 @@ def plot_overview(run, out, meta):
     axes.imshow(cost_image(costmap), origin="lower", extent=extent, interpolation="nearest")
     for leg in np.unique(path["leg"]):
         selected = path["leg"] == leg
+        if meta.get("planner") == "hybrid_astar":
+            add_path_footprints(axes, path, selected, leg_colour(leg), footprint_spacing)
         axes.plot(
             path["x"][selected],
             path["y"][selected],
@@ -183,7 +244,7 @@ def plot_overview(run, out, meta):
     plt.close(figure)
 
 
-def plot_stop(run, out, meta):
+def plot_stop(run, out, meta, footprint_spacing):
     """Zoom on the injected obstacle: where the limiter stopped and where the detour goes."""
     if "obstacle_x" not in meta:
         return
@@ -200,6 +261,8 @@ def plot_stop(run, out, meta):
     axes.imshow(cost_image(costmap), origin="lower", extent=extent, interpolation="nearest")
     for leg in np.unique(path["leg"]):
         selected = path["leg"] == leg
+        if meta.get("planner") == "hybrid_astar":
+            add_path_footprints(axes, path, selected, leg_colour(leg), footprint_spacing)
         axes.plot(
             path["x"][selected],
             path["y"][selected],
@@ -332,7 +395,7 @@ def plot_traversed(run, out, meta):
     plt.close(figure)
 
 
-def animate(run, out, meta, frame_step, fps):
+def animate(run, out, meta, frame_step, fps, footprint_spacing):
     """navigation.gif: the whole route on the left, the local window the limiter sees on the right."""
     costmap = read_pgm(run / "costmap.pgm")
     path = read_csv_columns(run / "path.csv")
@@ -340,7 +403,6 @@ def animate(run, out, meta, frame_step, fps):
     obstacles = read_csv_columns(run / "obstacles.csv")
     extent = extent_of(meta, costmap)
     window = float(meta["local_window_size"])
-    footprint = np.array([[0.22, 0.15], [-0.22, 0.15], [-0.22, -0.15], [0.22, -0.15]])
     frames = range(0, trajectory["t"].size, max(1, frame_step))
 
     figure, (whole, local) = plt.subplots(
@@ -349,6 +411,7 @@ def animate(run, out, meta, frame_step, fps):
     # A leg only appears once it has been planned, or the animation would show the future detour.
     legs = np.unique(path["leg"])
     leg_lines = {}
+    leg_footprints = {}
     for axes in (whole, local):
         axes.imshow(cost_image(costmap), origin="lower", extent=extent, interpolation="nearest")
         axes.set_aspect("equal")
@@ -356,6 +419,17 @@ def animate(run, out, meta, frame_step, fps):
         leg_lines[axes] = [
             axes.plot([], [], color=leg_colour(leg), linewidth=1.0)[0] for leg in legs
         ]
+        if meta.get("planner") == "hybrid_astar":
+            leg_footprints[axes] = [
+                add_path_footprints(
+                    axes,
+                    path,
+                    path["leg"] == leg,
+                    leg_colour(leg),
+                    footprint_spacing,
+                )
+                for leg in legs
+            ]
     whole.set_ylabel("y [m]")
     whole.set_title("route")
     # Only the magenta cells reveal what the robot knew when: the grey background is the final map.
@@ -364,7 +438,9 @@ def animate(run, out, meta, frame_step, fps):
     trail, = whole.plot([], [], color=DRIVEN_COLOUR, linewidth=1.2)
     here = whole.plot([], [], "o", color="black", markersize=4.0)[0]
     local_trail, = local.plot([], [], color=DRIVEN_COLOUR, linewidth=1.2)
-    body = plt.Polygon(footprint, closed=True, fill=False, edgecolor="black", linewidth=1.6)
+    body = plt.Polygon(
+        ROBOT_FOOTPRINT, closed=True, fill=False, edgecolor="black", linewidth=1.6
+    )
     local.add_patch(body)
     seen = local.scatter([], [], s=22.0, marker="s", color=OBSERVED_COLOUR, zorder=5)
     if "obstacle_x" in meta:
@@ -391,10 +467,10 @@ def animate(run, out, meta, frame_step, fps):
                 line.set_data(
                     path["x"][selected] if shown else [], path["y"][selected] if shown else []
                 )
+            for collection, leg in zip(leg_footprints.get(axes, []), legs):
+                collection.set_visible(leg <= current_leg)
         x, y, yaw = trajectory["x"][index], trajectory["y"][index], trajectory["yaw"][index]
-        cosine, sine = np.cos(yaw), np.sin(yaw)
-        rotated = footprint @ np.array([[cosine, sine], [-sine, cosine]]) + [x, y]
-        body.set_xy(rotated)
+        body.set_xy(transformed_footprint(x, y, yaw))
         trail.set_data(trajectory["x"][: index + 1], trajectory["y"][: index + 1])
         local_trail.set_data(trajectory["x"][: index + 1], trajectory["y"][: index + 1])
         here.set_data([x], [y])
@@ -433,20 +509,35 @@ def main():
     parser.add_argument("--animate", action="store_true", help="also write navigation.gif")
     parser.add_argument("--frame-step", type=int, default=8, help="cycles between two GIF frames")
     parser.add_argument("--fps", type=int, default=20, help="frames per second of the GIF")
+    parser.add_argument(
+        "--footprint-spacing",
+        type=float,
+        default=DEFAULT_FOOTPRINT_SPACING,
+        help="maximum corner motion between planned footprints [m]",
+    )
     arguments = parser.parse_args()
 
     if not (arguments.run / "meta.txt").is_file():
         print(f"{arguments.run} holds no meta.txt; run the example first", file=sys.stderr)
         return 1
+    if arguments.frame_step < 1 or arguments.fps < 1 or arguments.footprint_spacing <= 0.0:
+        parser.error("--frame-step, --fps and --footprint-spacing must be positive")
     arguments.out.mkdir(parents=True, exist_ok=True)
     meta = read_meta(arguments.run / "meta.txt")
 
-    plot_overview(arguments.run, arguments.out, meta)
-    plot_stop(arguments.run, arguments.out, meta)
+    plot_overview(arguments.run, arguments.out, meta, arguments.footprint_spacing)
+    plot_stop(arguments.run, arguments.out, meta, arguments.footprint_spacing)
     plot_commands(arguments.run, arguments.out, meta)
     plot_traversed(arguments.run, arguments.out, meta)
     if arguments.animate:
-        animate(arguments.run, arguments.out, meta, arguments.frame_step, arguments.fps)
+        animate(
+            arguments.run,
+            arguments.out,
+            meta,
+            arguments.frame_step,
+            arguments.fps,
+            arguments.footprint_spacing,
+        )
     print(f"wrote the figures into {arguments.out}")
     return 0
 

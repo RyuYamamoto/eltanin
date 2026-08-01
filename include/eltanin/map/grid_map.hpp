@@ -48,7 +48,7 @@ public:
   const MapGeometry & geometry() const noexcept { return geometry_; }
 
   /// Moves the window without touching the cells; nothing is reallocated or reinitialized.
-  void set_origin(const Eigen::Vector2d & origin) noexcept { geometry_.set_origin(origin); }
+  void set_origin(const Eigen::Vector2d & origin) { geometry_.set_origin(origin); }
 
   int size_x() const noexcept { return geometry_.size_x(); }
 

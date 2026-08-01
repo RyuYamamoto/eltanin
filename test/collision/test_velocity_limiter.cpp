@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -159,6 +160,15 @@ TEST(VelocityLimiterCreate, NormalizesTheFootprintToCounterClockwise)
 TEST(VelocityLimiterCreate, PredictionStepIsTheHorizonOverTheStepCount)
 {
   EXPECT_DOUBLE_EQ(make_limiter(VelocityLimiterParams{}).prediction_dt(), 0.2);
+}
+
+TEST(VelocityLimiter, RejectsAnEmptyMap)
+{
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+  const CollisionScenario scenario = free_scenario();
+  EXPECT_THROW(
+    limiter.limit(eltanin::map::Costmap{}, scenario.model, Pose2D{}, twist(0.5, 0.0)),
+    std::invalid_argument);
 }
 
 TEST(LimitCommand, LimitsAReverseCommandByItsMagnitude)

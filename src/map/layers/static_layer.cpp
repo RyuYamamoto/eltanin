@@ -15,8 +15,8 @@
 #include <eltanin/map/layers/static_layer.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace eltanin::map
@@ -24,8 +24,9 @@ namespace eltanin::map
 
 StaticLayer::StaticLayer(Costmap map) : map_(std::move(map))
 {
-  assert(map_.cell_count() > 0);
-  assert(map_.geometry().resolution() > 0.0);
+  if (map_.cell_count() == 0 || map_.geometry().resolution() <= 0.0) {
+    throw std::invalid_argument("StaticLayer requires a usable map");
+  }
 }
 
 void StaticLayer::update_costs(Costmap & master)

@@ -1,4 +1,4 @@
-# eltanin グローバルプランナ設計方針 (8 近傍 A* と経路スムーザ)
+# eltanin グローバルプランナ設計方針 (8 近傍 A*、Hybrid A*、経路スムーザ)
 
 対象: `include/eltanin/planner/`、`src/planner/` (`eltanin_planner` / `eltanin::planner`)。
 移植元は `navyu_path_planner` (`astar_planner.hpp` / `node.hpp` / `base_global_planner.hpp` / `smoother.hpp`)。
@@ -13,6 +13,8 @@
 やること:
 
 - 8 近傍 A* グローバルプランナ。セル型と判定モデルの 2 つでテンプレート化する。
+- Hybrid A* グローバルプランナ。向き付き状態と定曲率 motion primitive を使う。
+- `Planner` 基底を介して A* / Hybrid A* を実行時に切り替えられるようにする。
 - フラット配列による探索状態。`new` / `delete` / スマートポインタを 1 つも持たない。
 - 最近傍の通行可セル探索 (`find_nearest_traversable`) を独立した関数として切り出す。
 - 衝突チェック付き反復平滑化スムーザ。端点を保持する。
@@ -25,11 +27,9 @@
 | 距離場 (EDT) の生成 | §7.1。本モジュールは `DistanceMap` を手で作って実体化を検証するだけ |
 | ローカルプランナ / 軌道生成 | 利用者 (制御) が居ない |
 | コスト値を経路コストに加算する重み付け探索 | 入れると期待長がパラメータ依存になり、最適性テストの基準が失われる。1 パス探索の正しさを固定するのが先 |
-| 向き付き探索 (Hybrid A* / state lattice) | `Traversability` は向きを持たない前提で設計されている |
-| 別プランナとの共通基底クラス | **§12 に詳述。** D* / Hybrid A* は同一の基底クラスに収まらないため、1 実装から基底を設計すると作り直しになる。navyu の `BaseGlobalPlanner` は座標変換の重複実装を抱える場所そのものだった |
 | 経路のリサンプリング / 間引き / カスプ分割 | 利用者が居ない。`Path` の解説どおり自由関数の担当 |
-| 経路点間の線分衝突判定 | 点単位の判定に限る (§8)。厳密フットプリント衝突は `eltanin_safety` |
-| 探索の打ち切り (時間 / 展開ノード数の上限) | `closed` がセル数で有界なので停止性は保証される。上限値の妥当な決め方は実測が必要 |
+| A* / smoother の経路点間の線分衝突判定 | 点単位の判定に限る (§8)。Hybrid A* は primitive を区間サンプリングする (§12) |
+| A* の探索打ち切り | `closed` がセル数で有界なので停止性は保証される。Hybrid A* は `max_expansions` を持つ |
 | 失敗理由の返却 | §10 の分類 B は `std::optional`。理由の列挙は利用者が現れてから |
 
 ---
@@ -39,15 +39,17 @@
 タスク要求は「将来 `DistanceMap` + `CollisionRadii` に差し替えても本体を変更しないこと」であった。これを**型の上で構造的に保証する**ため、判定モデルの適用を探索の前に全セル 1 回の分類として前置し、A* 本体を非テンプレート関数として `.cpp` に置いた。
 
 ```
-plan<Map, Model>()                        ヘッダテンプレート
+Planner::plan<Map, Model>()               ヘッダテンプレート
   ├─ 前提条件 assert / world_to_map
   ├─ goal セルの分類                       ← ここまでで nullopt になる経路は
   ├─ find_nearest_traversable()               3 値グリッドを確保しない
   ├─ build_traversability_grid()          ← セル型と判定モデルが見える最後の場所
-  └─ detail::plan_on_grid()               非テンプレート (astar_planner.cpp)
+  └─ plan_on_grid()                       非テンプレート仮想関数
+       ├─ AStarPlanner                    8 近傍セル探索
+       └─ HybridAStarPlanner              向き付き motion primitive 探索
 ```
 
-`detail::plan_on_grid()` は `MapGeometry` と `std::vector<std::uint8_t>` しか受け取らない。**セル型も判定モデルも見えない。** 探索本体・経路復元・yaw 割り当てはすべて非テンプレートであり、実体化の追加でコードが複製されることもない。
+`Planner::plan_on_grid()` と各派生実装は `MapGeometry` と `std::vector<std::uint8_t>` しか受け取らない。**セル型も判定モデルも見えない。** 探索本体・経路復元は非テンプレートであり、実体化の追加でコードが複製されることもない。
 
 この方式の帰結として、「同一の通行可否分類になるコストマップと距離場が同一の `Path` を返す」ことは**構造的に自明**になる。両者は同一の 3 値グリッドを生成し、以降の計算は同じ関数 1 本を通る。テスト `PlannerSeam.BothModelsProduceTheSamePath` はその構造が壊れていないことの回帰である。
 
@@ -62,7 +64,7 @@ plan<Map, Model>()                        ヘッダテンプレート
 
 **採らなかった対案**: 探索本体もヘッダテンプレートにして遅延分類する。全セル分類の無駄を避けられる代わりに、(a) 中核をテンプレート抜きでテストできない、(b) 実体化ごとに探索本体が複製される、(c) 「本体を変更しない」がコンパイラの挙動任せになる、を失う。上記の同一 `Path` が構造的に保証されなくなるのが決め手である。
 
-**3 値を 2 値に潰さない。** `Free` / `Circumscribed` / `Inscribed` をそのまま 1 byte に格納する。これは §7.2 の 2 パス化が「近傍展開の通行可否述語 1 本の差し替え」で済む状態を保つためであり、§4 が 3 値にした理由をそのまま引き継いでいる。列挙子の値 0 / 1 / 2 は `astar_planner.hpp` の `static_assert` で固定した (`traversability.hpp` は変更していない)。
+**3 値を 2 値に潰さない。** `Free` / `Circumscribed` / `Inscribed` をそのまま 1 byte に格納する。これは §7.2 の 2 パス化が「近傍展開の通行可否述語 1 本の差し替え」で済む状態を保つためであり、§4 が 3 値にした理由をそのまま引き継いでいる。列挙子の値 0 / 1 / 2 は `planner.hpp` の `static_assert` で固定した (`traversability.hpp` は変更していない)。
 
 **`CellMap` concept を当初 `planner/` に置いた理由**: `map/` への追加は T1〜T3 の公開 API を変更しないという制約に触れる。利用者は `plan` / `smooth` / `find_nearest_traversable` の 3 つで、§9.2 (利用者の無い public を作らない) に反しない。**T6 で `eltanin_safety` が 2 人目の利用者になったため `include/eltanin/map/cell_map.hpp` (`eltanin::map::CellMap`) へ移した。** 単一リポジトリで利用者を全部直せるため後方互換の別名は置いていない。
 
@@ -180,7 +182,7 @@ my=0:  . # # G
 
 ロボットが膨張帯に入っているのは正常な状況 (壁際からの発進、動的障害物の接近) であり、そこで計画不能になるのは実用に反する。一方 goal は利用者が選ぶ値であり、通行不可なら「そこへは行けない」と返すのが正しい情報である。切り離した `find_nearest_traversable()` を goal に適用するかは後続タスクの判断に委ねる。
 
-寄せ替えの是非と半径を呼び出し側が制御できるよう、`AStarParams::start_search_radius_cells` (既定 8 セル) を `plan()` の 5 番目の引数に既定値付きで置いた。`0` は「救済しない」を意味する。既定 8 セルは `resolution 0.05` で 0.4 m であり、膨張半径 0.55 m (§14.7) と同程度をカバーする。
+寄せ替えの是非と半径を呼び出し側が制御できるよう、`AStarParams` と `HybridAStarParams` はそれぞれ `start_search_radius_cells` (既定 8 セル) を持つ。`0` は「救済しない」を意味する。既定 8 セルは `resolution 0.05` で 0.4 m であり、膨張半径 0.55 m (§14.7) と同程度をカバーする。
 
 **`find_nearest_traversable()` の契約**
 
@@ -365,47 +367,49 @@ E(p) = (wd/2) Σ |p_i - orig_i|² + (ws/2) Σ |p_{i+1} - p_i|²
 
 ---
 
-## 12. 共通基底クラスを作らなかった理由と、作るときの順序
+## 12. 共通 Planner I/F と Hybrid A*
 
-「後に D* / Theta* / Hybrid A* を切り替えられるようにするなら基底クラスを作るべきではないか」という問いに対する記録である。**結論は「今は作らない」だが、理由は「実装が 1 つだから」という一般論ではない。挙がった 3 つが 1 つの基底クラスに収まらないからである。**
+### 12.1 仮想境界
 
-### 12.1 3 つのアルゴリズムを現在の縫い目に当ててみる
+2 つの実装が揃った時点で `Planner` 基底を導入した。公開された `Planner::plan<Map, Model>()` は非仮想のテンプレートメソッドで、次を一元化する。
 
-型消去された縫い目は `detail::plan_on_grid()` である。これをそのまま `virtual` にできるかで判定する。
+- world 座標の範囲検査
+- blocked goal の拒否と blocked start の最近傍 `Free` セルへの救済
+- `Map + Model` から `TraversabilityGrid` への型消去
+- 有効な start/goal と分類済みグリッドの探索コアへの受け渡し
+
+派生クラスが override するのは非テンプレートの `plan_on_grid()` だけである。これによりセルアクセスのホットループへ仮想呼び出しを入れず、次のように実行時選択できる。
 
 ```cpp
-std::optional<Path> plan_on_grid(
-  const map::MapGeometry & geometry, const TraversabilityGrid & grid,
-  const map::MapIndex & start, const map::MapIndex & goal, double goal_yaw);
+std::unique_ptr<planner::Planner> selected = std::make_unique<planner::AStarPlanner>();
+auto path = selected->plan(map, model, start, goal);
+
+selected = std::make_unique<planner::HybridAStarPlanner>();
+path = selected->plan(map, model, start, goal);
 ```
 
-| アルゴリズム | 収まるか | 理由 |
-|---|---|---|
-| **Theta\*** | **収まる** | 同じ 8 近傍グリッド、同じ入力。追加されるのは line-of-sight 判定と親の伝播だけで、どちらも `grid` があれば足りる |
-| **D\*(Lite)** | **収まらない** | 価値の源泉が**増分性**にある。`initialize()` / `update_changed_cells()` / `replan()` の 3 本と、呼び出しを跨いで生きる状態 (`g` / `rhs` / `km` / open list) が必要。ワンショット `plan()` の裏に置くと毎回ゼロから探索することになり、**D\* を使う理由自体が消える** |
-| **Hybrid A\*** | **収まらない** | 状態空間が `(x, y, θ)` の連続量で、motion primitive・最小旋回半径・後退ペナルティが要る。決定的なのは**衝突判定が向きに依存する**点で、`Traversability` は §3 で意図的に向きを持たない設計になっている。`TraversabilityGrid` では入力として不足で、フットプリントと生のマップが必要。出力にカスプが生じる点も 8 近傍 A* と異なる |
+アルゴリズム固有パラメータは各派生クラスの constructor に閉じ、基底 I/F を膨らませない。Theta* のような同じワンショット入力で動く Planner はこの境界に追加できる。一方、呼び出しを跨いだ `g/rhs/km` と map 更新 API を必要とする D* Lite は別の増分 Planner I/F が必要である。
 
-すなわち今 1 つの実装から基底クラスを設計すると、グリッド A* の都合で形が決まる。その後 D* が「状態を持たせろ」、Hybrid A* が「向き付き衝突判定と別の状態空間をくれ」と要求し、**派生クラスと全呼び出し箇所を抱えた状態で基底を作り直すことになる。** 2 つの実物から抽出するより高くつく。
+### 12.2 Hybrid A* の状態と展開
 
-### 12.2 現設計はすでに基底クラスを入れられる位置に縫い目を持っている
+離散状態は `(cell, heading_bin, previous_motion_mode)` である。`previous_motion_mode` を含めるのは steering change penalty を Markov な遷移コストにするためで、同じ `(cell, heading)` でも直前の操舵が異なる候補を潰さない。
 
-`plan_on_grid()` が**セル型も判定モデルも見ない**非テンプレート関数であるため、ここがそのまま `virtual` の境界になる。Theta* を足すときは `theta_star_planner.hpp/cpp` を新規追加するだけで、既存コードの変更は 0 行である。
+各ノードは連続値の `Pose2D` を保持し、次の 3 個の前進 motion primitive を厳密な円弧積分で展開する。
 
-しかもこの縫い目の切り方は、基底クラスを入れる際の**唯一の現実的な位置**でもある。仮想関数はテンプレートにできないので、`plan()` のレベルで仮想化すると `Costmap + CostTraversabilityModel` と `DistanceMap + CollisionRadii` の両対応が壊れる。回避策として `Map` / `Model` を抽象クラスで型消去すると、**セルアクセスごとに仮想呼び出しが入る** — `docs/costmap-design.md` §12.2 が「セルアクセサに仮想関数を持たせない」と明示的に禁じている形である。**「全セル 1 回分類してフラットな byte 配列にする」構造 (§2) は、ホットループから仮想呼び出しを排除したまま基底クラスを導入できる状態を作っている。**
+- curvature `-1 / minimum_turning_radius`, `0`, `+1 / minimum_turning_radius`
 
-### 12.3 nav2 の基底クラスが存在する理由
+各 primitive は `collision_check_step` 間隔でサンプリングし、全サンプルが `Traversability::Free` の場合だけ採用する。判定対象は車体基準点であり、**向き付き footprint polygon の直接判定ではない**。車体外形の clearance が必要な利用者は、従来の A* と同様に footprint 半径で膨張済みの map/model を渡す必要がある。非円形 footprint を姿勢ごとに厳密判定する拡張は、この基底へ生 map を追加せず、衝突判定 strategy を別途渡す設計で行う。
 
-nav2 には `nav2_core::GlobalPlanner` (`configure()` + `createPlan(start, goal)`) があり、Smac Planner (Hybrid A*) はこれを実装している。一方**この I/F の裏に D\* は入っていない**。12.1 の表と整合する。
+`g` は距離 [m] を基準に steering / steering change penalty を加算する。`h` はユークリッド距離であり、各遷移コストが primitive の chord 長以上なので許容的かつ整合的である。open list の同一候補順序と motion 順序を固定し、同じ入力から同じ Path を返す。
 
-nav2 の基底クラスが必要な直接の理由は **pluginlib による実行時ロード**である。マップは `configure()` で渡された `costmap_ros` メンバから取るため、縫い目はテンプレートではなく ROS 型で型消去されている。パラメータも ROS パラメータで受けるので、アルゴリズムごとに異なる設定を基底の引数に出す必要がない。
+goal から `dubins_expansion_distance` 以内のノードでは、現在姿勢から要求 goal 姿勢までの最短 Dubins path を計算する。その全区間を `collision_check_step` 以下の間隔で検査し、衝突がなければ探索経路へ接続する。接続が衝突する場合は通常の探索を継続する。これにより末尾 pose は位置・yaw とも要求値へ一致し、運動学を満たさない sub-cell snap は行わない。
 
-すなわち**基底クラスは「実行時にプラグインを選ぶ」という要求から生じている。** eltanin にその要求が現れるのは `eltanin_ros` の層である。コアライブラリ側で先に作る動機にはならない (`AStarParams` / `ThetaStarParams` / Hybrid A* の運動学パラメータをどう共通化するかという、答えの出ない問いを今抱えることにもなる)。
+`dubins_path.cpp` は LSL / RSR / LSR / RSL / RLR / LRL の 6 種を評価し、最短の前進経路を返す。今回の Hybrid A* は前進のみを対象とするため Reeds-Shepp は扱わない。analytic expansion が成功した時点で返す実装なので、探索全体に対する最適性は保証しない。
 
-### 12.4 導入する順序 (申し送り)
+### 12.3 出力上の注意
 
-1. **Theta\* を 2 本目の自由関数として追加する。** 現 I/F にそのまま収まるので、これが最も安い検証になる。
-2. その **2 つの実物から** `GlobalPlanner` 基底を抽出する。`plan_on_grid()` の署名が土台になる。
-3. **D\* と Hybrid A\* には別の I/F を与える。** 増分探索と向き付き探索を同じ基底に押し込まない。
-4. 設定ファイルからの実行時選択が必要になったら、それは `eltanin_ros` に置く。
+Hybrid A* の各 pose の yaw は車体姿勢であり、A* のように経路接線へ上書きしない。経路はすべて前進で、隣接 pose 間の曲率は `1 / minimum_turning_radius` 以下になる。
 
-コアライブラリ内での切り替えだけなら `enum` + `switch` か `std::function` で足りる。クラス階層は要らない。
+`eltanin_hybrid_astar_demo` は YAML/PGM 地図を読み込み、実機 Footprint から求めた半径で膨張する。入力地図全体は 4000 x 4000 セルになり得るため、まず A* 経路の周囲を切り出し、その実地図領域上で Hybrid A* を実行する。A* は探索範囲の決定だけに使い、出力経路には混ぜない。
+
+デモは `costmap.pgm` / `path.csv` / `footprint.csv` / `meta.txt` を出力する。`examples/plot_hybrid_astar.py` は既定で全経路サンプルの Footprint を重ね、車体が掃引する領域と曲率制約を PNG に描く。長い経路では `--footprint-step` で描画だけを間引ける。`--animate` 指定時は Footprint が経路に沿って移動する GIF も生成する。Python / matplotlib / numpy / Pillow は可視化スクリプトにだけ必要であり、planner 本体の依存には含めない。

@@ -17,6 +17,7 @@
 #include <control/tracking_fixture.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/angle.hpp>
+#include <eltanin/core/differential_drive.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
@@ -29,6 +30,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -39,6 +41,7 @@ using eltanin::Pose2D;
 using eltanin::Twist2D;
 using eltanin::control::GoalApproach;
 using eltanin::control::GoalApproachParams;
+using eltanin::control::PurePursuit;
 using eltanin::control::PurePursuitParams;
 using eltanin::control::detail::apply_linear_limit;
 using eltanin_test::make_straight_path;
@@ -130,6 +133,17 @@ TEST(GoalApproach, CreateAcceptsDefaults)
   EXPECT_DOUBLE_EQ(approach->params().approach_decel, 0.5);
   EXPECT_DOUBLE_EQ(approach->params().yaw_align_timeout, 5.0);
   EXPECT_DOUBLE_EQ(approach->params().max_angular_vel, 1.0);
+}
+
+TEST(GoalApproach, ComputeRejectsInvalidRuntimeInput)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_goal_path(0.0);
+  EXPECT_THROW(approach.compute(Pose2D{}, path, 0.0), std::invalid_argument);
+  EXPECT_THROW(approach.compute(Pose2D{}, path, kInf), std::invalid_argument);
+  EXPECT_THROW(
+    approach.compute(Pose2D{Vector2d::Zero(), kNan}, path, APPROACH_DT),
+    std::invalid_argument);
 }
 
 TEST(GoalApproach, CreateRejectsNonFiniteParams)
@@ -245,7 +259,7 @@ TEST(GoalApproach, LimitIsMonotonicInRemainingArc)
   EXPECT_GT(samples, 30U);
 }
 
-TEST(GoalApproach, ZeroRemainingArcGivesZeroLimit)
+TEST(GoalApproach, LateralDistanceFromLastPoseContributesToRemainingDistance)
 {
   GoalApproach approach = make_approach();
   const Path path{Pose2D{Vector2d{0.0, 0.0}, 0.0}};
@@ -253,8 +267,10 @@ TEST(GoalApproach, ZeroRemainingArcGivesZeroLimit)
     approach.compute(Pose2D{Vector2d{0.3, 0.0}, 0.0}, path, APPROACH_DT);
 
   ASSERT_EQ(result.state, GoalApproach::State::Approaching);
-  EXPECT_DOUBLE_EQ(result.remaining_arc, 0.0);
-  EXPECT_DOUBLE_EQ(result.linear_vel_limit, 0.0);
+  EXPECT_DOUBLE_EQ(result.remaining_arc, 0.3);
+  EXPECT_DOUBLE_EQ(
+    result.linear_vel_limit,
+    std::sqrt(2.0 * approach.params().approach_decel * result.remaining_arc));
 }
 
 TEST(GoalApproach, TerminalStatesGiveZeroLimit)
@@ -538,6 +554,50 @@ TEST(GoalApproach, ResetClearsTheElapsedTime)
   EXPECT_DOUBLE_EQ(restarted.align_elapsed, APPROACH_DT);
 }
 
+TEST(GoalApproachIntegration, TerminalApproachDoesNotOrbitAfterTheGoalMovesToTheSide)
+{
+  GoalApproach approach = make_approach();
+  const std::optional<PurePursuit> created = PurePursuit::create(PurePursuitParams{});
+  ASSERT_TRUE(created.has_value());
+  PurePursuit tracker = *created;
+  const Path path{
+    Pose2D{Vector2d{0.00, 0.0}, 0.0}, Pose2D{Vector2d{0.05, 0.0}, 0.0},
+    Pose2D{Vector2d{0.10, 0.0}, 0.0}};
+
+  // Reproduce the nav run: normal tracking has already latched its initial heading alignment.
+  ASSERT_GT(
+    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, APPROACH_DT).command.linear.x(),
+    0.0);
+
+  Pose2D robot{Vector2d{0.10, 0.25}, 0.0};
+  double maximum_goal_distance = (path[path.size() - 1].position - robot.position).norm();
+  bool reached = false;
+  std::size_t steps = 0;
+  for (; steps < 200; ++steps) {
+    const GoalApproach::Result goal = approach.compute(robot, path, APPROACH_DT);
+    if (goal.state == GoalApproach::State::Reached) {
+      reached = true;
+      break;
+    }
+
+    Twist2D command;
+    if (goal.state == GoalApproach::State::Aligning) {
+      command = goal.command;
+    } else {
+      const PurePursuit::Result tracking = tracker.compute(robot, path, APPROACH_DT);
+      ASSERT_EQ(tracking.status, PurePursuit::Status::Tracking);
+      command = apply_linear_limit(tracking.command, goal.linear_vel_limit);
+    }
+    robot = eltanin::integrate_differential_drive(robot, command, APPROACH_DT);
+    maximum_goal_distance = std::max(
+      maximum_goal_distance, (path[path.size() - 1].position - robot.position).norm());
+  }
+
+  EXPECT_TRUE(reached);
+  EXPECT_LT(steps, 200u);
+  EXPECT_LE(maximum_goal_distance, 0.25 + 1e-12);
+}
+
 TEST(GoalApproach, EmptyPathIsInactiveWithNoLimit)
 {
   GoalApproach approach = make_approach();
@@ -553,7 +613,7 @@ TEST(GoalApproach, EmptyPathIsInactiveWithNoLimit)
   expect_zero_command(result);
 }
 
-TEST(GoalApproach, SinglePosePathHasZeroRemainingArc)
+TEST(GoalApproach, SinglePosePathUsesGoalDistanceAsRemainingArc)
 {
   GoalApproach approach = make_approach();
   const Path path{Pose2D{Vector2d{1.0, 2.0}, 0.3}};
@@ -561,7 +621,7 @@ TEST(GoalApproach, SinglePosePathHasZeroRemainingArc)
     approach.compute(Pose2D{Vector2d{1.2, 2.0}, 0.3}, path, APPROACH_DT);
 
   EXPECT_EQ(result.state, GoalApproach::State::Approaching);
-  EXPECT_DOUBLE_EQ(result.remaining_arc, 0.0);
+  EXPECT_NEAR(result.remaining_arc, 0.2, 1e-12);
   EXPECT_DOUBLE_EQ(result.position_error, 0.2);
   EXPECT_DOUBLE_EQ(result.yaw_error, 0.0);
 }

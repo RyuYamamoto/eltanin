@@ -25,7 +25,7 @@ namespace eltanin::map
 class StaticLayer final : public Layer
 {
 public:
-  /// Precondition: map.cell_count() > 0 and map.geometry().resolution() > 0.
+  /// Throws std::invalid_argument when map is empty or otherwise unusable.
   explicit StaticLayer(Costmap map);
 
   /// Cells outside the source map are left untouched, so the reset value survives there.

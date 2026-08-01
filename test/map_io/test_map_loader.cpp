@@ -140,6 +140,12 @@ TEST(MapLoader, InvalidValuesAreReported)
     "image: mode.pgm\nresolution: 0.05\norigin: [0.0, 0.0]\nnegate: 0\n"
     "occupied_thresh: 0.65\nfree_thresh: 0.196\n");
   EXPECT_EQ(kind_of_failure(short_origin), MapIoErrorKind::InvalidValue);
+
+  const auto non_finite_origin = write_text(
+    "non_finite_origin.yaml",
+    "image: mode.pgm\nresolution: 0.05\norigin: [.nan, 0.0, 0.0]\nnegate: 0\n"
+    "occupied_thresh: 0.65\nfree_thresh: 0.196\n");
+  EXPECT_EQ(kind_of_failure(non_finite_origin), MapIoErrorKind::InvalidValue);
 }
 
 TEST(MapLoader, NonZeroOriginYawIsRejected)

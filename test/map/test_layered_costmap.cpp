@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,11 @@ using eltanin_test::make_inflation_model;
 MapGeometry local_geometry() { return MapGeometry(6, 6, 0.1, Vector2d{0.0, 0.0}); }
 
 }  // namespace
+
+TEST(LayeredCostmap, RejectsAnEmptyGeometry)
+{
+  EXPECT_THROW(LayeredCostmap(MapGeometry{}, NO_INFORMATION), std::invalid_argument);
+}
 
 TEST(LayeredCostmap, StartsFilledWithTheDefaultCost)
 {

@@ -280,14 +280,14 @@ TEST(InflationLayer, NeverWritesBeyondTheInflationRadius)
     {".........", ".........", ".........", ".........", "....#....", ".........", ".........",
      ".........", "........."},
     0.1);
-  constexpr std::uint8_t SENTINEL = 77;
-  input(7, 7) = SENTINEL;
-  input(0, 0) = SENTINEL;
+  constexpr std::uint8_t sentinel = 77;
+  input(7, 7) = sentinel;
+  input(0, 0) = sentinel;
 
   const Costmap result = inflated(input, make_inflation_model(0.05, 0.1, 0.25, 3.0));
 
-  EXPECT_EQ(result(7, 7), SENTINEL);
-  EXPECT_EQ(result(0, 0), SENTINEL);
+  EXPECT_EQ(result(7, 7), sentinel);
+  EXPECT_EQ(result(0, 0), sentinel);
 }
 
 TEST(InflationLayer, HandlesAZeroInflationRadius)

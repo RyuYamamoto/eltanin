@@ -62,7 +62,8 @@ public:
     /// Upper bound to compose with apply_linear_limit(); +inf when there is nothing to limit.
     double linear_vel_limit{std::numeric_limits<double>::infinity()};
     State state{State::Inactive};
-    /// Arc length from the nearest path pose to the last one [m]; +inf for an empty path.
+    /// Greater of the remaining path arc and the straight-line goal distance [m].
+    /// +inf for an empty path.
     double remaining_arc{std::numeric_limits<double>::infinity()};
     /// Distance from the robot to the last path pose [m]; +inf for an empty path.
     double position_error{std::numeric_limits<double>::infinity()};
@@ -76,6 +77,7 @@ public:
   static std::optional<GoalApproach> create(const GoalApproachParams & params);
 
   /// Reads `path` only, including the goal yaw from the last pose (the exception to C-4).
+  /// Throws std::invalid_argument when the robot pose or dt is invalid.
   Result compute(const Pose2D & robot, const Path & path, double dt);
 
   /// Clears the terminal latch and the alignment timer; call it when a new path is handed in.

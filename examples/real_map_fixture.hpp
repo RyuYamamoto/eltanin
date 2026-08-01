@@ -25,6 +25,7 @@
 #include <eltanin/map_io/map_loader.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -141,14 +142,15 @@ inline std::optional<eltanin::map::MapIndex> farthest_reachable_cell(
 
   eltanin::map::MapIndex last = from;
   std::size_t discovered = 1;
-  constexpr int DX[4] = {1, -1, 0, 0};
-  constexpr int DY[4] = {0, 0, 1, -1};
+  constexpr std::array<eltanin::map::MapIndex, 4> neighbor_offsets{
+    eltanin::map::MapIndex{1, 0}, eltanin::map::MapIndex{-1, 0},
+    eltanin::map::MapIndex{0, 1}, eltanin::map::MapIndex{0, -1}};
   while (!queue.empty() && discovered < MAX_FLOOD_FILL_CELLS) {
     last = queue.front();
     queue.pop_front();
-    for (int k = 0; k < 4; ++k) {
-      const int nx = last.x + DX[k];
-      const int ny = last.y + DY[k];
+    for (const eltanin::map::MapIndex & offset : neighbor_offsets) {
+      const int nx = last.x + offset.x;
+      const int ny = last.y + offset.y;
       if (!geometry.in_bounds(nx, ny)) {
         continue;
       }

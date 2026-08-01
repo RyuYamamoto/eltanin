@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 
 #include <numbers>
+#include <stdexcept>
 
 namespace
 {
@@ -78,6 +79,13 @@ TEST(PlannerSeam, PlansOnACostmap)
     Pose2D{map.geometry().map_to_world(4, 2), 0.0});
   ASSERT_TRUE(path.has_value());
   EXPECT_NEAR(path_length(*path), (4.0 + 2.0 * std::numbers::sqrt2) * RESOLUTION, TOLERANCE);
+}
+
+TEST(PlannerSeam, AStarConstructorRejectsNegativeStartSearchRadius)
+{
+  eltanin::planner::AStarParams params;
+  params.start_search_radius_cells = -1;
+  EXPECT_THROW(eltanin::planner::AStarPlanner{params}, std::invalid_argument);
 }
 
 TEST(PlannerSeam, PlansOnAHandBuiltDistanceField)

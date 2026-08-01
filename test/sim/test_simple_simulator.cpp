@@ -61,11 +61,11 @@ TEST(SimpleSimulator, UpdateMatchesTheSharedIntegratorExactly)
 {
   const Pose2D start{Vector2d{1.0, 2.0}, 0.3};
   const Twist2D command{Vector2d{0.5, 0.0}, 0.4};
-  constexpr double DT = 0.1;
+  constexpr double dt = 0.1;
 
   SimpleSimulator simulator(start);
-  const Pose2D plant = simulator.update(command, DT);
-  const Pose2D reference = integrate_differential_drive(start, command, DT);
+  const Pose2D plant = simulator.update(command, dt);
+  const Pose2D reference = integrate_differential_drive(start, command, dt);
 
   EXPECT_DOUBLE_EQ(plant.position.x(), reference.position.x());
   EXPECT_DOUBLE_EQ(plant.position.y(), reference.position.y());
@@ -76,13 +76,13 @@ TEST(SimpleSimulator, RepeatedUpdatesAccumulate)
 {
   const Pose2D start{Vector2d::Zero(), 0.0};
   const Twist2D command{Vector2d{0.5, 0.0}, 0.4};
-  constexpr double DT = 0.1;
+  constexpr double dt = 0.1;
 
   SimpleSimulator simulator(start);
   Pose2D reference = start;
   for (int i = 0; i < 20; ++i) {
-    simulator.update(command, DT);
-    reference = integrate_differential_drive(reference, command, DT);
+    simulator.update(command, dt);
+    reference = integrate_differential_drive(reference, command, dt);
   }
 
   EXPECT_DOUBLE_EQ(simulator.pose().position.x(), reference.position.x());

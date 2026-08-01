@@ -33,6 +33,7 @@ using eltanin::Pose2D;
 using eltanin_examples::LegStats;
 using eltanin_examples::NavigateConfig;
 using eltanin_examples::NavigateResult;
+using eltanin_examples::PlannerType;
 
 #ifdef ELTANIN_TEST_MAP_DIR
 constexpr const char * DEFAULT_MAP_DIR = ELTANIN_TEST_MAP_DIR;
@@ -45,12 +46,13 @@ int usage(const char * program)
   std::cerr
     << "usage: " << program << " <output_dir> [options]\n"
     << "  Runs the whole eltanin navigation stack in one process, without ROS: map_io ->\n"
-    << "  LayeredCostmap (static + obstacle + inflation) -> A* -> smoother -> PurePursuit ->\n"
-    << "  VelocityLimiter -> SimpleSimulator, replanning once the observations block the path.\n"
+    << "  LayeredCostmap -> selected global planner -> PurePursuit -> VelocityLimiter ->\n"
+    << "  SimpleSimulator, replanning once the observations block the path.\n"
     << "options:\n"
     << "  --map <map.yaml>           default: " << DEFAULT_MAP_DIR << "/map.yaml\n"
     << "  --start <x> <y>            default: picked from the map, with --goal\n"
     << "  --goal <x> <y>             default: picked from the map, with --start\n"
+    << "  --planner <name>           astar (default) or hybrid-astar\n"
     << "  --obstacle-fraction <f>    where the unknown obstacle sits on the path; 0 disables it\n"
     << "  --obstacle-half-width <n>  half width of that obstacle [cells]\n"
     << "  --dt <s>                   control period\n"
@@ -95,6 +97,15 @@ std::optional<Arguments> parse(int argc, char ** argv)
       } else if (option == "--goal" && has_values(argc, i, 2)) {
         goal = Pose2D{Eigen::Vector2d{std::stod(argv[i + 1]), std::stod(argv[i + 2])}, 0.0};
         i += 2;
+      } else if (option == "--planner" && has_values(argc, i, 1)) {
+        const std::string name = argv[++i];
+        if (name == "astar") {
+          arguments.config.planner = PlannerType::AStar;
+        } else if (name == "hybrid-astar") {
+          arguments.config.planner = PlannerType::HybridAStar;
+        } else {
+          return std::nullopt;
+        }
       } else if (option == "--obstacle-fraction" && has_values(argc, i, 1)) {
         arguments.config.obstacle_fraction = std::stod(argv[++i]);
       } else if (option == "--obstacle-half-width" && has_values(argc, i, 1)) {
@@ -132,7 +143,8 @@ void print_summary(
   const NavigateConfig & config, const NavigateResult & result)
 {
   const eltanin::map::MapGeometry & geometry = static_map.geometry();
-  std::cout << "map              " << map << "  " << geometry.size_x() << " x " << geometry.size_y()
+  std::cout << "planner          " << eltanin_examples::planner_name(config.planner) << '\n'
+            << "map              " << map << "  " << geometry.size_x() << " x " << geometry.size_y()
             << "  res " << geometry.resolution() << "  origin (" << geometry.origin().x() << ", "
             << geometry.origin().y() << ")\n"
             << "start            (" << result.start.position.x() << ", "

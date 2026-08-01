@@ -433,7 +433,7 @@ public:
 | `map/` | `eltanin_map` / `eltanin::map` | T1 / T2 | グリッドマップ、幾何情報型、コスト定数、判定モデル 2 実装、距離 → コスト変換、コストマップレイヤ (static / obstacle / inflation) と `LayeredCostmap` |
 | `map_io/` | `eltanin_map_io` / `eltanin::map_io` | T1 | PGM + YAML 読み込み、PGM 書き出し (yaml-cpp 依存) |
 | `sensor/` | `eltanin_sensor` / `eltanin::sensor` | T3 (完了) | Scan 投影 (`ScanData` / `ScanFilter` / `project_scan`)。**依存は `eltanin_core` のみ** (tf / laser_geometry / PCL / ROS を持たない)。設計は `docs/sensor-design.md` |
-| `planner/` | `eltanin_planner` / `eltanin::planner` | T4 (グローバルのみ完了 / ローカルは未着手) | 8 近傍 A* グローバルプランナ (1 パス探索)、最近傍通行可セル探索、反復平滑化スムーザ。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/planner-design.md` |
+| `planner/` | `eltanin_planner` / `eltanin::planner` | T4 (グローバルのみ完了 / ローカルは未着手) | 共通 `Planner` I/F、8 近傍 A*、Hybrid A*、最近傍通行可セル探索、反復平滑化スムーザ。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/planner-design.md` |
 | `control/` | `eltanin_control` / `eltanin::control` | T5 (完了) | Pure Pursuit 経路追従 (`PurePursuitParams` / `PurePursuit`)。**依存は `eltanin_core` のみ** (コストマップを見ない)。設計は `docs/control-design.md`。`Pose2D` / 角度の補間・累積弧長・線分交差は汎用ユーティリティなので `eltanin_core` の既存ヘッダに置いた |
 | `collision/` | `eltanin_collision` / `eltanin::collision` | T6 (完了) | 二段構えのフットプリント衝突判定 (セル / 点群 / 多角形の各粒度) と制動距離則による速度制限 (`VelocityLimiter`)。**依存は `eltanin_core` / `eltanin_map` のみ**。設計は `docs/collision-design.md`。ディレクトリ名は用途名 (`safety/`) ではなく機構名にした — 「セーフティ」は T7 の ROS ノード側の語彙である。多角形の頂点順序 / 凸性 / AABB は汎用なので `eltanin_core` に置いた。重心 / 符号付き距離 / 多角形交差は利用者がないため未実装 (§9.2、理由は `docs/collision-design.md` §5.1) |
 | `sim/` | `eltanin_sim` / `eltanin::sim` | T6 (完了) | 差動二輪の簡易 plant (`SimpleSimulator`)。**依存は `eltanin_core` のみ**。積分の純関数 `integrate_differential_drive` は `core` に置き、予測と plant が共有する |

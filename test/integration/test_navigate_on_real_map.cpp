@@ -251,6 +251,7 @@ TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
   for (const char * key :
        {"resolution", "origin_x", "origin_y", "size_x", "size_y", "crop_offset_x", "crop_offset_y",
         "circumscribed_cost", "inscribed_radius", "circumscribed_radius", "inflation_radius",
+        "planner",
         "control_dt", "sensor_decimation", "local_window_size", "lidar_beams", "lidar_range_max",
         "raycast_step", "prediction_steps", "prediction_time", "prediction_dt", "collision_margin",
         "max_deceleration", "goal_tolerance", "max_replans", "stop_cycles_to_replan",
@@ -304,20 +305,37 @@ TEST_F(NavigateOnRealMap, ReportsAStallWhenReplanningDoesNotHelp)
   EXPECT_LT(result.samples.size(), max_steps);
 }
 
+TEST(NavigationLoop, RejectsInvalidConfigurationWithoutStartingTheLoop)
+{
+  constexpr int cells = 20;
+  constexpr double resolution = 0.05;
+  const Costmap map(MapGeometry(cells, cells, resolution, Eigen::Vector2d::Zero()));
+  const std::optional<RobotModel> robot = eltanin_examples::make_robot_model();
+  ASSERT_TRUE(robot.has_value());
+
+  NavigateConfig config;
+  config.control_dt = 0.0;
+  const NavigateResult result = eltanin_examples::navigate(map, *robot, config);
+
+  EXPECT_EQ(result.outcome, NavigateOutcome::ModelFailed);
+  EXPECT_FALSE(result.message.empty());
+  EXPECT_TRUE(result.samples.empty());
+}
+
 /// An unreachable goal has to be reported with the failing stage, not run to the cycle limit.
 TEST(NavigationLoop, ReportsAFailedPlanOnASplitMap)
 {
-  constexpr int CELLS = 160;
-  constexpr double RESOLUTION = 0.05;
-  Costmap split(MapGeometry(CELLS, CELLS, RESOLUTION, Eigen::Vector2d::Zero()));
-  for (int my = 0; my < CELLS; ++my) {
-    split(CELLS / 2, my) = eltanin::map::LETHAL_OBSTACLE;
+  constexpr int cells = 160;
+  constexpr double resolution = 0.05;
+  Costmap split(MapGeometry(cells, cells, resolution, Eigen::Vector2d::Zero()));
+  for (int my = 0; my < cells; ++my) {
+    split(cells / 2, my) = eltanin::map::LETHAL_OBSTACLE;
   }
   const std::optional<RobotModel> robot = eltanin_examples::make_robot_model();
   ASSERT_TRUE(robot.has_value());
 
   NavigateConfig config;
-  config.local_window_size = static_cast<double>(CELLS) * RESOLUTION / 2.0;
+  config.local_window_size = static_cast<double>(cells) * resolution / 2.0;
   config.start_goal = std::pair{
     Pose2D{Eigen::Vector2d{1.0, 4.0}, 0.0}, Pose2D{Eigen::Vector2d{7.0, 4.0}, 0.0}};
 
@@ -331,20 +349,20 @@ TEST(NavigationLoop, ReportsAFailedPlanOnASplitMap)
 /// The window origin has to land on the static grid, or StaticLayer resamples a shifted map.
 TEST(NavigationLoopWindow, SnapsTheLocalWindowOntoTheStaticGrid)
 {
-  constexpr int STATIC_CELLS = 40;
-  constexpr int WINDOW_CELLS = 8;
-  constexpr double RESOLUTION = 0.05;
+  constexpr int static_cells = 40;
+  constexpr int window_cells = 8;
+  constexpr double resolution = 0.05;
   const Eigen::Vector2d static_origin{-1.0, 2.0};
 
-  Costmap source(MapGeometry(STATIC_CELLS, STATIC_CELLS, RESOLUTION, static_origin));
-  for (int my = 0; my < STATIC_CELLS; ++my) {
-    for (int mx = 0; mx < STATIC_CELLS; ++mx) {
+  Costmap source(MapGeometry(static_cells, static_cells, resolution, static_origin));
+  for (int my = 0; my < static_cells; ++my) {
+    for (int mx = 0; mx < static_cells; ++mx) {
       source(mx, my) = static_cast<std::uint8_t>((mx * 7 + my * 13) % 251);
     }
   }
 
   eltanin::map::LayeredCostmap window(
-    MapGeometry(WINDOW_CELLS, WINDOW_CELLS, RESOLUTION, static_origin),
+    MapGeometry(window_cells, window_cells, resolution, static_origin),
     eltanin::map::NO_INFORMATION);
   window.add_layer<eltanin::map::StaticLayer>(source);
 
@@ -353,15 +371,15 @@ TEST(NavigationLoopWindow, SnapsTheLocalWindowOntoTheStaticGrid)
     const Eigen::Vector2d robot = static_origin + Eigen::Vector2d{0.6 + offset, 0.7 + offset};
     bool clamped = true;
     const Eigen::Vector2d origin = eltanin_examples::detail::snapped_window_origin(
-      source.geometry(), WINDOW_CELLS, robot, clamped);
+      source.geometry(), window_cells, robot, clamped);
     window.set_origin(origin);
     window.update();
 
     const auto lower_left = source.geometry().world_to_map(window.geometry().map_to_world(0, 0));
     ASSERT_TRUE(lower_left.has_value());
     EXPECT_FALSE(clamped);
-    for (int my = 0; my < WINDOW_CELLS; ++my) {
-      for (int mx = 0; mx < WINDOW_CELLS; ++mx) {
+    for (int my = 0; my < window_cells; ++my) {
+      for (int mx = 0; mx < window_cells; ++mx) {
         EXPECT_EQ(window.costmap()(mx, my), source(lower_left->x + mx, lower_left->y + my))
           << "offset " << offset << " cell " << mx << ", " << my;
       }
@@ -372,23 +390,23 @@ TEST(NavigationLoopWindow, SnapsTheLocalWindowOntoTheStaticGrid)
 /// Clamping keeps the window inside the static map even when the robot sits near an edge.
 TEST(NavigationLoopWindow, ClampsTheWindowToTheStaticMap)
 {
-  constexpr int STATIC_CELLS = 20;
-  constexpr int WINDOW_CELLS = 8;
-  constexpr double RESOLUTION = 0.05;
+  constexpr int static_cells = 20;
+  constexpr int window_cells = 8;
+  constexpr double resolution = 0.05;
   const Eigen::Vector2d static_origin{0.0, 0.0};
-  const Costmap source(MapGeometry(STATIC_CELLS, STATIC_CELLS, RESOLUTION, static_origin));
+  const Costmap source(MapGeometry(static_cells, static_cells, resolution, static_origin));
 
   bool clamped = false;
   const Eigen::Vector2d lower = eltanin_examples::detail::snapped_window_origin(
-    source.geometry(), WINDOW_CELLS, Eigen::Vector2d{0.02, 0.02}, clamped);
+    source.geometry(), window_cells, Eigen::Vector2d{0.02, 0.02}, clamped);
   EXPECT_TRUE(clamped);
   EXPECT_EQ(lower, static_origin);
 
   clamped = false;
   const Eigen::Vector2d upper = eltanin_examples::detail::snapped_window_origin(
-    source.geometry(), WINDOW_CELLS, Eigen::Vector2d{0.98, 0.98}, clamped);
+    source.geometry(), window_cells, Eigen::Vector2d{0.98, 0.98}, clamped);
   EXPECT_TRUE(clamped);
-  const double last_origin = static_cast<double>(STATIC_CELLS - WINDOW_CELLS) * RESOLUTION;
+  const double last_origin = static_cast<double>(static_cells - window_cells) * resolution;
   EXPECT_DOUBLE_EQ(upper.x(), last_origin);
   EXPECT_DOUBLE_EQ(upper.y(), last_origin);
 }

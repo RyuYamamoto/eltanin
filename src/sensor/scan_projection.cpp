@@ -15,9 +15,9 @@
 #include <eltanin/sensor/scan_projection.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 
 namespace eltanin::sensor
 {
@@ -38,17 +38,25 @@ RangeBounds effective_bounds(const ScanData & scan, const ScanFilter & filter)
   return RangeBounds{lower, upper};
 }
 
+void validate_scan_arguments(const ScanData & scan, const ScanFilter & filter)
+{
+  const bool valid = std::isfinite(scan.angle_min) && std::isfinite(scan.angle_increment) &&
+                     std::isfinite(filter.min_range) && filter.min_range >= 0.0 &&
+                     filter.min_range <= filter.max_range &&
+                     (!filter.angle_range.has_value() ||
+                      (std::isfinite(filter.angle_range->from) &&
+                       std::isfinite(filter.angle_range->to)));
+  if (!valid) {
+    throw std::invalid_argument("invalid scan projection arguments");
+  }
+}
+
 }  // namespace detail
 
 void project_scan(
   const ScanData & scan, const ScanFilter & filter, std::vector<Eigen::Vector2d> & out)
 {
-  assert(std::isfinite(scan.angle_min) && std::isfinite(scan.angle_increment));
-  assert(std::isfinite(filter.min_range) && filter.min_range >= 0.0);
-  assert(filter.min_range <= filter.max_range);
-  assert(
-    !filter.angle_range.has_value() ||
-    (std::isfinite(filter.angle_range->from) && std::isfinite(filter.angle_range->to)));
+  detail::validate_scan_arguments(scan, filter);
 
   out.clear();
   out.reserve(scan.ranges.size());

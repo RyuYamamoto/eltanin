@@ -85,6 +85,10 @@ LoadParameters load_map_yaml(const std::filesystem::path & yaml_path)
       throw MapIoError(MapIoErrorKind::InvalidValue, "origin elements must be numbers");
     }
   }
+  if (!std::isfinite(origin_values[0]) || !std::isfinite(origin_values[1]) ||
+      !std::isfinite(origin_values[2])) {
+    throw MapIoError(MapIoErrorKind::InvalidValue, "origin elements must be finite");
+  }
   if (origin_values[2] != 0.0) {
     throw MapIoError(
       MapIoErrorKind::UnsupportedOriginYaw, "a non-zero origin yaw is not supported yet");

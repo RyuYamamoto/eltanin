@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace
 {
@@ -41,6 +42,16 @@ TEST(MapGeometry, DefaultIsEmpty)
   EXPECT_EQ(geometry.size_y(), 0);
   EXPECT_EQ(geometry.cell_count(), 0u);
   EXPECT_FALSE(geometry.in_bounds(0, 0));
+}
+
+TEST(MapGeometry, ConstructorRejectsInvalidGeometry)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(MapGeometry(0, 8, 0.05, Vector2d::Zero()), std::invalid_argument);
+  EXPECT_THROW(MapGeometry(10, -1, 0.05, Vector2d::Zero()), std::invalid_argument);
+  EXPECT_THROW(MapGeometry(10, 8, 0.0, Vector2d::Zero()), std::invalid_argument);
+  EXPECT_THROW(MapGeometry(10, 8, nan, Vector2d::Zero()), std::invalid_argument);
+  EXPECT_THROW(MapGeometry(10, 8, 0.05, Vector2d{nan, 0.0}), std::invalid_argument);
 }
 
 TEST(MapGeometry, MapToWorldUsesCellCenter)
@@ -171,6 +182,16 @@ TEST(MapGeometry, SetOriginMovesTheWindowOnly)
   EXPECT_EQ(geometry, MapGeometry(10, 8, 0.05, Vector2d{3.0, -4.0}));
 }
 
+TEST(MapGeometry, SetOriginRejectsNonFiniteCoordinates)
+{
+  MapGeometry geometry = sample_geometry();
+  const MapGeometry before = geometry;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  EXPECT_THROW(geometry.set_origin(Vector2d{nan, 0.0}), std::invalid_argument);
+  EXPECT_EQ(geometry, before);
+}
+
 TEST(MapGeometry, SetOriginShiftsTheWorldMapping)
 {
   MapGeometry geometry = sample_geometry();
@@ -216,6 +237,15 @@ TEST(MapGeometry, WorldRectToCellsRejectsAWindowOutsideTheMap)
   EXPECT_FALSE(geometry.world_rect_to_cells(Vector2d{0.1, 0.5}, Vector2d{0.2, 1.0}).has_value());
 }
 
+TEST(MapGeometry, WorldRectToCellsRejectsReversedBounds)
+{
+  const MapGeometry geometry = sample_geometry();
+  EXPECT_FALSE(
+    geometry.world_rect_to_cells(Vector2d{0.2, 0.1}, Vector2d{0.1, 0.2}).has_value());
+  EXPECT_FALSE(
+    geometry.world_rect_to_cells(Vector2d{0.1, 0.2}, Vector2d{0.2, 0.1}).has_value());
+}
+
 TEST(MapGeometry, WorldRectToCellsFloorsNegativeCoordinates)
 {
   const MapGeometry geometry(10, 8, 0.05, Vector2d::Zero());
@@ -256,7 +286,7 @@ TEST(MapGeometry, WorldRectToCellsAcceptsADegenerateWindow)
 
 TEST(MapGeometry, WorldRectToCellsRejectsEverythingOnAnEmptyMap)
 {
-  const MapGeometry geometry(0, 0, 0.05, Vector2d::Zero());
+  const MapGeometry geometry;
   EXPECT_FALSE(geometry.world_rect_to_cells(Vector2d::Zero(), Vector2d{1.0, 1.0}).has_value());
 }
 

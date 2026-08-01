@@ -25,7 +25,7 @@
 #include <queue>
 #include <utility>
 
-namespace eltanin::planner::detail
+namespace eltanin::planner
 {
 
 namespace
@@ -43,14 +43,18 @@ using OpenQueue = std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::gr
 
 }  // namespace
 
-std::optional<Path> plan_on_grid(
-  const map::MapGeometry & geometry, const TraversabilityGrid & grid, const map::MapIndex & start,
-  const map::MapIndex & goal, double goal_yaw)
+std::optional<Path> AStarPlanner::plan_on_grid(
+  const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
+  const map::MapIndex & start, const map::MapIndex & goal, const Pose2D & effective_start,
+  const Pose2D & goal_pose) const
 {
+  static_cast<void>(effective_start);
   const std::size_t cells = geometry.cell_count();
   assert(cells > 0);
   assert(grid.size() == cells);
-  assert(cells <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()));
+  if (cells > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+    return std::nullopt;
+  }
   assert(geometry.in_bounds(start.x, start.y));
   assert(geometry.in_bounds(goal.x, goal.y));
   assert(grid[geometry.index(start.x, start.y)] == FREE);
@@ -140,9 +144,9 @@ std::optional<Path> plan_on_grid(
     const int my = static_cast<int>(*it / size_x);
     path.push_back(Pose2D{geometry.map_to_world(mx, my), 0.0});
   }
-  path[path.size() - 1].yaw = goal_yaw;
-  assign_tangent_yaw(path);
+  path[path.size() - 1].yaw = goal_pose.yaw;
+  detail::assign_tangent_yaw(path);
   return path;
 }
 
-}  // namespace eltanin::planner::detail
+}  // namespace eltanin::planner

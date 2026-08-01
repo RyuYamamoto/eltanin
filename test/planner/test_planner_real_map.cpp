@@ -26,6 +26,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -66,14 +67,14 @@ std::optional<MapIndex> farthest_reachable_cell(
 
   MapIndex last = from;
   std::size_t discovered = 1;
-  constexpr int DX[4] = {1, -1, 0, 0};
-  constexpr int DY[4] = {0, 0, 1, -1};
+  constexpr std::array<MapIndex, 4> neighbor_offsets{
+    MapIndex{1, 0}, MapIndex{-1, 0}, MapIndex{0, 1}, MapIndex{0, -1}};
   while (!queue.empty() && discovered < MAX_VISITED_CELLS) {
     last = queue.front();
     queue.pop_front();
-    for (int k = 0; k < 4; ++k) {
-      const int nx = last.x + DX[k];
-      const int ny = last.y + DY[k];
+    for (const MapIndex & offset : neighbor_offsets) {
+      const int nx = last.x + offset.x;
+      const int ny = last.y + offset.y;
       if (!geometry.in_bounds(nx, ny)) {
         continue;
       }

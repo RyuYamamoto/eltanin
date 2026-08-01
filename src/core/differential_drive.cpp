@@ -14,15 +14,18 @@
 
 #include <eltanin/core/differential_drive.hpp>
 
-#include <cassert>
 #include <cmath>
+#include <stdexcept>
 
 namespace eltanin
 {
 
 Pose2D integrate_differential_drive(const Pose2D & pose, const Twist2D & twist, double dt)
 {
-  assert(dt > 0.0);
+  if (!std::isfinite(dt) || dt <= 0.0 || !pose.position.allFinite() ||
+      !std::isfinite(pose.yaw) || !twist.linear.allFinite() || !std::isfinite(twist.angular)) {
+    throw std::invalid_argument("differential-drive inputs must be finite and dt must be positive");
+  }
 
   const double v = twist.linear.x();
   const double w = twist.angular;

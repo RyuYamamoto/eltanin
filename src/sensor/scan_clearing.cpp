@@ -15,10 +15,10 @@
 #include <eltanin/sensor/scan_clearing.hpp>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <stdexcept>
 
 namespace eltanin::sensor
 {
@@ -49,14 +49,10 @@ void project_scan_for_clearing(
   const ScanData & scan, const ScanFilter & marking_filter, double clearing_max_range,
   std::vector<Eigen::Vector2d> & out)
 {
-  assert(std::isfinite(scan.angle_min) && std::isfinite(scan.angle_increment));
-  assert(std::isfinite(marking_filter.min_range) && marking_filter.min_range >= 0.0);
-  assert(marking_filter.min_range <= marking_filter.max_range);
-  assert(!std::isnan(clearing_max_range) && clearing_max_range >= 0.0);
-  assert(
-    !marking_filter.angle_range.has_value() ||
-    (std::isfinite(marking_filter.angle_range->from) &&
-     std::isfinite(marking_filter.angle_range->to)));
+  detail::validate_scan_arguments(scan, marking_filter);
+  if (std::isnan(clearing_max_range) || clearing_max_range < 0.0) {
+    throw std::invalid_argument("clearing max range must be non-negative");
+  }
 
   out.clear();
   out.reserve(scan.ranges.size());

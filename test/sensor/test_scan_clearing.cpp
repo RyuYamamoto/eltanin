@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -70,6 +71,22 @@ void expect_bearing_near(const Eigen::Vector2d & point, double expected_angle)
 }
 
 }  // namespace
+
+TEST(ScanClearing, RejectsInvalidProjectionArguments)
+{
+  const ScanData scan = uniform_scan(0.0, 0.1, 4, 1.0);
+  std::vector<Eigen::Vector2d> endpoints;
+  EXPECT_THROW(
+    project_scan_for_clearing(scan, ScanFilter{}, -0.1, endpoints), std::invalid_argument);
+  EXPECT_THROW(
+    project_scan_for_clearing(
+      scan, ScanFilter{}, std::numeric_limits<double>::quiet_NaN(), endpoints),
+    std::invalid_argument);
+
+  ScanFilter filter;
+  filter.min_range = -0.1;
+  EXPECT_THROW(project_scan_for_clearing(scan, filter, 3.0, endpoints), std::invalid_argument);
+}
 
 TEST(ScanClearing, EndpointsSitAtTheReportedRange)
 {

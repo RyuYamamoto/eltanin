@@ -2,6 +2,8 @@ add_executable(eltanin_test_planner
   test_traversable_search.cpp
   test_astar_planner.cpp
   test_astar_bounds.cpp
+  test_dubins_path.cpp
+  test_hybrid_astar_planner.cpp
   test_path_smoother.cpp
   test_planner_seam.cpp
   test_planner_real_map.cpp)
