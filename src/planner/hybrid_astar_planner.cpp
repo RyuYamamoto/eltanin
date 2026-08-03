@@ -167,7 +167,8 @@ std::optional<std::vector<Pose2D>> connect_goal(
     }
   }
 
-  const int count = std::max(1, static_cast<int>(std::ceil(length / output_step)));
+  // Rounding rather than ceiling keeps every emitted interval inside [0.75, 1.0] * output_step.
+  const int count = std::max(1, static_cast<int>(std::lround(length / output_step)));
   samples.reserve(static_cast<std::size_t>(count));
   for (int i = 1; i <= count; ++i) {
     const double s = length * static_cast<double>(i) / static_cast<double>(count);
@@ -237,6 +238,14 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   const auto heuristic = [&](const Pose2D & pose) {
     return (query.goal.position - pose.position).norm();
   };
+  // Attempted at every node inside dubins_expansion_distance, and increasingly rarely beyond it.
+  const auto analytic_expansion_interval = [&](double remaining) -> std::size_t {
+    if (remaining <= params.dubins_expansion_distance) {
+      return 0;
+    }
+    const double cells_to_goal = remaining / resolution;
+    return static_cast<std::size_t>(cells_to_goal / params.analytic_expansion_ratio);
+  };
   const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
     const Motion & next = MOTIONS[next_mode];
     double multiplier = 1.0;
@@ -263,6 +272,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   open.push(OpenEntry{static_cast<float>(heuristic(query.start)), 0});
 
   std::size_t expansions = 0;
+  std::size_t skipped_attempts = 0;
   while (!open.empty()) {
     const std::uint32_t current_id = open.top().second;
     open.pop();
@@ -272,7 +282,11 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     }
     set_closed(closed, current.state);
 
-    if (heuristic(current.pose) <= params.dubins_expansion_distance) {
+    // The first node is always tried: on an open map the analytic path from the start is the answer.
+    const bool analytic_due =
+      expansions == 0 || skipped_attempts >= analytic_expansion_interval(heuristic(current.pose));
+    if (analytic_due) {
+      skipped_attempts = 0;
       const auto connection = connect_goal(
         grid, current.pose, query.goal, params.minimum_turning_radius, collision_check_step,
         motion_step);
@@ -280,6 +294,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
         return PlanResult{join_with_connection(
           reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
       }
+    } else {
+      ++skipped_attempts;
     }
     if (params.max_expansions != 0 && expansions >= params.max_expansions) {
       return PlanResult{PlannerError::ExpansionLimitReached};
@@ -325,7 +341,8 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
     params_.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
     params_.motion_step >= 0.0 && std::isfinite(params_.collision_check_step) &&
     params_.collision_check_step >= 0.0 && std::isfinite(params_.dubins_expansion_distance) &&
-    params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.steering_penalty) &&
+    params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.analytic_expansion_ratio) &&
+    params_.analytic_expansion_ratio > 0.0 && std::isfinite(params_.steering_penalty) &&
     params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
     params_.steering_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
   if (!valid) {

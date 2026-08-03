@@ -37,8 +37,10 @@ struct HybridAStarParams
   double motion_step{0.0};
   /// Collision check interval along each primitive [m]; 0 selects half a map cell.
   double collision_check_step{0.0};
-  /// Dubins connection is attempted inside this Euclidean distance from the goal [m].
+  /// Dubins connection is attempted at every expanded node inside this distance from the goal [m].
   double dubins_expansion_distance{1.0};
+  /// Beyond that distance it is attempted every (cells to goal / this) nodes; larger tries more.
+  double analytic_expansion_ratio{1.0};
   double steering_penalty{0.05};
   double steering_change_penalty{0.10};
   /// 0 allows the complete discretized state space to be expanded.

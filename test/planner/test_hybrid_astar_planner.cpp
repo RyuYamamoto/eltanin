@@ -16,6 +16,7 @@
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/planner/astar_planner.hpp>
+#include <eltanin/planner/dubins_path.hpp>
 #include <eltanin/planner/hybrid_astar_planner.hpp>
 #include <eltanin/planner/planner.hpp>
 
@@ -146,13 +147,14 @@ TEST(HybridAStarPlanner, ChangesHeadingWithBoundedCurvature)
   ASSERT_GE(path->size(), 3u);
   expect_goal(*path, goal);
   expect_all_free(*path, map, make_cost_model());
-  // The default motion_step is the cell diagonal, so one primitive turns by at most that over R.
-  const double turn_limit =
-    std::numbers::sqrt2 * RESOLUTION / params.minimum_turning_radius + TOLERANCE;
+  const double radius = params.minimum_turning_radius;
   for (std::size_t i = 0; i + 1 < path->size(); ++i) {
+    const double chord = ((*path)[i + 1].position - (*path)[i].position).norm();
     const double delta_yaw =
       std::abs(shortest_angular_distance((*path)[i].yaw, (*path)[i + 1].yaw));
-    EXPECT_LE(delta_yaw, turn_limit);
+    // Largest heading change a chord of this length can cover at the minimum turning radius.
+    const double turn_limit = 2.0 * std::asin(std::min(1.0, chord / (2.0 * radius)));
+    EXPECT_LE(delta_yaw, turn_limit + TOLERANCE) << "step " << i << " chord " << chord;
   }
 }
 
@@ -357,6 +359,36 @@ TEST(PlannerInterface, BothPlannersMeetTheOutputContractWithoutPostProcessing)
       const double step = ((*path)[i].position - (*path)[i - 1].position).norm();
       EXPECT_GT(step, 0.0) << "step " << i;
       EXPECT_LE(step, spacing_limit) << "step " << i;
+    }
+  }
+}
+
+TEST(HybridAStarPlanner, ReturnsTheOptimalDubinsPathOnAnOpenMap)
+{
+  const Costmap map = open_map(120, 120);
+  const Pose2D start = at_cell(map, 10, 60, 0.0);
+  const double motion_step = std::numbers::sqrt2 * RESOLUTION;
+
+  for (int goal_x = 40; goal_x < 110; goal_x += 10) {
+    for (int quadrant = 0; quadrant < 8; ++quadrant) {
+      const Pose2D goal = at_cell(map, goal_x, 60, quadrant * std::numbers::pi / 4.0);
+      const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal);
+      ASSERT_TRUE(path.has_value()) << "goal_x " << goal_x << " quadrant " << quadrant;
+      const auto dubins = eltanin::planner::solve_dubins_path(start, goal, 0.4);
+      ASSERT_TRUE(dubins.has_value());
+
+      double length = 0.0;
+      double turning = 0.0;
+      for (std::size_t i = 1; i < path->size(); ++i) {
+        length += ((*path)[i].position - (*path)[i - 1].position).norm();
+        turning += std::abs(shortest_angular_distance((*path)[i - 1].yaw, (*path)[i].yaw));
+      }
+      // Chords are shorter than the arc, so the sampled length only ever undershoots.
+      EXPECT_LE(length, dubins->length() + motion_step);
+      // A curvature-limited forward path cannot turn less than the shortest Dubins path does.
+      EXPECT_LE(turning, dubins->length() / 0.4 + TOLERANCE)
+        << "goal_x " << goal_x << " quadrant " << quadrant;
+      expect_goal(*path, goal);
     }
   }
 }
