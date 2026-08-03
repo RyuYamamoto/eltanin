@@ -234,9 +234,9 @@ TEST(PathSmoother, EnergyIsMonotonicallyNonIncreasing)
 TEST(PathSmoother, NeverEntersAnObstacleOrItsCircumscribedBand)
 {
   const Costmap map = wall_with_band_map();
-  const auto raw = eltanin::planner::plan(
+  const auto raw = eltanin::planner::plan_astar(
     map, make_cost_model(), Pose2D{map.geometry().map_to_world(5, 25), 0.0},
-    Pose2D{map.geometry().map_to_world(34, 25), 0.0});
+    Pose2D{map.geometry().map_to_world(34, 25), 0.0}, eltanin_test::raw_astar_params());
   ASSERT_TRUE(raw.has_value());
   ASSERT_GT(raw->size(), 30u);
 

@@ -24,7 +24,9 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <new>
 #include <numbers>
+#include <optional>
 #include <queue>
 #include <stdexcept>
 #include <utility>
@@ -36,8 +38,14 @@ namespace eltanin::planner
 namespace
 {
 
-constexpr std::uint8_t FREE = static_cast<std::uint8_t>(Traversability::Free);
-constexpr std::size_t INVALID_NODE = std::numeric_limits<std::size_t>::max();
+constexpr std::uint32_t INVALID_NODE = std::numeric_limits<std::uint32_t>::max();
+constexpr std::size_t BITS_PER_WORD = 64;
+
+/// Nodes are appended as they are discovered, so no reservation proportional to the map is needed.
+constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
+
+/// g_score and best_node per state; the closed set costs one bit each.
+constexpr std::size_t STATE_ARRAY_BYTES_PER_STATE = sizeof(float) + sizeof(std::uint32_t);
 
 struct Motion
 {
@@ -45,36 +53,44 @@ struct Motion
 };
 
 constexpr std::array<Motion, 3> MOTIONS{Motion{0}, Motion{-1}, Motion{1}};
-constexpr std::size_t START_MODE = MOTIONS.size();
-constexpr std::size_t MODE_COUNT = MOTIONS.size() + 1;
+constexpr std::uint8_t START_MODE = static_cast<std::uint8_t>(MOTIONS.size());
 
 struct Node
 {
   Pose2D pose;
-  double g;
-  std::size_t parent;
-  std::size_t state;
-  std::size_t mode;
+  float g;
+  std::uint32_t parent;
+  std::uint32_t state;
+  std::uint8_t mode;
 };
 
-using OpenEntry = std::pair<double, std::size_t>;
+using OpenEntry = std::pair<float, std::uint32_t>;
+
+/// f ascending, then node id ascending; the tie-break is what makes the search deterministic.
 using OpenQueue = std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::greater<>>;
+
+bool is_closed(const std::vector<std::uint64_t> & closed, std::uint32_t state) noexcept
+{
+  return ((closed[state / BITS_PER_WORD] >> (state % BITS_PER_WORD)) & std::uint64_t{1}) != 0;
+}
+
+void set_closed(std::vector<std::uint64_t> & closed, std::uint32_t state) noexcept
+{
+  closed[state / BITS_PER_WORD] |= std::uint64_t{1} << (state % BITS_PER_WORD);
+}
 
 Pose2D propagate(const Pose2D & pose, double distance, double curvature)
 {
   if (curvature == 0.0) {
     return Pose2D{
-      pose.position +
-        distance * Eigen::Vector2d{std::cos(pose.yaw), std::sin(pose.yaw)},
-      pose.yaw};
+      pose.position + distance * Eigen::Vector2d{std::cos(pose.yaw), std::sin(pose.yaw)}, pose.yaw};
   }
 
   const double next_yaw = normalize_angle(pose.yaw + distance * curvature);
   return Pose2D{
-    pose.position +
-      Eigen::Vector2d{
-        (std::sin(next_yaw) - std::sin(pose.yaw)) / curvature,
-        (-std::cos(next_yaw) + std::cos(pose.yaw)) / curvature},
+    pose.position + Eigen::Vector2d{
+                      (std::sin(next_yaw) - std::sin(pose.yaw)) / curvature,
+                      (-std::cos(next_yaw) + std::cos(pose.yaw)) / curvature},
     next_yaw};
 }
 
@@ -85,202 +101,246 @@ int heading_bin(double yaw, int bins)
   return rounded % bins;
 }
 
+/// Every primitive must leave the current cell, and a turn must also leave the cell or the bin.
+bool primitives_can_change_state(
+  double motion_step, double resolution, double turning_radius, int heading_bins)
+{
+  const double cell_diagonal = std::numbers::sqrt2 * resolution;
+  if (motion_step < cell_diagonal) {
+    return false;
+  }
+  const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(heading_bins);
+  const double chord = 2.0 * turning_radius * std::sin(0.5 * motion_step / turning_radius);
+  return motion_step / turning_radius >= bin_width || chord >= cell_diagonal;
+}
+
 std::optional<Pose2D> collision_free_successor(
-  const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-  const Pose2D & from, const Motion & motion, double motion_step, double turning_radius,
-  double collision_check_step)
+  const TraversabilityView & grid, const Pose2D & from, const Motion & motion, double motion_step,
+  double turning_radius, double collision_check_step)
 {
   const int sample_count =
     std::max(1, static_cast<int>(std::ceil(motion_step / collision_check_step)));
   const double curvature = static_cast<double>(motion.steering) / turning_radius;
   Pose2D candidate = from;
   for (int sample = 1; sample <= sample_count; ++sample) {
-    const double distance = motion_step * static_cast<double>(sample) /
-                            static_cast<double>(sample_count);
+    const double distance =
+      motion_step * static_cast<double>(sample) / static_cast<double>(sample_count);
     candidate = propagate(from, distance, curvature);
-    const auto index = geometry.world_to_map(candidate.position);
-    if (!index.has_value() || grid[geometry.index(index->x, index->y)] != FREE) {
+    if (!grid.free(candidate.position)) {
       return std::nullopt;
     }
   }
   return candidate;
 }
 
-Path reconstruct_path(const std::vector<Node> & nodes, std::size_t goal_node)
+std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint32_t goal_node)
 {
-  Path path;
-  for (std::size_t node = goal_node; node != INVALID_NODE; node = nodes[node].parent) {
-    path.push_back(nodes[node].pose);
+  std::vector<Pose2D> poses;
+  for (std::uint32_t node = goal_node; node != INVALID_NODE; node = nodes[node].parent) {
+    poses.push_back(nodes[node].pose);
   }
-  std::reverse(path.begin(), path.end());
-  return path;
+  std::reverse(poses.begin(), poses.end());
+  return poses;
 }
 
-std::optional<Path> connect_goal(
-  const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-  const Pose2D & start, const Pose2D & goal, double turning_radius, double sample_step)
+/// Checked at collision_check_step but emitted at output_step, so the output stays evenly spaced.
+std::optional<std::vector<Pose2D>> connect_goal(
+  const TraversabilityView & grid, const Pose2D & start, const Pose2D & goal,
+  double turning_radius, double collision_check_step, double output_step)
 {
   const auto dubins = solve_dubins_path(start, goal, turning_radius);
   if (!dubins.has_value()) {
     return std::nullopt;
   }
 
-  Path samples;
-  if (dubins->length() == 0.0) {
+  std::vector<Pose2D> samples;
+  const double length = dubins->length();
+  if (length == 0.0) {
     return samples;
   }
-  const int count = std::max(1, static_cast<int>(std::ceil(dubins->length() / sample_step)));
-  for (int i = 1; i <= count; ++i) {
-    const double s = dubins->length() * static_cast<double>(i) / static_cast<double>(count);
-    const Pose2D pose = dubins->sample(s);
-    const auto index = geometry.world_to_map(pose.position);
-    if (!index.has_value() || grid[geometry.index(index->x, index->y)] != FREE) {
+
+  const int checks = std::max(1, static_cast<int>(std::ceil(length / collision_check_step)));
+  for (int i = 1; i <= checks; ++i) {
+    const double s = length * static_cast<double>(i) / static_cast<double>(checks);
+    if (!grid.free(dubins->sample(s).position)) {
       return std::nullopt;
     }
-    samples.push_back(pose);
+  }
+
+  const int count = std::max(1, static_cast<int>(std::ceil(length / output_step)));
+  samples.reserve(static_cast<std::size_t>(count));
+  for (int i = 1; i <= count; ++i) {
+    const double s = length * static_cast<double>(i) / static_cast<double>(count);
+    samples.push_back(dubins->sample(s));
   }
   return samples;
 }
 
-}  // namespace
-
-HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
-: Planner(params.start_search_radius_cells), params_(params)
+/// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
+Path join_with_connection(
+  std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
+  double motion_step)
 {
-  const bool valid = params_.heading_bins >= 8 &&
-                     std::isfinite(params_.minimum_turning_radius) &&
-                     params_.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
-                     params_.motion_step >= 0.0 &&
-                     std::isfinite(params_.collision_check_step) &&
-                     params_.collision_check_step >= 0.0 &&
-                     std::isfinite(params_.dubins_expansion_distance) &&
-                     params_.dubins_expansion_distance > 0.0 &&
-                     std::isfinite(params_.steering_penalty) && params_.steering_penalty >= 0.0 &&
-                     std::isfinite(params_.steering_change_penalty) &&
-                     params_.steering_change_penalty >= 0.0;
-  if (!valid) {
-    throw std::invalid_argument("invalid HybridAStarParams");
+  if (connection.empty()) {
+    poses[poses.size() - 1] = goal;
+    return Path{std::move(poses)};
   }
+  const double seam = (connection.front().position - poses.back().position).norm();
+  if (connection.size() == 1 && poses.size() >= 2 && seam < 0.5 * motion_step) {
+    poses.pop_back();
+  }
+  poses.insert(poses.end(), connection.begin(), connection.end());
+  return Path{std::move(poses)};
 }
 
-std::optional<Path> HybridAStarPlanner::plan_on_grid(
-  const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-  const map::MapIndex & start_index, const map::MapIndex & goal_index,
-  const Pose2D & effective_start, const Pose2D & goal) const
+PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
 {
-  const std::size_t cells = geometry.cell_count();
+  const TraversabilityView & grid = query.grid;
+  const map::MapGeometry & geometry = grid.geometry();
+  const std::size_t cells = grid.cell_count();
   assert(cells > 0);
-  assert(grid.size() == cells);
-  assert(geometry.in_bounds(start_index.x, start_index.y));
-  assert(geometry.in_bounds(goal_index.x, goal_index.y));
-  assert(grid[geometry.index(start_index.x, start_index.y)] == FREE);
-  assert(grid[geometry.index(goal_index.x, goal_index.y)] == FREE);
-  if (!std::isfinite(effective_start.yaw) || !std::isfinite(goal.yaw)) {
-    return std::nullopt;
-  }
+  assert(grid.free(query.start_index.x, query.start_index.y));
+  assert(grid.free(query.goal_index.x, query.goal_index.y));
 
-  const double motion_step = params_.motion_step > 0.0 ? params_.motion_step : geometry.resolution();
+  const double resolution = geometry.resolution();
+  const double motion_step =
+    params.motion_step > 0.0 ? params.motion_step : std::numbers::sqrt2 * resolution;
   const double collision_check_step =
-    params_.collision_check_step > 0.0 ? params_.collision_check_step : 0.5 * geometry.resolution();
-  const std::size_t heading_bins = static_cast<std::size_t>(params_.heading_bins);
-  const std::size_t max_size = std::numeric_limits<std::size_t>::max();
-  if (heading_bins > max_size / MODE_COUNT || cells > max_size / (heading_bins * MODE_COUNT)) {
-    return std::nullopt;
+    params.collision_check_step > 0.0 ? params.collision_check_step : 0.5 * resolution;
+  if (!primitives_can_change_state(
+        motion_step, resolution, params.minimum_turning_radius, params.heading_bins)) {
+    return PlanResult{PlannerError::ParamsIncompatibleWithMap};
   }
-  const std::size_t state_count = cells * heading_bins * MODE_COUNT;
 
-  const auto state_index = [&](const map::MapIndex & index, double yaw, std::size_t mode) {
+  const auto heading_bins = static_cast<std::size_t>(params.heading_bins);
+  constexpr std::size_t MAX_SIZE = std::numeric_limits<std::size_t>::max();
+  if (cells > MAX_SIZE / heading_bins) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
+  const std::size_t state_count = cells * heading_bins;
+  // Node ids and state ids are 32 bit, and the search may append up to 3 nodes per expansion.
+  if (state_count > (INVALID_NODE - 1) / (MOTIONS.size() + 1)) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
+  const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
+  const std::size_t state_bytes =
+    state_count * STATE_ARRAY_BYTES_PER_STATE + closed_words * sizeof(std::uint64_t);
+  if (state_bytes > params.max_state_memory_bytes) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
+
+  const auto state_index = [&](const map::MapIndex & index, double yaw) {
     const std::size_t cell = geometry.index(index.x, index.y);
-    const std::size_t heading = static_cast<std::size_t>(heading_bin(yaw, params_.heading_bins));
-    return (cell * heading_bins + heading) * MODE_COUNT + mode;
+    const auto heading = static_cast<std::size_t>(heading_bin(yaw, params.heading_bins));
+    return static_cast<std::uint32_t>(cell * heading_bins + heading);
   };
   const auto heuristic = [&](const Pose2D & pose) {
-    return (goal.position - pose.position).norm();
+    return (query.goal.position - pose.position).norm();
   };
-  const auto transition_cost = [&](std::size_t previous_mode, std::size_t next_mode) {
+  const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
     const Motion & next = MOTIONS[next_mode];
     double multiplier = 1.0;
     if (next.steering != 0) {
-      multiplier += params_.steering_penalty;
+      multiplier += params.steering_penalty;
     }
-    if (previous_mode != START_MODE) {
-      const Motion & previous = MOTIONS[previous_mode];
-      if (previous.steering != next.steering) {
-        multiplier += params_.steering_change_penalty;
-      }
+    if (previous_mode != START_MODE && MOTIONS[previous_mode].steering != next.steering) {
+      multiplier += params.steering_change_penalty;
     }
     return motion_step * multiplier;
   };
 
-  std::vector<double> g_score(state_count, std::numeric_limits<double>::infinity());
-  std::vector<std::size_t> best_node(state_count, INVALID_NODE);
-  std::vector<std::uint8_t> closed(state_count, 0);
+  std::vector<float> g_score(state_count, std::numeric_limits<float>::infinity());
+  std::vector<std::uint32_t> best_node(state_count, INVALID_NODE);
+  std::vector<std::uint64_t> closed(closed_words, 0);
   std::vector<Node> nodes;
-  nodes.reserve(std::min(state_count, cells * 8));
+  nodes.reserve(INITIAL_NODE_RESERVE);
   OpenQueue open;
 
-  const std::size_t start_state = state_index(start_index, effective_start.yaw, START_MODE);
-  nodes.push_back(Node{effective_start, 0.0, INVALID_NODE, start_state, START_MODE});
-  g_score[start_state] = 0.0;
+  const std::uint32_t start_state = state_index(query.start_index, query.start.yaw);
+  nodes.push_back(Node{query.start, 0.0F, INVALID_NODE, start_state, START_MODE});
+  g_score[start_state] = 0.0F;
   best_node[start_state] = 0;
-  open.push(OpenEntry{heuristic(effective_start), 0});
+  open.push(OpenEntry{static_cast<float>(heuristic(query.start)), 0});
 
   std::size_t expansions = 0;
   while (!open.empty()) {
-    const std::size_t current_id = open.top().second;
+    const std::uint32_t current_id = open.top().second;
     open.pop();
     const Node current = nodes[current_id];
-    if (best_node[current.state] != current_id || closed[current.state] != 0) {
+    if (best_node[current.state] != current_id || is_closed(closed, current.state)) {
       continue;
     }
-    closed[current.state] = 1;
+    set_closed(closed, current.state);
 
-    if ((goal.position - current.pose.position).norm() <= params_.dubins_expansion_distance) {
+    if (heuristic(current.pose) <= params.dubins_expansion_distance) {
       const auto connection = connect_goal(
-        geometry, grid, current.pose, goal, params_.minimum_turning_radius,
-        collision_check_step);
+        grid, current.pose, query.goal, params.minimum_turning_radius, collision_check_step,
+        motion_step);
       if (connection.has_value()) {
-        Path path = reconstruct_path(nodes, current_id);
-        for (const Pose2D & pose : *connection) {
-          path.push_back(pose);
-        }
-        if (connection->empty()) {
-          path[path.size() - 1] = goal;
-        }
-        return path;
+        return PlanResult{join_with_connection(
+          reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
       }
     }
-    if (params_.max_expansions != 0 && expansions >= params_.max_expansions) {
-      return std::nullopt;
+    if (params.max_expansions != 0 && expansions >= params.max_expansions) {
+      return PlanResult{PlannerError::ExpansionLimitReached};
     }
     ++expansions;
 
-    for (std::size_t mode = 0; mode < MOTIONS.size(); ++mode) {
+    for (std::size_t index = 0; index < MOTIONS.size(); ++index) {
+      const auto mode = static_cast<std::uint8_t>(index);
       const auto successor = collision_free_successor(
-        geometry, grid, current.pose, MOTIONS[mode], motion_step,
-        params_.minimum_turning_radius, collision_check_step);
+        grid, current.pose, MOTIONS[mode], motion_step, params.minimum_turning_radius,
+        collision_check_step);
       if (!successor.has_value()) {
         continue;
       }
       const auto successor_index = geometry.world_to_map(successor->position);
       assert(successor_index.has_value());
-      const std::size_t successor_state = state_index(*successor_index, successor->yaw, mode);
-      if (closed[successor_state] != 0) {
+      const std::uint32_t successor_state = state_index(*successor_index, successor->yaw);
+      if (is_closed(closed, successor_state)) {
         continue;
       }
 
-      const double tentative = current.g + transition_cost(current.mode, mode);
+      const auto tentative = static_cast<float>(current.g + transition_cost(current.mode, mode));
       if (tentative >= g_score[successor_state]) {
         continue;
       }
       g_score[successor_state] = tentative;
-      const std::size_t successor_id = nodes.size();
+      const auto successor_id = static_cast<std::uint32_t>(nodes.size());
       nodes.push_back(Node{*successor, tentative, current_id, successor_state, mode});
       best_node[successor_state] = successor_id;
-      open.push(OpenEntry{tentative + heuristic(*successor), successor_id});
+      open.push(OpenEntry{static_cast<float>(tentative + heuristic(*successor)), successor_id});
     }
   }
-  return std::nullopt;
+  return PlanResult{PlannerError::Unreachable};
+}
+
+}  // namespace
+
+HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
+: Planner(params.common), params_(params)
+{
+  const bool valid =
+    params_.heading_bins >= 8 && std::isfinite(params_.minimum_turning_radius) &&
+    params_.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
+    params_.motion_step >= 0.0 && std::isfinite(params_.collision_check_step) &&
+    params_.collision_check_step >= 0.0 && std::isfinite(params_.dubins_expansion_distance) &&
+    params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.steering_penalty) &&
+    params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
+    params_.steering_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
+  if (!valid) {
+    throw std::invalid_argument("invalid HybridAStarParams");
+  }
+}
+
+PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const
+{
+  // The state arrays are sized before allocating, but a tight rlimit can still fail the request.
+  try {
+    return search(query, params_);
+  } catch (const std::bad_alloc &) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
 }
 
 }  // namespace eltanin::planner

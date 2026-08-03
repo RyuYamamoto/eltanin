@@ -57,6 +57,39 @@ void assign_tangent_yaw(Path & path)
   }
 }
 
+Path smooth_on_grid(
+  const Path & path, const TraversabilityView & grid, const SmootherParams & params)
+{
+  if (path.size() <= 1) {
+    return path;
+  }
+
+  Path smoothed = path;
+  const std::size_t n = smoothed.size();
+  if (n >= 3) {
+    for (int iteration = 0; iteration < params.max_iterations; ++iteration) {
+      double displacement = 0.0;
+      for (std::size_t i = 1; i + 1 < n; ++i) {
+        const Eigen::Vector2d candidate =
+          smoothed[i].position + params.weight_data * (path[i].position - smoothed[i].position) +
+          params.weight_smooth * (smoothed[i - 1].position + smoothed[i + 1].position -
+                                  2.0 * smoothed[i].position);
+        // Rejected for this sweep only; a neighbour moving later may make the point movable.
+        if (!grid.free(candidate)) {
+          continue;
+        }
+        displacement += (candidate - smoothed[i].position).norm();
+        smoothed[i].position = candidate;
+      }
+      if (displacement < params.tolerance) {
+        break;
+      }
+    }
+  }
+  assign_tangent_yaw(smoothed);
+  return smoothed;
+}
+
 void validate_smoother_params(const SmootherParams & params)
 {
   const bool valid = std::isfinite(params.weight_data) && params.weight_data >= 0.0 &&

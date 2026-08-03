@@ -72,6 +72,7 @@ inline const char * planner_name(PlannerType planner) noexcept
 struct NavigateConfig
 {
   PlannerType planner{PlannerType::AStar};
+  eltanin::planner::AStarParams astar{};
   eltanin::planner::HybridAStarParams hybrid_astar{};
   /// Control period [s]; docs/control-design.md §5 measures the same tracking quality as 0.01.
   double control_dt{0.05};
@@ -421,24 +422,33 @@ inline double lateral_error(const eltanin::Path & path, const Eigen::Vector2d & 
   return minimum;
 }
 
-/// Plans one leg on the belief costmap; nullopt when the selected planner found nothing.
-inline std::optional<eltanin::Path> plan_leg(
+/// The guide only fixes the corridor, so smoothing it would be wasted work.
+inline eltanin::planner::AStarParams guide_params()
+{
+  eltanin::planner::AStarParams params;
+  params.smoother.reset();
+  return params;
+}
+
+/// Plans one leg on the belief costmap; the error says why nothing came back.
+inline eltanin::planner::PlanResult plan_leg(
   const eltanin::map::Costmap & belief, const RobotModel & robot, const eltanin::Pose2D & from,
   const eltanin::Pose2D & to, const NavigateConfig & config)
 {
-  const auto guide = eltanin::planner::plan(belief, robot.model, from, to);
-  if (!guide.has_value()) {
-    return std::nullopt;
-  }
   if (config.planner == PlannerType::AStar) {
-    return eltanin::planner::smooth(*guide, belief, robot.model);
+    return eltanin::planner::AStarPlanner(config.astar).plan(belief, robot.model, from, to);
   }
 
+  // Hybrid A* is bounded by memory, so it searches a corridor around a raw A* guide.
+  const auto guide =
+    eltanin::planner::AStarPlanner(guide_params()).plan(belief, robot.model, from, to);
+  if (!guide) {
+    return guide;
+  }
   eltanin::map::MapIndex lower_left{0, 0};
-  const eltanin::map::Costmap corridor =
-    crop_around(belief, positions_of(*guide), lower_left);
-  return eltanin::planner::plan_hybrid_astar(
-    corridor, robot.model, from, to, config.hybrid_astar);
+  const eltanin::map::Costmap corridor = crop_around(belief, positions_of(*guide), lower_left);
+  return eltanin::planner::HybridAStarPlanner(config.hybrid_astar)
+    .plan(corridor, robot.model, from, to);
 }
 
 inline LegStats leg_stats_for(const eltanin::Path & path)
@@ -573,17 +583,19 @@ inline NavigateResult navigate(
 
   std::optional<eltanin::Path> path;
   try {
-    path = detail::plan_leg(global.costmap(), robot, start, goal, config);
+    const eltanin::planner::PlanResult planned =
+      detail::plan_leg(global.costmap(), robot, start, goal, config);
+    if (!planned) {
+      result.outcome = NavigateOutcome::PlanFailed;
+      result.message = std::string(planner_name(config.planner)) + " found no path from " +
+                       detail::pose_text(start) + " to " + detail::pose_text(goal) + ": " +
+                       eltanin::planner::to_string(planned.error());
+      return result;
+    }
+    path = planned.path();
   } catch (const std::invalid_argument & error) {
     result.outcome = NavigateOutcome::ModelFailed;
     result.message = error.what();
-    return result;
-  }
-  if (!path.has_value()) {
-    result.outcome = NavigateOutcome::PlanFailed;
-    result.message =
-      std::string(planner_name(config.planner)) + " found no path from " +
-      detail::pose_text(start) + " to " + detail::pose_text(goal);
     return result;
   }
   if (path->size() < 2) {
@@ -756,14 +768,14 @@ inline NavigateResult navigate(
       global.update();
       ++result.global_updates;
       observed_at_last_update = observed_points.size();
-      std::optional<eltanin::Path> replanned =
+      const eltanin::planner::PlanResult replanned =
         detail::plan_leg(global.costmap(), robot, plant.pose(), goal, config);
-      if (!replanned.has_value()) {
+      if (!replanned) {
         result.outcome = NavigateOutcome::ReplanFailed;
         result.message = "replan " + std::to_string(result.replans + 1) +
-                         " failed: " + planner_name(config.planner) +
-                         " found no path from " + detail::pose_text(plant.pose()) +
-                         " to " + detail::pose_text(goal);
+                         " failed: " + planner_name(config.planner) + " found no path from " +
+                         detail::pose_text(plant.pose()) + " to " + detail::pose_text(goal) + ": " +
+                         eltanin::planner::to_string(replanned.error());
         break;
       }
       if (replanned->size() < 2) {
@@ -772,7 +784,7 @@ inline NavigateResult navigate(
                          " has fewer than two poses";
         break;
       }
-      path = std::move(replanned);
+      path = replanned.path();
       goal_approach->reset();
       // PurePursuit owns progress and heading state for one path; a replacement must reset both.
       tracker->reset();

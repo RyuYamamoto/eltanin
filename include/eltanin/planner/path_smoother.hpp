@@ -18,10 +18,9 @@
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/core/types.hpp>
-#include <eltanin/map/map_geometry.hpp>
 #include <eltanin/map/cell_map.hpp>
-
-#include <cstddef>
+#include <eltanin/map/map_geometry.hpp>
+#include <eltanin/planner/traversability_view.hpp>
 
 namespace eltanin::planner
 {
@@ -46,10 +45,13 @@ void assign_tangent_yaw(Path & path);
 /// Throws std::invalid_argument for invalid weights; convergence requires weight_data + 4 * ws < 2.
 void validate_smoother_params(const SmootherParams & params);
 
+/// The smoothing sweep itself; the public smooth() and every planner share this one body.
+Path smooth_on_grid(
+  const Path & path, const TraversabilityView & grid, const SmootherParams & params);
+
 }  // namespace detail
 
-/// Iterative smoothing with a per-point collision check; the two end points never move.
-/// Throws std::invalid_argument when params are invalid.
+/// Iterative smoothing with a per-point collision check; end points never move, invalid params throw.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 Path smooth(
@@ -59,37 +61,8 @@ Path smooth(
   if (path.size() <= 1) {
     return path;
   }
-
-  const map::MapGeometry & geometry = map.geometry();
-  const auto is_traversable = [&](const Eigen::Vector2d & point) {
-    const auto index = geometry.world_to_map(point);
-    return index.has_value() && model.classify(map(index->x, index->y)) == Traversability::Free;
-  };
-
-  Path smoothed = path;
-  const std::size_t n = smoothed.size();
-  if (n >= 3) {
-    for (int iteration = 0; iteration < params.max_iterations; ++iteration) {
-      double displacement = 0.0;
-      for (std::size_t i = 1; i + 1 < n; ++i) {
-        const Eigen::Vector2d candidate =
-          smoothed[i].position + params.weight_data * (path[i].position - smoothed[i].position) +
-          params.weight_smooth * (smoothed[i - 1].position + smoothed[i + 1].position -
-                                  2.0 * smoothed[i].position);
-        // Rejected for this sweep only; a neighbour moving later may make the point movable.
-        if (!is_traversable(candidate)) {
-          continue;
-        }
-        displacement += (candidate - smoothed[i].position).norm();
-        smoothed[i].position = candidate;
-      }
-      if (displacement < params.tolerance) {
-        break;
-      }
-    }
-  }
-  detail::assign_tangent_yaw(smoothed);
-  return smoothed;
+  const detail::TraversabilityGrid grid = detail::build_traversability_grid(map, model);
+  return detail::smooth_on_grid(path, TraversabilityView{map.geometry(), grid}, params);
 }
 
 }  // namespace eltanin::planner

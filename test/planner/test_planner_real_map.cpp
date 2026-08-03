@@ -133,7 +133,8 @@ TEST(PlannerRealMap, PlansAndSmoothsOnTheInflatedReferenceMap)
   const Pose2D start{costmap.geometry().map_to_world(start_cell->x, start_cell->y), 0.0};
   const Pose2D goal{costmap.geometry().map_to_world(goal_cell->x, goal_cell->y), 1.25};
 
-  const auto raw = eltanin::planner::plan(costmap, model, start, goal);
+  const auto raw = eltanin::planner::plan_astar(
+    costmap, model, start, goal, eltanin_test::raw_astar_params());
   ASSERT_TRUE(raw.has_value());
   expect_grid_connected(*raw, costmap.geometry().resolution());
   expect_all_free(*raw, costmap, model);

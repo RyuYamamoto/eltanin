@@ -54,9 +54,10 @@ int main()
   const eltanin::map::Costmap free_costmap(geometry, eltanin::map::FREE_SPACE);
   const eltanin::Pose2D start{geometry.map_to_world(0, 0), 0.0};
   const eltanin::Pose2D goal{geometry.map_to_world(19, 9), 0.5};
-  const auto path = eltanin::planner::plan(free_costmap, traversability, start, goal);
-  if (!path.has_value()) {
-    std::cerr << "plan unexpectedly failed\n";
+  const auto path = eltanin::planner::plan_astar(free_costmap, traversability, start, goal);
+  if (!path) {
+    std::cerr << "plan_astar unexpectedly failed: "
+              << eltanin::planner::to_string(path.error()) << '\n';
     return EXIT_FAILURE;
   }
   const eltanin::Path smoothed =

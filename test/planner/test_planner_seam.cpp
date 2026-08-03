@@ -18,6 +18,7 @@
 #include <eltanin/map/cost_model.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/planner/astar_planner.hpp>
+#include <eltanin/planner/hybrid_astar_planner.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/planner/traversable_search.hpp>
 
@@ -45,7 +46,6 @@ using eltanin::map::DistanceMap;
 using eltanin::map::MapIndex;
 using eltanin::planner::SmootherParams;
 using eltanin::planner::find_nearest_traversable;
-using eltanin::planner::plan;
 using eltanin::planner::smooth;
 using eltanin_test::distance_map_from_costmap;
 using eltanin_test::expect_same_path;
@@ -61,6 +61,15 @@ static_assert(eltanin::TraversabilityModel<CollisionRadii, DistanceMap::value_ty
 static_assert(CellMap<Costmap>);
 static_assert(CellMap<DistanceMap>);
 
+/// The octile expectations in this file describe the raw cell-center path, so smoothing is off.
+template <class Map, class Model>
+eltanin::planner::PlanResult plan_raw(
+  const Map & map, const Model & model, const Pose2D & start, const Pose2D & goal,
+  const eltanin::planner::AStarParams & params = eltanin_test::raw_astar_params())
+{
+  return eltanin::planner::plan_astar(map, model, start, goal, params);
+}
+
 }  // namespace
 
 TEST(PlannerSeam, PlansOnACostmap)
@@ -74,7 +83,7 @@ TEST(PlannerSeam, PlansOnACostmap)
       ".....",
     },
     RESOLUTION);
-  const auto path = plan(
+  const auto path = plan_raw(
     map, make_cost_model(), Pose2D{map.geometry().map_to_world(0, 2), 0.0},
     Pose2D{map.geometry().map_to_world(4, 2), 0.0});
   ASSERT_TRUE(path.has_value());
@@ -84,7 +93,7 @@ TEST(PlannerSeam, PlansOnACostmap)
 TEST(PlannerSeam, AStarConstructorRejectsNegativeStartSearchRadius)
 {
   eltanin::planner::AStarParams params;
-  params.start_search_radius_cells = -1;
+  params.common.start_search_radius_cells = -1;
   EXPECT_THROW(eltanin::planner::AStarPlanner{params}, std::invalid_argument);
 }
 
@@ -100,7 +109,7 @@ TEST(PlannerSeam, PlansOnAHandBuiltDistanceField)
       ".....",
     },
     RESOLUTION, radii);
-  const auto path = plan(
+  const auto path = plan_raw(
     map, radii, Pose2D{map.geometry().map_to_world(0, 2), 0.0},
     Pose2D{map.geometry().map_to_world(4, 2), 0.0});
   ASSERT_TRUE(path.has_value());
@@ -127,8 +136,8 @@ TEST(PlannerSeam, BothModelsProduceTheSamePath)
   const Pose2D start{costmap.geometry().map_to_world(0, 0), 0.4};
   const Pose2D goal{costmap.geometry().map_to_world(7, 5), -1.1};
 
-  const auto from_cost = plan(costmap, make_cost_model(), start, goal);
-  const auto from_distance = plan(distance_map, radii, start, goal);
+  const auto from_cost = plan_raw(costmap, make_cost_model(), start, goal);
+  const auto from_distance = plan_raw(distance_map, radii, start, goal);
   ASSERT_TRUE(from_cost.has_value());
   ASSERT_TRUE(from_distance.has_value());
   expect_same_path(*from_cost, *from_distance);
@@ -176,7 +185,7 @@ TEST(PlannerSeam, CircumscribedBandOfTheDistanceFieldBlocksTheSearch)
   for (int my = 0; my < map.size_y(); ++my) {
     EXPECT_EQ(radii.classify(map(2, my)), Traversability::Circumscribed);
   }
-  EXPECT_FALSE(plan(
+  EXPECT_FALSE(plan_raw(
                  map, radii, Pose2D{map.geometry().map_to_world(0, 0), 0.0},
                  Pose2D{map.geometry().map_to_world(4, 4), 0.0})
                  .has_value());
@@ -205,4 +214,34 @@ TEST(PlannerSeam, SmoothsOnBothModels)
 
   expect_same_path(
     smooth(input, costmap, make_cost_model()), smooth(input, distance_map, radii));
+}
+
+TEST(PlannerSeam, HybridAStarProducesTheSamePathOnBothModels)
+{
+  const Costmap costmap = eltanin_test::make_costmap(
+    {
+      "....................",
+      "....................",
+      "....................",
+      ".........##.........",
+      ".........##.........",
+      ".........##.........",
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+    },
+    RESOLUTION);
+  const CollisionRadii radii = make_radii();
+  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), radii);
+
+  const Pose2D start{costmap.geometry().map_to_world(2, 7), 0.0};
+  const Pose2D goal{costmap.geometry().map_to_world(17, 7), 0.3};
+
+  const auto from_cost = eltanin::planner::plan_hybrid_astar(costmap, make_cost_model(), start, goal);
+  const auto from_distance = eltanin::planner::plan_hybrid_astar(distance_map, radii, start, goal);
+
+  ASSERT_TRUE(from_cost.has_value()) << eltanin::planner::to_string(from_cost.error());
+  ASSERT_TRUE(from_distance.has_value());
+  expect_same_path(*from_cost, *from_distance);
 }

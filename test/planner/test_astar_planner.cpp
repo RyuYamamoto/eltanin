@@ -39,8 +39,6 @@ using eltanin::map::CostTraversabilityModel;
 using eltanin::map::FREE_SPACE;
 using eltanin::map::LETHAL_OBSTACLE;
 using eltanin::map::MapGeometry;
-using eltanin::planner::AStarParams;
-using eltanin::planner::plan;
 using eltanin_test::CIRCUMSCRIBED_BAND_COST;
 using eltanin_test::expect_all_free;
 using eltanin_test::expect_grid_connected;
@@ -81,12 +79,21 @@ Costmap wall_map()
   return map;
 }
 
+/// The octile expectations in this file describe the raw cell-center path, so smoothing is off.
+template <class Map, class Model>
+eltanin::planner::PlanResult plan_raw(
+  const Map & map, const Model & model, const Pose2D & start, const Pose2D & goal,
+  const eltanin::planner::AStarParams & params = eltanin_test::raw_astar_params())
+{
+  return eltanin::planner::plan_astar(map, model, start, goal, params);
+}
+
 }  // namespace
 
 TEST(AStarPlanner, DiagonalAcrossAnOpenGrid)
 {
   const Costmap map = open_map(8, 8);
-  const auto path = plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 7, 7));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 7, 7));
   ASSERT_TRUE(path.has_value());
   EXPECT_EQ(path->size(), 8u);
   EXPECT_NEAR(path_length(*path), 7.0 * SQRT2 * RESOLUTION, TOLERANCE);
@@ -97,7 +104,7 @@ TEST(AStarPlanner, DiagonalAcrossAnOpenGrid)
 TEST(AStarPlanner, StraightLineAcrossAnOpenGrid)
 {
   const Costmap map = open_map(8, 3);
-  const auto path = plan(map, make_cost_model(), at_cell(map, 0, 1), at_cell(map, 7, 1));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 1), at_cell(map, 7, 1));
   ASSERT_TRUE(path.has_value());
   EXPECT_EQ(path->size(), 8u);
   EXPECT_NEAR(path_length(*path), 7.0 * RESOLUTION, TOLERANCE);
@@ -109,7 +116,7 @@ TEST(AStarPlanner, StraightLineAcrossAnOpenGrid)
 TEST(AStarPlanner, DetoursTheDiagonalGapBecauseCornerCuttingIsForbidden)
 {
   const Costmap map = diagonal_gap_map();
-  const auto path = plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 3, 2));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 3, 2));
   ASSERT_TRUE(path.has_value());
   // Corner cutting would allow 1 + 2 * sqrt2 = 3.828 cells; the detour costs 5 cells.
   EXPECT_NEAR(path_length(*path), 5.0 * RESOLUTION, TOLERANCE);
@@ -120,7 +127,7 @@ TEST(AStarPlanner, DetoursTheDiagonalGapBecauseCornerCuttingIsForbidden)
 TEST(AStarPlanner, DetoursASingleWallWithTheHandComputedLength)
 {
   const Costmap map = wall_map();
-  const auto path = plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0));
   ASSERT_TRUE(path.has_value());
   // Six orthogonal and two diagonal steps; corner cutting would give 2 + 4 * sqrt2 instead.
   EXPECT_NEAR(path_length(*path), (6.0 + 2.0 * SQRT2) * RESOLUTION, TOLERANCE);
@@ -131,7 +138,7 @@ TEST(AStarPlanner, DetoursASingleWallWithTheHandComputedLength)
 TEST(AStarPlanner, StartEqualsGoalGivesASinglePose)
 {
   const Costmap map = open_map(5, 5);
-  const auto path = plan(map, make_cost_model(), at_cell(map, 2, 2, 0.5), at_cell(map, 2, 2, 1.25));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 2, 2, 0.5), at_cell(map, 2, 2, 1.25));
   ASSERT_TRUE(path.has_value());
   ASSERT_EQ(path->size(), 1u);
   EXPECT_EQ(path_length(*path), 0.0);
@@ -144,12 +151,12 @@ TEST(AStarPlanner, AdjacentCellsGiveTwoPoses)
 {
   const Costmap map = open_map(5, 5);
 
-  const auto orthogonal = plan(map, make_cost_model(), at_cell(map, 2, 2), at_cell(map, 3, 2));
+  const auto orthogonal = plan_raw(map, make_cost_model(), at_cell(map, 2, 2), at_cell(map, 3, 2));
   ASSERT_TRUE(orthogonal.has_value());
   EXPECT_EQ(orthogonal->size(), 2u);
   EXPECT_NEAR(path_length(*orthogonal), RESOLUTION, TOLERANCE);
 
-  const auto diagonal = plan(map, make_cost_model(), at_cell(map, 2, 2), at_cell(map, 3, 3));
+  const auto diagonal = plan_raw(map, make_cost_model(), at_cell(map, 2, 2), at_cell(map, 3, 3));
   ASSERT_TRUE(diagonal.has_value());
   EXPECT_EQ(diagonal->size(), 2u);
   EXPECT_NEAR(path_length(*diagonal), SQRT2 * RESOLUTION, TOLERANCE);
@@ -164,7 +171,7 @@ TEST(AStarPlanner, EndpointsAreCellCentersNotCorners)
   const Pose2D start{start_center + Vector2d{0.03, -0.02}, 0.0};
   const Pose2D goal{goal_center + Vector2d{-0.04, 0.01}, 0.75};
 
-  const auto path = plan(map, make_cost_model(), start, goal);
+  const auto path = plan_raw(map, make_cost_model(), start, goal);
   ASSERT_TRUE(path.has_value());
   EXPECT_EQ((*path)[0].position.x(), start_center.x());
   EXPECT_EQ((*path)[0].position.y(), start_center.y());
@@ -178,8 +185,8 @@ TEST(AStarPlanner, LengthScalesWithResolution)
   const Costmap coarse = open_map(8, 8, 0.2);
   const Costmap fine = open_map(8, 8, 0.05);
   const auto coarse_path =
-    plan(coarse, make_cost_model(), at_cell(coarse, 0, 0), at_cell(coarse, 7, 5));
-  const auto fine_path = plan(fine, make_cost_model(), at_cell(fine, 0, 0), at_cell(fine, 7, 5));
+    plan_raw(coarse, make_cost_model(), at_cell(coarse, 0, 0), at_cell(coarse, 7, 5));
+  const auto fine_path = plan_raw(fine, make_cost_model(), at_cell(fine, 0, 0), at_cell(fine, 7, 5));
   ASSERT_TRUE(coarse_path.has_value());
   ASSERT_TRUE(fine_path.has_value());
   EXPECT_NEAR(path_length(*coarse_path), 4.0 * path_length(*fine_path), TOLERANCE);
@@ -190,9 +197,9 @@ TEST(AStarPlanner, LengthIsIndependentOfOrigin)
   const Costmap at_zero = open_map(8, 8);
   const Costmap shifted = open_map(8, 8, RESOLUTION, Vector2d{-4.25, -13.5});
   const auto zero_path =
-    plan(at_zero, make_cost_model(), at_cell(at_zero, 0, 0), at_cell(at_zero, 7, 5));
+    plan_raw(at_zero, make_cost_model(), at_cell(at_zero, 0, 0), at_cell(at_zero, 7, 5));
   const auto shifted_path =
-    plan(shifted, make_cost_model(), at_cell(shifted, 0, 0), at_cell(shifted, 7, 5));
+    plan_raw(shifted, make_cost_model(), at_cell(shifted, 0, 0), at_cell(shifted, 7, 5));
   ASSERT_TRUE(zero_path.has_value());
   ASSERT_TRUE(shifted_path.has_value());
   EXPECT_EQ(zero_path->size(), shifted_path->size());
@@ -202,8 +209,8 @@ TEST(AStarPlanner, LengthIsIndependentOfOrigin)
 TEST(AStarPlanner, IsDeterministic)
 {
   const Costmap map = wall_map();
-  const auto first = plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0, 0.3));
-  const auto second = plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0, 0.3));
+  const auto first = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0, 0.3));
+  const auto second = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 0, 0.3));
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());
   expect_same_path(*first, *second);
@@ -212,7 +219,7 @@ TEST(AStarPlanner, IsDeterministic)
 TEST(AStarPlanner, YawIsTangentExceptAtTheGoal)
 {
   const Costmap map = open_map(6, 3);
-  const auto path = plan(map, make_cost_model(), at_cell(map, 0, 1), at_cell(map, 5, 1, -2.0));
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 1), at_cell(map, 5, 1, -2.0));
   ASSERT_TRUE(path.has_value());
   ASSERT_EQ(path->size(), 6u);
   for (std::size_t i = 0; i + 1 < path->size(); ++i) {
@@ -232,7 +239,7 @@ TEST(AStarPlanner, GoalEnclosedByObstaclesIsUnreachable)
       ".....",
     },
     RESOLUTION);
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 2, 2)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 2, 2)).has_value());
 }
 
 TEST(AStarPlanner, WallSplittingTheMapIsUnreachable)
@@ -246,35 +253,35 @@ TEST(AStarPlanner, WallSplittingTheMapIsUnreachable)
       "..#..",
     },
     RESOLUTION);
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 }
 
 TEST(AStarPlanner, StartOutsideTheMapIsRejected)
 {
   const Costmap map = open_map(5, 5);
   const Pose2D outside{Vector2d{-1.0, 0.25}, 0.0};
-  EXPECT_FALSE(plan(map, make_cost_model(), outside, at_cell(map, 4, 4)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), outside, at_cell(map, 4, 4)).has_value());
 }
 
 TEST(AStarPlanner, GoalOutsideTheMapIsRejected)
 {
   const Costmap map = open_map(5, 5);
   const Pose2D outside{Vector2d{0.25, 5.0}, 0.0};
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), outside).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), outside).has_value());
 }
 
 TEST(AStarPlanner, InscribedGoalIsRejected)
 {
   Costmap map = open_map(5, 5);
   map(4, 4) = LETHAL_OBSTACLE;
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 }
 
 TEST(AStarPlanner, CircumscribedGoalIsRejected)
 {
   Costmap map = open_map(5, 5);
   map(4, 4) = CIRCUMSCRIBED_BAND_COST;
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 }
 
 TEST(AStarPlanner, UnknownGoalFollowsTheModelSetting)
@@ -282,9 +289,9 @@ TEST(AStarPlanner, UnknownGoalFollowsTheModelSetting)
   Costmap map = open_map(5, 5);
   map(4, 4) = eltanin::map::NO_INFORMATION;
   EXPECT_FALSE(
-    plan(map, make_cost_model(false), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+    plan_raw(map, make_cost_model(false), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 
-  const auto path = plan(map, make_cost_model(true), at_cell(map, 0, 0), at_cell(map, 4, 4));
+  const auto path = plan_raw(map, make_cost_model(true), at_cell(map, 0, 0), at_cell(map, 4, 4));
   ASSERT_TRUE(path.has_value());
   EXPECT_NEAR(path_length(*path), 4.0 * SQRT2 * RESOLUTION, TOLERANCE);
 }
@@ -301,8 +308,8 @@ TEST(AStarPlanner, UnknownCellsOpenUpTheSearchSpace)
     },
     RESOLUTION);
   EXPECT_FALSE(
-    plan(map, make_cost_model(false), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
-  EXPECT_TRUE(plan(map, make_cost_model(true), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+    plan_raw(map, make_cost_model(false), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+  EXPECT_TRUE(plan_raw(map, make_cost_model(true), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 }
 
 TEST(AStarPlanner, BlockedStartIsRescuedToTheNearestFreeCell)
@@ -319,10 +326,13 @@ TEST(AStarPlanner, BlockedStartIsRescuedToTheNearestFreeCell)
   const Pose2D start = at_cell(map, 1, 1);
   const Pose2D goal = at_cell(map, 4, 4);
 
-  EXPECT_FALSE(plan(map, make_cost_model(), start, goal, AStarParams{0}).has_value());
-  EXPECT_FALSE(plan(map, make_cost_model(), start, goal, AStarParams{1}).has_value());
+  EXPECT_FALSE(
+    plan_raw(map, make_cost_model(), start, goal, eltanin_test::raw_astar_params(0)).has_value());
+  EXPECT_FALSE(
+    plan_raw(map, make_cost_model(), start, goal, eltanin_test::raw_astar_params(1)).has_value());
 
-  const auto path = plan(map, make_cost_model(), start, goal, AStarParams{2});
+  const auto path =
+    plan_raw(map, make_cost_model(), start, goal, eltanin_test::raw_astar_params(2));
   ASSERT_TRUE(path.has_value());
   const Vector2d rescued = map.geometry().map_to_world(3, 1);
   EXPECT_EQ((*path)[0].position.x(), rescued.x());
@@ -333,7 +343,7 @@ TEST(AStarPlanner, BlockedStartIsRescuedToTheNearestFreeCell)
 TEST(AStarPlanner, FullyBlockedMapIsRejected)
 {
   const Costmap map(MapGeometry(6, 6, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
-  EXPECT_FALSE(plan(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 5, 5)).has_value());
+  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 5, 5)).has_value());
 }
 
 TEST(AStarPlanner, NonFiniteCoordinatesAreRejected)
@@ -343,11 +353,55 @@ TEST(AStarPlanner, NonFiniteCoordinatesAreRejected)
   const double inf = std::numeric_limits<double>::infinity();
 
   EXPECT_FALSE(
-    plan(map, make_cost_model(), Pose2D{Vector2d{nan, nan}, 0.0}, at_cell(map, 4, 4)).has_value());
+    plan_raw(map, make_cost_model(), Pose2D{Vector2d{nan, nan}, 0.0}, at_cell(map, 4, 4)).has_value());
   EXPECT_FALSE(
-    plan(map, make_cost_model(), at_cell(map, 0, 0), Pose2D{Vector2d{nan, 0.25}, 0.0}).has_value());
+    plan_raw(map, make_cost_model(), at_cell(map, 0, 0), Pose2D{Vector2d{nan, 0.25}, 0.0}).has_value());
   EXPECT_FALSE(
-    plan(map, make_cost_model(), Pose2D{Vector2d{inf, inf}, 0.0}, at_cell(map, 4, 4)).has_value());
+    plan_raw(map, make_cost_model(), Pose2D{Vector2d{inf, inf}, 0.0}, at_cell(map, 4, 4)).has_value());
   EXPECT_FALSE(
-    plan(map, make_cost_model(), at_cell(map, 0, 0), Pose2D{Vector2d{0.25, -inf}, 0.0}).has_value());
+    plan_raw(map, make_cost_model(), at_cell(map, 0, 0), Pose2D{Vector2d{0.25, -inf}, 0.0}).has_value());
+}
+
+TEST(AStarPlanner, DefaultOutputEqualsTheRawPathSmoothedSeparately)
+{
+  const Costmap map = wall_map();
+  const Pose2D start = at_cell(map, 0, 0);
+  const Pose2D goal = at_cell(map, 4, 0, 0.3);
+
+  const auto raw = plan_raw(map, make_cost_model(), start, goal);
+  ASSERT_TRUE(raw.has_value());
+  const auto planned = eltanin::planner::plan_astar(map, make_cost_model(), start, goal);
+  ASSERT_TRUE(planned.has_value());
+
+  expect_same_path(*planned, eltanin::planner::smooth(*raw, map, make_cost_model()));
+}
+
+TEST(AStarPlanner, EveryReturnedYawIsFinite)
+{
+  const Costmap wall = wall_map();
+  const Costmap open = open_map(5, 5);
+  const Costmap rescued = eltanin_test::make_costmap(
+    {
+      ".....",
+      ".....",
+      "###..",
+      "###..",
+      "###..",
+    },
+    RESOLUTION);
+
+  const eltanin::planner::PlanResult results[] = {
+    eltanin::planner::plan_astar(wall, make_cost_model(), at_cell(wall, 0, 0), at_cell(wall, 4, 0)),
+    plan_raw(wall, make_cost_model(), at_cell(wall, 0, 0), at_cell(wall, 4, 0)),
+    plan_raw(open, make_cost_model(), at_cell(open, 2, 2, 0.5), at_cell(open, 2, 2, 1.25)),
+    plan_raw(
+      rescued, make_cost_model(), at_cell(rescued, 1, 1), at_cell(rescued, 4, 4),
+      eltanin_test::raw_astar_params(2))};
+
+  for (const eltanin::planner::PlanResult & result : results) {
+    ASSERT_TRUE(result.has_value());
+    for (std::size_t i = 0; i < result->size(); ++i) {
+      EXPECT_TRUE(std::isfinite((*result)[i].yaw)) << "pose " << i;
+    }
+  }
 }

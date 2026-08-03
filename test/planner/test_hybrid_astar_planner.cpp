@@ -107,7 +107,7 @@ TEST(HybridAStarPlanner, ReturnsOnePoseWhenStartEqualsGoal)
 TEST(HybridAStarPlanner, ConstructorRejectsInvalidParameters)
 {
   HybridAStarParams params;
-  params.start_search_radius_cells = -1;
+  params.common.start_search_radius_cells = -1;
   EXPECT_THROW(HybridAStarPlanner{params}, std::invalid_argument);
 
   params = HybridAStarParams{};
@@ -146,10 +146,13 @@ TEST(HybridAStarPlanner, ChangesHeadingWithBoundedCurvature)
   ASSERT_GE(path->size(), 3u);
   expect_goal(*path, goal);
   expect_all_free(*path, map, make_cost_model());
+  // The default motion_step is the cell diagonal, so one primitive turns by at most that over R.
+  const double turn_limit =
+    std::numbers::sqrt2 * RESOLUTION / params.minimum_turning_radius + TOLERANCE;
   for (std::size_t i = 0; i + 1 < path->size(); ++i) {
     const double delta_yaw =
       std::abs(shortest_angular_distance((*path)[i].yaw, (*path)[i + 1].yaw));
-    EXPECT_LE(delta_yaw, RESOLUTION / params.minimum_turning_radius + TOLERANCE);
+    EXPECT_LE(delta_yaw, turn_limit);
   }
 }
 
@@ -238,7 +241,7 @@ TEST(HybridAStarPlanner, SharesBlockedStartRescueWithAStar)
   const Pose2D blocked_start = at_cell(map, 2, 6, 0.0);
   const Pose2D goal = at_cell(map, 16, 6, 0.0);
   HybridAStarParams params;
-  params.start_search_radius_cells = 1;
+  params.common.start_search_radius_cells = 1;
 
   const auto path = plan_hybrid_astar(map, make_cost_model(), blocked_start, goal, params);
 
@@ -279,4 +282,81 @@ TEST(HybridAStarPlanner, IsDeterministic)
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());
   expect_same_path(*first, *second);
+}
+
+TEST(HybridAStarPlanner, KeepsTheOutputSpacingWithinOneAndAHalfMotionSteps)
+{
+  const Costmap map = open_map(40, 40);
+  const double motion_step = std::numbers::sqrt2 * RESOLUTION;
+
+  // The Dubins tail length depends on where the search lands, so several goals are swept.
+  for (int offset = 0; offset < 7; ++offset) {
+    const Pose2D start = at_cell(map, 4, 20, 0.0);
+    const Pose2D goal{
+      at_cell(map, 30, 20).position + Vector2d{0.013 * static_cast<double>(offset), 0.0}, 0.4};
+    const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal);
+    ASSERT_TRUE(path.has_value()) << "offset " << offset;
+    ASSERT_GE(path->size(), 3u) << "offset " << offset;
+
+    double shortest = std::numeric_limits<double>::infinity();
+    double longest = 0.0;
+    for (std::size_t i = 1; i < path->size(); ++i) {
+      const double step = ((*path)[i].position - (*path)[i - 1].position).norm();
+      EXPECT_GT(step, 0.0) << "offset " << offset << " step " << i;
+      shortest = std::min(shortest, step);
+      longest = std::max(longest, step);
+    }
+    EXPECT_LE(longest, 1.5 * motion_step + TOLERANCE) << "offset " << offset;
+    EXPECT_LE(longest / shortest, 1.5 + TOLERANCE) << "offset " << offset;
+  }
+}
+
+TEST(HybridAStarPlanner, EveryReturnedYawIsFinite)
+{
+  const Costmap map = open_map(28, 28);
+  const eltanin::planner::PlanResult results[] = {
+    plan_hybrid_astar(
+      map, make_cost_model(), at_cell(map, 4, 4, 0.0), at_cell(map, 20, 20, std::numbers::pi / 2.0)),
+    plan_hybrid_astar(map, make_cost_model(), at_cell(map, 6, 6, 0.3), at_cell(map, 6, 6, 0.3))};
+
+  for (const eltanin::planner::PlanResult & result : results) {
+    ASSERT_TRUE(result.has_value());
+    for (std::size_t i = 0; i < result->size(); ++i) {
+      EXPECT_TRUE(std::isfinite((*result)[i].yaw)) << "pose " << i;
+      EXPECT_TRUE(result->operator[](i).position.allFinite()) << "pose " << i;
+    }
+  }
+}
+
+TEST(PlannerInterface, BothPlannersMeetTheOutputContractWithoutPostProcessing)
+{
+  Costmap map = open_map(36, 30);
+  for (int my = 0; my < 21; ++my) {
+    map(18, my) = LETHAL_OBSTACLE;
+  }
+  const Pose2D start = at_cell(map, 5, 10, 0.0);
+  const Pose2D goal = at_cell(map, 30, 10, 0.4);
+  const double spacing_limit = 1.5 * std::numbers::sqrt2 * RESOLUTION + TOLERANCE;
+
+  std::unique_ptr<Planner> planners[2];
+  planners[0] = std::make_unique<AStarPlanner>();
+  planners[1] = std::make_unique<HybridAStarPlanner>();
+
+  for (const std::unique_ptr<Planner> & planner : planners) {
+    const auto path = planner->plan(map, make_cost_model(), start, goal);
+    ASSERT_TRUE(path.has_value()) << eltanin::planner::to_string(path.error());
+    ASSERT_GE(path->size(), 2u);
+    expect_all_free(*path, map, make_cost_model());
+    EXPECT_NEAR(
+      ((*path)[path->size() - 1].position - goal.position).norm(), 0.0,
+      std::numbers::sqrt2 * 0.5 * RESOLUTION + TOLERANCE);
+    for (std::size_t i = 0; i < path->size(); ++i) {
+      EXPECT_TRUE(std::isfinite((*path)[i].yaw)) << "pose " << i;
+    }
+    for (std::size_t i = 1; i < path->size(); ++i) {
+      const double step = ((*path)[i].position - (*path)[i - 1].position).norm();
+      EXPECT_GT(step, 0.0) << "step " << i;
+      EXPECT_LE(step, spacing_limit) << "step " << i;
+    }
+  }
 }

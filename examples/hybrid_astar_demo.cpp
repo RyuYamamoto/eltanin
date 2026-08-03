@@ -104,9 +104,13 @@ int main(int argc, char ** argv)
     return EXIT_FAILURE;
   }
 
-  const auto guide = eltanin::planner::plan(inflated->map, inflated->model, start, goal);
-  if (!guide.has_value()) {
-    std::cerr << "A* found no corridor between start and goal\n";
+  eltanin::planner::AStarParams guide_params;
+  guide_params.smoother.reset();
+  const auto guide =
+    eltanin::planner::plan_astar(inflated->map, inflated->model, start, goal, guide_params);
+  if (!guide) {
+    std::cerr << "A* found no corridor between start and goal: "
+              << eltanin::planner::to_string(guide.error()) << '\n';
     return EXIT_FAILURE;
   }
 
@@ -118,8 +122,9 @@ int main(int argc, char ** argv)
 
   const auto path =
     eltanin::planner::plan_hybrid_astar(costmap, inflated->model, start, goal, params);
-  if (!path.has_value()) {
-    std::cerr << "Hybrid A* found no path in the cropped corridor\n";
+  if (!path) {
+    std::cerr << "Hybrid A* found no path in the cropped corridor: "
+              << eltanin::planner::to_string(path.error()) << '\n';
     return EXIT_FAILURE;
   }
 

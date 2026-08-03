@@ -88,9 +88,11 @@ int main(int argc, char ** argv)
     goal = pair->second;
   }
 
-  const auto raw = eltanin::planner::plan(costmap, model, start, goal);
-  if (!raw.has_value()) {
-    std::cerr << "plan() found no path\n";
+  eltanin::planner::AStarParams raw_params;
+  raw_params.smoother.reset();
+  const auto raw = eltanin::planner::plan_astar(costmap, model, start, goal, raw_params);
+  if (!raw) {
+    std::cerr << "plan_astar() found no path: " << eltanin::planner::to_string(raw.error()) << '\n';
     return EXIT_FAILURE;
   }
   const Path smoothed = eltanin::planner::smooth(*raw, costmap, model);

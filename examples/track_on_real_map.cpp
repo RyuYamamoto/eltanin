@@ -216,14 +216,15 @@ int main(int argc, char ** argv)
     goal = pair->second;
   }
 
-  const auto raw = eltanin::planner::plan(costmap, model, start, goal);
-  if (!raw.has_value()) {
-    std::cerr << "plan() found no path\n";
+  const auto planned = eltanin::planner::plan_astar(costmap, model, start, goal);
+  if (!planned) {
+    std::cerr << "plan_astar() found no path: " << eltanin::planner::to_string(planned.error())
+              << '\n';
     return EXIT_FAILURE;
   }
-  const Path path = eltanin::planner::smooth(*raw, costmap, model);
+  const Path & path = *planned;
   if (path.size() < 2) {
-    std::cerr << "the smoothed path is too short to track\n";
+    std::cerr << "the planned path is too short to track\n";
     return EXIT_FAILURE;
   }
 

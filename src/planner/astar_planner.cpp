@@ -18,20 +18,21 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <numbers>
 #include <queue>
 #include <utility>
+#include <vector>
 
 namespace eltanin::planner
 {
 
 namespace
 {
-
-constexpr std::uint8_t FREE = static_cast<std::uint8_t>(Traversability::Free);
 
 constexpr std::array<int, 8> NEIGHBOR_DX{1, 1, 0, -1, -1, -1, 0, 1};
 constexpr std::array<int, 8> NEIGHBOR_DY{0, 1, 1, 1, 0, -1, -1, -1};
@@ -43,22 +44,24 @@ using OpenQueue = std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::gr
 
 }  // namespace
 
-std::optional<Path> AStarPlanner::plan_on_grid(
-  const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-  const map::MapIndex & start, const map::MapIndex & goal, const Pose2D & effective_start,
-  const Pose2D & goal_pose) const
+AStarPlanner::AStarPlanner(const AStarParams & params) : Planner(params.common), params_(params)
 {
-  static_cast<void>(effective_start);
-  const std::size_t cells = geometry.cell_count();
-  assert(cells > 0);
-  assert(grid.size() == cells);
-  if (cells > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
-    return std::nullopt;
+  if (params_.smoother.has_value()) {
+    detail::validate_smoother_params(*params_.smoother);
   }
-  assert(geometry.in_bounds(start.x, start.y));
-  assert(geometry.in_bounds(goal.x, goal.y));
-  assert(grid[geometry.index(start.x, start.y)] == FREE);
-  assert(grid[geometry.index(goal.x, goal.y)] == FREE);
+}
+
+PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
+{
+  const TraversabilityView & grid = query.grid;
+  const map::MapGeometry & geometry = grid.geometry();
+  const std::size_t cells = grid.cell_count();
+  assert(cells > 0);
+  if (cells > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
+  assert(grid.free(query.start_index.x, query.start_index.y));
+  assert(grid.free(query.goal_index.x, query.goal_index.y));
 
   const std::size_t size_x = static_cast<std::size_t>(geometry.size_x());
   const double resolution = geometry.resolution();
@@ -67,14 +70,10 @@ std::optional<Path> AStarPlanner::plan_on_grid(
 
   // Octile distance; admissible and consistent for the eight-connected step costs above.
   const auto heuristic = [&](int mx, int my) {
-    const double dx = std::abs(static_cast<double>(mx - goal.x));
-    const double dy = std::abs(static_cast<double>(my - goal.y));
+    const double dx = std::abs(static_cast<double>(mx - query.goal_index.x));
+    const double dy = std::abs(static_cast<double>(my - query.goal_index.y));
     return static_cast<float>(
       (dx + dy + (std::numbers::sqrt2 - 2.0) * std::min(dx, dy)) * resolution);
-  };
-  // in_bounds() is evaluated first so that index() never sees an out-of-range cell.
-  const auto free_cell = [&](int mx, int my) {
-    return geometry.in_bounds(mx, my) && grid[geometry.index(mx, my)] == FREE;
   };
 
   std::vector<float> g_score(cells, std::numeric_limits<float>::infinity());
@@ -82,10 +81,10 @@ std::optional<Path> AStarPlanner::plan_on_grid(
   std::vector<std::uint8_t> closed(cells, 0);
   OpenQueue open;
 
-  const std::size_t start_index = geometry.index(start.x, start.y);
-  const std::size_t goal_index = geometry.index(goal.x, goal.y);
+  const std::size_t start_index = geometry.index(query.start_index.x, query.start_index.y);
+  const std::size_t goal_index = geometry.index(query.goal_index.x, query.goal_index.y);
   g_score[start_index] = 0.0F;
-  open.push(OpenEntry{heuristic(start.x, start.y), start_index});
+  open.push(OpenEntry{heuristic(query.start_index.x, query.start_index.y), start_index});
 
   bool reached = false;
   while (!open.empty()) {
@@ -107,16 +106,16 @@ std::optional<Path> AStarPlanner::plan_on_grid(
       const int dy = NEIGHBOR_DY[k];
       const int nx = mx + dx;
       const int ny = my + dy;
-      if (!geometry.in_bounds(nx, ny)) {
+      if (!grid.free(nx, ny)) {
         continue;
       }
       const std::size_t neighbor = geometry.index(nx, ny);
-      if (grid[neighbor] != FREE || closed[neighbor] != 0) {
+      if (closed[neighbor] != 0) {
         continue;
       }
       const bool diagonal = dx != 0 && dy != 0;
       // Corner cutting is forbidden: a diagonal step needs both orthogonal cells free.
-      if (diagonal && (!free_cell(mx + dx, my) || !free_cell(mx, my + dy))) {
+      if (diagonal && (!grid.free(mx + dx, my) || !grid.free(mx, my + dy))) {
         continue;
       }
       const float tentative = g_score[current] + (diagonal ? diagonal_step : orthogonal_step);
@@ -129,7 +128,7 @@ std::optional<Path> AStarPlanner::plan_on_grid(
   }
 
   if (!reached) {
-    return std::nullopt;
+    return PlanResult{PlannerError::Unreachable};
   }
 
   std::vector<std::size_t> reversed;
@@ -144,9 +143,12 @@ std::optional<Path> AStarPlanner::plan_on_grid(
     const int my = static_cast<int>(*it / size_x);
     path.push_back(Pose2D{geometry.map_to_world(mx, my), 0.0});
   }
-  path[path.size() - 1].yaw = goal_pose.yaw;
+  path[path.size() - 1].yaw = query.goal.yaw;
   detail::assign_tangent_yaw(path);
-  return path;
+  if (params_.smoother.has_value()) {
+    return PlanResult{detail::smooth_on_grid(path, grid, *params_.smoother)};
+  }
+  return PlanResult{std::move(path)};
 }
 
 }  // namespace eltanin::planner

@@ -172,8 +172,23 @@ planner = std::make_unique<eltanin::planner::HybridAStarPlanner>(hybrid_params);
 path = planner->plan(map, model, start, goal);
 ```
 
-The existing `planner::plan(...)` free function remains the A* convenience API;
-`planner::plan_hybrid_astar(...)` is the corresponding Hybrid A* convenience API.
+`planner::plan_astar(...)` and `planner::plan_hybrid_astar(...)` are the matching convenience free
+functions. Both return a `PlanResult`: an `std::optional`-compatible value that also carries a
+`PlannerError` explaining why there is no path (`to_string(result.error())` names it).
+
+Whichever planner is selected, the returned path is directly followable — **do not call `smooth()` on
+it**. `plan_astar()` already smooths, reusing the classified grid it built for the search, so a second
+`smooth()` only adds a full-map classification pass worth roughly one search. Pass
+`AStarParams::smoother = std::nullopt` when the raw cell-center path is what you want, and keep
+`smooth()` for paths that did not come from a planner. Hybrid A* is never smoothed, because that would
+break the curvature bound.
+
+Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
+`heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
+`max_state_memory_bytes` (256 MiB by default) rejects anything larger with `StateSpaceTooLarge` rather
+than throwing, which means **a full 4000 x 4000 map does not fit** — crop a corridor around an A* guide
+first, as `eltanin_hybrid_astar_demo` and the navigation loop do. `docs/planner-design.md` §13 records
+the measurements behind these numbers.
 
 `eltanin_navigate_on_real_map` closes the loop over every module in a single process. No ROS node, no
 tf, no topic, no simulator process:

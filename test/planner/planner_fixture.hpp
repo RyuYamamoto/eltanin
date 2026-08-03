@@ -21,6 +21,7 @@
 #include <eltanin/map/cost_model.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
+#include <eltanin/planner/astar_planner.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 
 #include <gtest/gtest.h>
@@ -143,6 +144,15 @@ inline double smoother_energy(
     energy += 0.5 * params.weight_smooth * (path[i].position - path[i - 1].position).squaredNorm();
   }
   return energy;
+}
+
+/// Smoothing off; the octile length and grid-connectivity expectations describe the raw path.
+inline eltanin::planner::AStarParams raw_astar_params(int start_search_radius_cells = 8)
+{
+  eltanin::planner::AStarParams params;
+  params.common.start_search_radius_cells = start_search_radius_cells;
+  params.smoother.reset();
+  return params;
 }
 
 /// Consecutive raw A* poses are neighbouring cell centers, so no step may exceed the diagonal.

@@ -18,33 +18,36 @@
 #include <eltanin/planner/planner.hpp>
 
 #include <cstddef>
-#include <optional>
 
 namespace eltanin::planner
 {
 
+/// Covers every reachable case measured in docs/planner-design.md §13.7 and bounds one call.
+inline constexpr std::size_t HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS = 4000000;
+
+/// 256 MiB of search state, which covers roughly a 30 m square map at 0.05 m and 72 bins.
+inline constexpr std::size_t HYBRID_ASTAR_DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1024UL;
+
 struct HybridAStarParams
 {
-  /// Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
-  int start_search_radius_cells{8};
+  PlannerParams common{};
   int heading_bins{72};
   double minimum_turning_radius{0.4};
-  /// Length of one motion primitive [m]; 0 selects one map cell.
+  /// Length of one motion primitive [m]; 0 selects sqrt(2) * resolution.
   double motion_step{0.0};
-  /// Sampling interval used along each primitive [m]; 0 selects half a map cell.
+  /// Collision check interval along each primitive [m]; 0 selects half a map cell.
   double collision_check_step{0.0};
   /// Dubins connection is attempted inside this Euclidean distance from the goal [m].
   double dubins_expansion_distance{1.0};
   double steering_penalty{0.05};
   double steering_change_penalty{0.10};
   /// 0 allows the complete discretized state space to be expanded.
-  std::size_t max_expansions{0};
+  std::size_t max_expansions{HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS};
+  /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.
+  std::size_t max_state_memory_bytes{HYBRID_ASTAR_DEFAULT_MAX_STATE_MEMORY_BYTES};
 };
 
-/// Forward-only Hybrid A* over (x, y, yaw), using constant-curvature motion primitives.
-///
-/// Traversability is checked at the vehicle reference point. Callers that require footprint
-/// clearance must provide an appropriately inflated traversability map.
+/// Forward-only Hybrid A* over (x, y, yaw); collisions are checked at the vehicle reference point.
 class HybridAStarPlanner final : public Planner
 {
 public:
@@ -52,17 +55,15 @@ public:
   explicit HybridAStarPlanner(const HybridAStarParams & params = {});
 
 private:
-  [[nodiscard]] std::optional<Path> plan_on_grid(
-    const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-    const map::MapIndex & start_index, const map::MapIndex & goal_index,
-    const Pose2D & effective_start, const Pose2D & goal) const override;
+  [[nodiscard]] PlanResult plan_on_grid(const PlanQuery & query) const override;
 
   HybridAStarParams params_;
 };
 
+/// Convenience wrapper around HybridAStarPlanner.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
-std::optional<Path> plan_hybrid_astar(
+PlanResult plan_hybrid_astar(
   const Map & map, const Model & model, const Pose2D & start, const Pose2D & goal,
   const HybridAStarParams & params = {})
 {

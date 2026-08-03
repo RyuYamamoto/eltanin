@@ -182,7 +182,7 @@ my=0:  . # # G
 
 ロボットが膨張帯に入っているのは正常な状況 (壁際からの発進、動的障害物の接近) であり、そこで計画不能になるのは実用に反する。一方 goal は利用者が選ぶ値であり、通行不可なら「そこへは行けない」と返すのが正しい情報である。切り離した `find_nearest_traversable()` を goal に適用するかは後続タスクの判断に委ねる。
 
-寄せ替えの是非と半径を呼び出し側が制御できるよう、`AStarParams` と `HybridAStarParams` はそれぞれ `start_search_radius_cells` (既定 8 セル) を持つ。`0` は「救済しない」を意味する。既定 8 セルは `resolution 0.05` で 0.4 m であり、膨張半径 0.55 m (§14.7) と同程度をカバーする。
+寄せ替えの是非と半径を呼び出し側が制御できるよう、`PlannerParams` が `start_search_radius_cells` (既定 8 セル) を持ち、`AStarParams` / `HybridAStarParams` はこれを `common` メンバとして合成する (§13.1)。`0` は「救済しない」を意味する。既定 8 セルは `resolution 0.05` で 0.4 m であり、膨張半径 0.55 m (§14.7) と同程度をカバーする。
 
 **`find_nearest_traversable()` の契約**
 
@@ -413,3 +413,259 @@ Hybrid A* の各 pose の yaw は車体姿勢であり、A* のように経路�
 `eltanin_hybrid_astar_demo` は YAML/PGM 地図を読み込み、実機 Footprint から求めた半径で膨張する。入力地図全体は 4000 x 4000 セルになり得るため、まず A* 経路の周囲を切り出し、その実地図領域上で Hybrid A* を実行する。A* は探索範囲の決定だけに使い、出力経路には混ぜない。
 
 デモは `costmap.pgm` / `path.csv` / `footprint.csv` / `meta.txt` を出力する。`examples/plot_hybrid_astar.py` は既定で全経路サンプルの Footprint を重ね、車体が掃引する領域と曲率制約を PNG に描く。長い経路では `--footprint-step` で描画だけを間引ける。`--animate` 指定時は Footprint が経路に沿って移動する GIF も生成する。Python / matplotlib / numpy / Pillow は可視化スクリプトにだけ必要であり、planner 本体の依存には含めない。
+
+---
+
+## 13. T8: 共通 Planner I/F の統一と Hybrid A* の欠陥修正
+
+`7f4b990` の時点で A* と Hybrid A* は同じ `Planner` 基底の下にあったが、契約が揃っておらず、Hybrid A* 側に正しさ・堅牢性・スケーラビリティの欠陥が残っていた。本章はその是正で決めたことと、根拠になった実測値を記録する。
+
+### 13.1 拡張点は 1 組の型に固定した
+
+派生プランナが実装するのは `plan_on_grid(const PlanQuery &) -> PlanResult` の 1 本だけである。
+
+```
+Planner::plan<Map, Model>()          planner.hpp        非仮想テンプレート
+  ├─ 地図の妥当性 / start,goal の範囲 / yaw の有限性
+  ├─ goal 閉塞判定 / start 救済 (find_nearest_traversable)
+  ├─ build_traversability_grid()     ← 型消去の境界
+  └─ plan_on_grid(PlanQuery)         仮想 / 非テンプレート
+```
+
+`PlanQuery` は「分類済みグリッドのビュー + 救済後 start セル + goal セル + 救済後 start 姿勢 + 要求 goal 姿勢」を束ねる。位置引数 6 個をやめたので、**派生が読まないメンバがあること自体が正常**になり、`static_cast<void>(effective_start)` のような「引数に来るのに捨てる」記述が構造的に不要になった。副作用として、Release (`NDEBUG`) で `goal_index` が `assert` からしか参照されず `-Werror=unused-parameter` でビルドが落ちていた不具合も消えた。
+
+`PlanQuery` / `PlanResult` / `TraversabilityError` は `detail` に置かない。これらは**ライブラリの拡張点そのもの**であり、隠すと派生プランナを書けない。`build_traversability_grid()` と `smooth_on_grid()` は `detail` に残す。
+
+### 13.2 通行可否判定は `TraversabilityView` 1 本に集約した
+
+`in_bounds()` → `index()` → `== Free` の順序規約 (§4) を守る場所をクラス内 1 箇所に閉じた。従来は A* に 1 個、Hybrid A* に 2 個、スムーザに 1 個の合計 4 個のラムダが同じ順序を各々再実装していた。
+
+ビューは `MapGeometry *` と `std::span<const std::uint8_t>` の 4 語で、所有しない。グリッドの寿命は `Planner::plan()` のローカルが持つ。全メンバ inline / `noexcept` で、仮想関数にはしない。
+
+Theta\* の視線判定は `free(world)` を線分上でサンプリングする自由関数としてこのビューの上に載せられる。利用者が居ないので今回は追加しない (`docs/costmap-design.md` §9.2)。
+
+### 13.3 失敗理由を返すようにした (§1 の方針を撤回した)
+
+§1 は「失敗理由の返却はやらない」と書いていた。これを撤回する。理由は 2 つある。
+
+1. 利用者が現れた。examples 4 本 + 統合デモ + `eltanin_ros` が失敗を利用者へ説明する必要がある。
+2. Hybrid A* の追加で失敗系が 10 分類に増え、`std::nullopt` 1 本では区別できなくなった。
+
+`PlannerError` の判定順序は次に固定する。複合的に不正な入力はこの順で最初に該当した理由を返す。
+
+```
+InvalidMap → StartOutsideMap → GoalOutsideMap → NonFiniteYaw → GoalBlocked → StartRescueFailed
+→ (探索) ParamsIncompatibleWithMap / StateSpaceTooLarge / ExpansionLimitReached / Unreachable
+```
+
+**位置の非有限は `NonFiniteYaw` にならない。** `world_to_map()` の `to_int_saturating()` が先に弾くので `StartOutsideMap` / `GoalOutsideMap` に落ちる。
+
+`PlanResult` は `std::optional` 互換の専用型にした。`has_value()` / `operator bool` / `operator*` / `operator->` / `path()` を備えるので、理由を見ない呼び出し側は `if (!result)` のまま書ける。`std::expected` は C++20 に無く、`core` への汎用 `Result<T, E>` 追加は利用者が planner 1 モジュールのみなので採らなかった。出力引数併存 API も、「理由を渡し忘れる」形が既定になるため採らなかった。
+
+理由を無視できる形を残したのは意図的な設計である。examples では必ず `to_string(result.error())` を出力して規範を示す。
+
+### 13.4 非有限 yaw の検査を基底へ移した
+
+従来 A* は `goal.yaw = NaN` を受理し、末尾姿勢の yaw を `NaN` のまま返していた (`astar_planner.cpp` が `goal_pose.yaw` を代入し、`assign_tangent_yaw()` は末尾に触らない仕様のため)。既存テスト `NonFiniteCoordinatesAreRejected` は**位置しか見ていなかった**。
+
+検査を `Planner::plan()` に置いたので全プランナに効く。Hybrid A* 側の重複検査は削除した。`assign_tangent_yaw()` には手を入れていない (末尾 yaw を触らない契約は §6 のまま)。
+
+### 13.5 出力契約
+
+| 項目 | A\* (`plan_astar` / `AStarPlanner`) | Hybrid A\* |
+|---|---|---|
+| 先頭姿勢 | 救済後 start セルの中心。yaw は接線 | 救済後 start 姿勢そのまま (位置は救済時のみセル中心へ移る) |
+| 末尾姿勢 | 位置は goal セル中心 (要求 goal から最大 `0.707 * resolution` ずれる)、yaw は要求値 | 位置・yaw とも要求 goal に一致 |
+| yaw の意味 | 経路接線 | 車体姿勢 |
+| yaw の有限性 | 全姿勢で有限 | 全姿勢で有限 |
+| 点間隔 | `resolution` 〜 `√2 * resolution` (平滑化は点数不変・端点固定なので上限が保たれる) | `(0, 1.5 * motion_step]`、同一経路内の最大/最小比は 1.5 以下 |
+| 追従可否 | そのまま追従可 (既定で平滑化済み) | そのまま追従可 |
+| 決定性 | 同一入力でビット同一 | 同一入力でビット同一 |
+
+**A\* は `start.yaw` を読まない。** 生 A* 経路はセル中心の列であり先頭 yaw は接線で決まるからである。これは欠落ではなく契約である。
+
+### 13.6 `plan_astar()` が完成経路を返すようにした
+
+呼び出し側がアルゴリズムを知らずにプランナを差し替えられることが I/F 統一の目的なので、`plan_astar()` は既定で平滑化まで済ませた経路を返す。生経路は `AStarParams::smoother` を `std::nullopt` にすれば得られる。
+
+```cpp
+eltanin::planner::AStarParams raw;
+raw.smoother.reset();
+const auto path = eltanin::planner::plan_astar(map, model, start, goal, raw);
+```
+
+Hybrid A* には平滑化を掛けない (曲率制約を壊す)。`HybridAStarParams` は smoother メンバを持たない。
+
+平滑化の実装は二重化していない。反復スイープの本体を `detail::smooth_on_grid(path, TraversabilityView, params)` に切り出し、公開 `smooth()` テンプレートと `AStarPlanner::plan_on_grid()` の両方がこれを通る。`plan_on_grid()` 側はグリッドが既に手元にあるので追加確保はゼロである。
+
+**受け入れたコスト (重要)**: 単独の公開 `smooth()` は、呼び出しごとに全セル分類グリッド (セル数 × 1 byte) を構築するようになった。従来は候補点ごとの遅延分類だったので経路長にしか比例しなかった。実地図 4000 x 4000 (1600 万セル) / 727 姿勢の経路で実測した内訳:
+
+| | 旧 `7f4b990` | 新 |
+|---|---|---|
+| A\* 探索 | 136–142 ms | 121–128 ms |
+| `plan_astar()` 既定 (探索 + 平滑化) | — | 109–127 ms |
+| 単独 `smooth()` | 0.16–0.17 ms | 18.4–20.1 ms |
+| ↳ うち `build_traversability_grid()` | — | 18.5–19.3 ms |
+| ↳ うち平滑化スイープ本体 | 0.16 ms | 0.11–0.14 ms |
+
+探索そのものは速くなっている (判定が `model.classify()` の間接呼び出しからグリッド 1 バイトの比較になったため)。増えたのは単独 `smooth()` の 19 ms であり、その全量がグリッド構築である。
+
+**したがって `plan_astar()` の後に `smooth()` を呼んではならない。** `plan_astar()` は既定で平滑化済みの経路を返すので、2 度目の `smooth()` は探索 1 回分に匹敵する無駄なグリッド構築を足すだけである。`eltanin_ros` の `global_path_planner.cpp` のように「探索 → 別途 `smooth()`」の形になっている呼び出し側は、`smooth()` 呼びを削除すること。削除すれば合計は旧実装より速くなる (136–142 ms → 109–127 ms)。
+
+`smooth()` を単独で使う正当な用途は「planner 以外から来た経路を平滑化する」場合だけである。グリッド構築を経路の bounding box に限る最適化は、平滑化の変位に上限が無いためビット同一性を壊しうる。採らなかった。
+
+### 13.7 Hybrid A* のメモリを 1/8.4 にした
+
+状態配列の内訳を変えた。
+
+| 項目 | 旧 | 新 |
+|---|---|---|
+| 状態キー | `(cell, heading_bin, mode)`、`MODE_COUNT = 4` | `(cell, heading_bin)` |
+| `g_score` | `double` 8 B | `float` 4 B |
+| `best_node` | `std::size_t` 8 B | `std::uint32_t` 4 B |
+| `closed` | `std::uint8_t` 1 B | ビット列 (`std::vector<std::uint64_t>`) 0.125 B |
+| 1 state 合計 | 17 B | 8.125 B |
+| `nodes.reserve()` | `min(state_count, cells * 8)` (400 x 400 で約 80 MB) | 定数 `INITIAL_NODE_RESERVE = 4096` |
+
+ピーク RSS の実測 (`resolution 0.05`、`heading_bins 72`、Release `-O2`):
+
+| ケース | 旧 | 新 | 比 |
+|---|---|---|---|
+| open200 (10 m 角、直進) | 190.2 MB | **25.5 MB** | 0.134 |
+| corridor (通路) | 70.5 MB | 11.4 MB | 0.162 |
+| wall200 (10 m 角、壁の迂回) | 346.7 MB | 73.9 MB | 0.213 |
+| open400 (20 m 角) | 750.0 MB | 92.5 MB | 0.123 |
+
+**`mode` を状態キーから落とした判断 (§12.2 の改訂)**: §12.2 は steering change penalty を Markov な遷移コストにするため `previous_motion_mode` を状態に入れた、と記録していた。落とすと同一 `(cell, heading_bin)` に異なる直前操舵で到達した候補が 1 つに潰れ、遷移コストが履歴依存になる。すなわち A* の整合性 (consistency) を厳密には失う。受け入れた理由は、Hybrid A* が解析接続の成功時点で返すため**探索全体の最適性はもともと保証していない** (§12.2 末尾) ので、整合性の厳密な保持が守っている実質的な性質が無いことである。`Node` は cost 計算のために直前 mode を `std::uint8_t` で持ち続け、start ノードは番兵値 `START_MODE` を使う。`START_MODE` 専用の 4 番目の次元 (旧実装で状態配列の 25 % を占めていた) も同時に消えた。
+
+経路品質は劣化していない。むしろ改善した。
+
+| ケース | 経路長 旧 → 新 | 操舵切り替え回数 旧 → 新 |
+|---|---|---|
+| open200 | 9.000 → 9.000 m | 0 → 0 |
+| turn (90° 旋回) | 10.012 → 10.019 m (+0.07 %) | 23 → **6** |
+| wall200 | 13.705 → **13.618** m | 41 → **8** |
+| corridor | 11.000 → 11.000 m | 0 → 0 |
+
+切り替え回数が減ったのは、`motion_step` の既定が `√2 * resolution` になり primitive が長くなった効果が支配的である。
+
+**メモリは `heading_bins` に比例する。** 既定 72 は変えていない。`mode` 除去でメモリ目標を満たせたので角度分解能を削る必要が無かった。
+
+**実地図全体には依然として適用できない。** 4000 x 4000 セルは状態 1.15e9 個 = 9.4 GB であり、既定の `max_state_memory_bytes` (256 MiB) が拒否する。呼び出し側の corridor 切り出し (§12.3) は残る。密配列をフラットなオープンアドレス法のハッシュへ移せばメモリが展開数比例になり、この制約を外せる可能性がある — 次段の選択肢として申し送る。
+
+### 13.8 `plan()` は本当に例外を投げなくなった
+
+§11 は「例外は投げない」と宣言していたが、実際には `ulimit -v 2000000` の下で 1200 x 1200 セルの地図に対し `std::bad_alloc` が `plan()` の外へ伝播していた。旧実装のガードは `std::size_t` の乗算オーバーフローだけを見ており、確保可能かは見ていなかった。
+
+三重にした。
+
+1. 添字計算のオーバーフロー検査 (`state_count` を確定する前の上限比較)。状態 id と node id が `std::uint32_t` に収まることも検査する。
+2. `state_count * 8 B + closed の語数 * 8 B` を `max_state_memory_bytes` (既定 256 MiB) と比較し、超えるなら**確保前に** `StateSpaceTooLarge` を返す。
+3. それでも `std::bad_alloc` が出る環境に備え、探索全体を `try` / `catch (const std::bad_alloc &)` で包み `StateSpaceTooLarge` に変換する。
+
+3 の必要性は実測で確認した。`max_state_memory_bytes` を 4 GiB に上げて 1200 x 1200 の地図を `ulimit -v 600000` (600 MB) の下で計画すると、事前判定は通るが確保が失敗する。この構成で `StateSpaceTooLarge` が返り、例外は漏れない。
+
+既定 256 MiB は、`resolution 0.05` / `heading_bins 72` でおよそ 30 m 角の地図に相当する。
+
+### 13.9 `motion_step` が離散状態を変えられない組み合わせを拒否するようにした
+
+旧実装は開けた地図でも `motion_step = 0.2 * resolution` で `nullopt` を返した。`closed[current.state]` を立ててから展開するので、3 本の primitive がすべて現在と同じ離散状態に落ちると即座に行き止まる。ctor は `motion_step >= 0.0` しか見ておらず、`resolution` は plan 時にしか判らないため検査されていなかった。
+
+十分条件を primitive ごとに整理する。
+
+| primitive | 状態が変わる条件 | 十分条件 |
+|---|---|---|
+| 直進 (curvature 0) | セルが変わる。方位 θ に対し変位は `max(\|dx\|,\|dy\|) >= motion_step / √2` | `motion_step >= √2 * resolution` |
+| 旋回 (curvature ±1/R) | 向きビンが変わる (`motion_step / R >= 2π / heading_bins`)、または弦長でセルが変わる (`2R sin(motion_step / 2R) >= √2 * resolution`) | 上記いずれか |
+
+**直進条件と旋回条件は別に満たす必要がある。** 既定値 (`R = 0.4`、`heading_bins = 72`、`resolution = 0.05`) では直進条件が `motion_step >= 0.0707 m`、旋回条件が `motion_step >= 0.0349 m` なので直進条件が支配的である。
+
+決めたこと。
+
+1. `motion_step = 0` の自動値を `resolution` から **`√2 * resolution`** に変えた。既定は必ず十分条件を満たす。
+2. 明示指定が十分条件を破る場合は `ParamsIncompatibleWithMap` を返す。検査は `resolution` が判る `plan_on_grid()` の先頭に置く。
+
+**受け入れた副作用**: 十分条件は十分であって必要ではない。旧実装で成功していた `motion_step = 0.5 * resolution` は拒否されるようになる。これは「たまたま動く設定を黙って受ける」旧実装の欠陥の裏返しである。
+
+既定値変更の実測影響 (40 x 40 セル、`resolution 0.1` の自由空間、`open200` は `resolution 0.05`):
+
+| `motion_step` | 旧 | 新 |
+|---|---|---|
+| `0.2 * res` | `nullopt` (欠陥) | `ParamsIncompatibleWithMap` |
+| `0.5 * res` | 成功 365 点 / 9.099 m | `ParamsIncompatibleWithMap` |
+| `1.0 * res` | 成功 201 点 / 9.000 m (旧既定) | `ParamsIncompatibleWithMap` |
+| `√2 * res` | 成功 153 点 | 成功 **129 点** / 9.000 m (新既定) |
+| `2.0 * res` | 成功 119 点 | 成功 92 点 |
+| `3.0 * res` | 成功 91 点 | 成功 61 点 |
+
+出力点間隔は 0.05 → 0.0707 m、点数は減る。`HybridAStarPlanner.ChangesHeadingWithBoundedCurvature` の 1 ステップ旋回上限は `resolution / R` から `√2 * resolution / R` へ更新した。
+
+**採らなかった対案 (申し送り)**: 「離散状態が変わるまで primitive を延長する適応ステップ」。`motion_step` を積分/衝突検査の刻みとして自由に取れるようになり、出力点間隔も自動的に揃う点で本質的に優れる。ただし遷移が可変長になり、コストとヒューリスティックの許容性の再確認と探索構造の変更を伴う。今回の「作り直さない」方針の範囲を超えるため採らなかった。
+
+### 13.10 `max_expansions` の既定を有限にした
+
+旧既定 0 (無制限) では、到達不能な goal に対しヒューリスティックが障害物を無視するため到達可能側の状態空間を全て展開していた。統合デモは再計画時に同じ呼び出しをするので、閉塞時に制御ループが止まる。
+
+既定を `HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS = 4000000` にした。`0 = 無制限` の意味は逃げ道として維持する。打ち切りは `ExpansionLimitReached`、探索が尽きたのは `Unreachable` で区別する。
+
+根拠になった実測 (`resolution 0.05`、`max_expansions` を二分探索して「成功に必要な展開数」を求めた):
+
+| ケース | 必要展開数 | 所要 |
+|---|---|---|
+| corridor (通路) | 142 | 7.7 ms |
+| open200 / open400 | 114 / 255 | 20 / 69 ms |
+| turn (90° 旋回) | 3,454 | 23 ms |
+| wall200 (10 m 角、7.5 m の壁を迂回) | 710,979 | 723 ms |
+| wall400 (20 m 角、15 m の壁を迂回) | 3,377,660 | 4.3 s |
+
+到達不能ケース (200 x 200 を壁で完全に二分) の所要時間:
+
+| 上限 | 旧 | 新 |
+|---|---|---|
+| 無制限 | 3205 ms | **1318 ms** |
+| 2,000,000 | 2403 ms | 1393 ms |
+| 4,000,000 | — | 1489 ms |
+
+展開 1 回あたり約 1.13 µs である。200 x 200 では状態空間が 2.88e6 で有界なので、**どの上限でも 1.5 s 以内に失敗が返る**。既定 4e6 は測定した全ての到達可能ケース (最大 3.38e6) を通し、1 回の呼び出しを約 4.5 s に抑える値として選んだ。
+
+**残る限界**: 上限は「遅い失敗」を「速い失敗」に変えるだけで、狭い通路の遠回りが必要な地図では**到達可能でも打ち切りで失敗しうる**。20 m 角の地図で 15 m の壁を迂回するケースが既に 3.38e6 を要しており、既定に対する余裕は 1.18 倍しかない。より大きい地図で迂回が必要な場合は `max_expansions` を明示的に上げるか、corridor を切り出すこと。構造的な解決は障害物考慮ヒューリスティック (A* コアの内部再利用) であり、今回は範囲外とした。
+
+A* に打ち切りは追加しない。`closed` がセル数で有界だからである (§1 の方針を維持)。旧実装の `cells <= INT32_MAX` ガードは `StateSpaceTooLarge` を返すようにしただけで、新しい失敗経路は追加していない。
+
+### 13.11 Dubins 区間の出力間隔を衝突検査間隔から分離した
+
+旧実装は `collision_check_step` を Dubins 末尾の**出力サンプリング間隔にも流用**していた。`motion_step = 0.2` / `collision_check_step = 0.02` で計画すると、探索区間の間隔が 0.2 m、Dubins 区間が 0.0195 m という 10 倍差の不均一な経路が出ていた。
+
+分けた。
+
+- **衝突検査**: `collision_check_step` 間隔で Dubins 経路を走査する。細かさは維持する。
+- **出力**: `count = max(1, ceil(length / motion_step))` の等分割で生成する。間隔は `length / count`。
+
+`count >= 2` なら `length / count > motion_step / 2` が保証される。`count == 1` (`length <= motion_step`) のときだけ末尾区間が極小になりうるので、**その区間が公称間隔の半分未満なら 1 つ前の姿勢を落とす**。落とす姿勢は衝突検査済みの点なので経路の妥当性は変わらず、統合後の最終区間は `1.5 * motion_step` 未満に収まる。これにより経路全体の最大/最小比は 1.5 以下になり、§13.5 の契約として書ける。
+
+実測 (`open200` / 既定パラメータ):
+
+| | 旧 | 新 |
+|---|---|---|
+| 隣接点間隔 | [0.0244, 0.0500] m | [0.0671, 0.0707] m |
+| 最大/最小比 | 2.05 | **1.05** |
+
+`dubins->length() == 0.0` のとき末尾を要求 goal 姿勢へ差し替える旧来の振る舞いは維持している。
+
+### 13.12 再現しなかった懸念の記録
+
+Hybrid A* は離散状態での goal 到達判定を持たず、**解析接続の成功のみを終了条件にしている**。したがって解析接続が常に衝突する配置では到達可能でも失敗しうる。goal の yaw を 1 セル先の壁へ向けた配置、`dubins_expansion_distance = 0.1` の配置、`minimum_turning_radius` ぎりぎりの幅の通路の奥に goal を置く配置をいずれも試したが、失敗するケースは作れていない。**既知の不完全性として記録するが、振る舞いは `Unreachable` のままとする。** 離散到達判定を追加すると末尾姿勢が要求 goal に一致しなくなり §13.5 の契約と衝突するため、別タスクへ送る。
+
+### 13.13 D* Lite / Theta* への見通し
+
+D\* Lite には別 I/F が必要であるという §12.1 の結論は変わらない。呼び出しを跨ぐ状態と地図更新通知を要するので、`plan()` が `const` で作業領域を持たない今の基底には載らない。ただし `PlannerError` と `TraversabilityView` は増分プランナでもそのまま再利用できる (地図更新通知や状態保持を基底に入れていない)。
+
+Theta\* は今の基底に載る。視線判定は `TraversabilityView::free(world)` の上に線分サンプリングの自由関数として書ける。出力は任意角の折れ線になるが、§13.5 の契約のうち点間隔以外はすべて満たせる。点間隔はプランナごとに上限を明記する契約なので、Theta\* は自身の上限を宣言すればよい。
+
+### 13.14 申し送り
+
+- 探索状態を密配列からフラットなオープンアドレス法のハッシュへ移す。メモリが展開数比例になり `StateSpaceTooLarge` が実質的に不要になる。実地図全体への適用が視野に入る
+- 離散状態が変わるまで primitive を延長する適応ステップ (§13.9 の対案)
+- 障害物考慮ヒューリスティック (§13.10 の残る限界の構造的解決)
+- 増分プランナ (D\* Lite) 用の別 I/F
+- 探索作業領域を保持するプランナ型への移行 (`plan()` の `const` を外す破壊的変更)

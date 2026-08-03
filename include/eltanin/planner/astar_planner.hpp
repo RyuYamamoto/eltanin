@@ -15,6 +15,7 @@
 #ifndef ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 #define ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 
+#include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/planner/planner.hpp>
 
 #include <optional>
@@ -24,30 +25,28 @@ namespace eltanin::planner
 
 struct AStarParams
 {
-  /// Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
-  int start_search_radius_cells{8};
+  PlannerParams common{};
+  /// nullopt returns the raw cell-center A* path; a value smooths it before returning.
+  std::optional<SmootherParams> smoother{SmootherParams{}};
 };
 
+/// Eight-connected A* over the cells classified Traversability::Free.
 class AStarPlanner final : public Planner
 {
 public:
-  /// Throws std::invalid_argument when start_search_radius_cells is negative.
-  explicit AStarPlanner(const AStarParams & params = {})
-  : Planner(params.start_search_radius_cells)
-  {
-  }
+  /// Throws std::invalid_argument when the common or smoother parameters are out of range.
+  explicit AStarPlanner(const AStarParams & params = {});
 
 private:
-  [[nodiscard]] std::optional<Path> plan_on_grid(
-    const map::MapGeometry & geometry, const detail::TraversabilityGrid & grid,
-    const map::MapIndex & start_index, const map::MapIndex & goal_index,
-    const Pose2D & effective_start, const Pose2D & goal) const override;
+  [[nodiscard]] PlanResult plan_on_grid(const PlanQuery & query) const override;
+
+  AStarParams params_;
 };
 
-/// Eight-connected A* over the cells classified Traversability::Free; nullopt when unreachable.
+/// Convenience wrapper around AStarPlanner; smooths the result unless params.smoother is nullopt.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
-std::optional<Path> plan(
+PlanResult plan_astar(
   const Map & map, const Model & model, const Pose2D & start, const Pose2D & goal,
   const AStarParams & params = {})
 {
