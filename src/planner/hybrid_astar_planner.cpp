@@ -49,10 +49,13 @@ constexpr std::size_t STATE_ARRAY_BYTES_PER_STATE = sizeof(float) + sizeof(std::
 
 struct Motion
 {
-  int steering;
+  /// Curvature as a signed fraction of 1 / minimum_turning_radius.
+  double curvature_scale;
 };
 
-constexpr std::array<Motion, 3> MOTIONS{Motion{0}, Motion{-1}, Motion{1}};
+/// The half-curvature pair exists so that a heading can be nudged by about one bin.
+constexpr std::array<Motion, 5> MOTIONS{
+  Motion{0.0}, Motion{-1.0}, Motion{1.0}, Motion{-0.5}, Motion{0.5}};
 constexpr std::uint8_t START_MODE = static_cast<std::uint8_t>(MOTIONS.size());
 
 struct Node
@@ -114,23 +117,22 @@ bool primitives_can_change_state(
   return motion_step / turning_radius >= bin_width || chord >= cell_diagonal;
 }
 
-std::optional<Pose2D> collision_free_successor(
+/// Only the interior of the primitive; the caller has already accepted the end pose.
+bool primitive_interior_is_free(
   const TraversabilityView & grid, const Pose2D & from, const Motion & motion, double motion_step,
   double turning_radius, double collision_check_step)
 {
   const int sample_count =
     std::max(1, static_cast<int>(std::ceil(motion_step / collision_check_step)));
-  const double curvature = static_cast<double>(motion.steering) / turning_radius;
-  Pose2D candidate = from;
-  for (int sample = 1; sample <= sample_count; ++sample) {
+  const double curvature = motion.curvature_scale / turning_radius;
+  for (int sample = 1; sample < sample_count; ++sample) {
     const double distance =
       motion_step * static_cast<double>(sample) / static_cast<double>(sample_count);
-    candidate = propagate(from, distance, curvature);
-    if (!grid.free(candidate.position)) {
-      return std::nullopt;
+    if (!grid.free(propagate(from, distance, curvature).position)) {
+      return false;
     }
   }
-  return candidate;
+  return true;
 }
 
 std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint32_t goal_node)
@@ -248,12 +250,14 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   };
   const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
     const Motion & next = MOTIONS[next_mode];
+    // Any curvature costs the same, so a gentle primitive is not a cheaper way to travel.
     double multiplier = 1.0;
-    if (next.steering != 0) {
+    if (next.curvature_scale != 0.0) {
       multiplier += params.steering_penalty;
     }
-    if (previous_mode != START_MODE && MOTIONS[previous_mode].steering != next.steering) {
-      multiplier += params.steering_change_penalty;
+    if (previous_mode != START_MODE) {
+      multiplier += params.steering_change_penalty *
+                    std::abs(next.curvature_scale - MOTIONS[previous_mode].curvature_scale);
     }
     return motion_step * multiplier;
   };
@@ -304,28 +308,32 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
 
     for (std::size_t index = 0; index < MOTIONS.size(); ++index) {
       const auto mode = static_cast<std::uint8_t>(index);
-      const auto successor = collision_free_successor(
-        grid, current.pose, MOTIONS[mode], motion_step, params.minimum_turning_radius,
-        collision_check_step);
-      if (!successor.has_value()) {
+      // The cheap state and cost tests run first, so most primitives cost no collision sampling.
+      const Pose2D successor = propagate(
+        current.pose, motion_step, MOTIONS[mode].curvature_scale / params.minimum_turning_radius);
+      const auto successor_index = geometry.world_to_map(successor.position);
+      if (!successor_index.has_value() || !grid.free(successor.position)) {
         continue;
       }
-      const auto successor_index = geometry.world_to_map(successor->position);
-      assert(successor_index.has_value());
-      const std::uint32_t successor_state = state_index(*successor_index, successor->yaw);
+      const std::uint32_t successor_state = state_index(*successor_index, successor.yaw);
       if (is_closed(closed, successor_state)) {
         continue;
       }
-
       const auto tentative = static_cast<float>(current.g + transition_cost(current.mode, mode));
       if (tentative >= g_score[successor_state]) {
         continue;
       }
+      if (!primitive_interior_is_free(
+            grid, current.pose, MOTIONS[mode], motion_step, params.minimum_turning_radius,
+            collision_check_step)) {
+        continue;
+      }
+
       g_score[successor_state] = tentative;
       const auto successor_id = static_cast<std::uint32_t>(nodes.size());
-      nodes.push_back(Node{*successor, tentative, current_id, successor_state, mode});
+      nodes.push_back(Node{successor, tentative, current_id, successor_state, mode});
       best_node[successor_state] = successor_id;
-      open.push(OpenEntry{static_cast<float>(tentative + heuristic(*successor)), successor_id});
+      open.push(OpenEntry{static_cast<float>(tentative + heuristic(successor)), successor_id});
     }
   }
   return PlanResult{PlannerError::Unreachable};

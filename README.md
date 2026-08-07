@@ -186,7 +186,9 @@ break the curvature bound.
 Hybrid A* tries its analytic Dubins connection at the first expanded node and then on a throttle that
 tightens as the goal gets closer, so on an open map the returned path *is* the optimal Dubins path
 rather than a heading-quantized weave. `analytic_expansion_ratio` controls the throttle; raising it
-above the default tries more often, which measurably degrades detours around obstacles.
+above the default tries more often, which measurably degrades detours around obstacles. Its motion
+primitives are straight plus a full and a half turn in each direction, so a heading can be nudged by a
+single bin instead of overshooting by two — that is what keeps detours from weaving.
 
 Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
 `heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
