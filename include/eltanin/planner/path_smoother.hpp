@@ -27,10 +27,10 @@ namespace eltanin::planner
 
 struct SmootherParams
 {
-  /// Pull back towards the input path.
-  double weight_data{0.5};
+  /// Pull back towards the input path; a grid path is the artifact, so this stays weak.
+  double weight_data{0.1};
   /// Pull towards the average of the two neighbours.
-  double weight_smooth{0.3};
+  double weight_smooth{0.4};
   /// Stops once the total displacement of one sweep falls below this [m].
   double tolerance{1e-4};
   int max_iterations{100};

@@ -478,11 +478,11 @@ A* で計画 → `PurePursuit` で追従 → **その指令を `VelocityLimiter`
 出力は `crop.pgm` / `path.csv` / `trajectory.csv` / `predicted.csv` (予測姿勢列) /
 `footprint.csv` (world 系フットプリント) / `meta.txt`。
 
-navyu の実マップ (`resolution 0.05`、経路 37.3 m) での実測:
+navyu の実マップ (`resolution 0.05`、経路 37.2 m) での実測:
 
 | 構成 | 周期数 | 減速した周期 | 衝突検知した周期 | 最大減速量 |
 |---|---|---|---|---|
-| 障害物なし (`obstacle_fraction 0`) | 7538 | **0** | 99 | 0 m/s |
+| 障害物なし (`obstacle_fraction 0`) | 7530 | **0** | 91 | 0 m/s |
 | 経路上に障害物 (既定) | 3600 | 55 | 155 | 0.5 m/s (完全停止) |
 
 **障害物なしで減速が 0 回なのは正しい。** 計画経路は `inflation_radius = 0.55` の膨張を避けて通るので、
