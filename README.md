@@ -187,11 +187,13 @@ Hybrid A* tries its analytic Dubins connection at the first expanded node and th
 tightens as the goal gets closer, so on an open map the returned path *is* the optimal Dubins path
 rather than a heading-quantized weave. `analytic_expansion_ratio` controls the throttle; raising it
 above the default tries more often, which measurably degrades detours around obstacles.
-Requiring an exact goal heading is what makes a forward-only search fail on a reachable
-position, so `free_goal_yaw` falls back to the goal *position* at whatever heading gets there when
-no arc arrives at the requested one. The returned path still ends at the requested pose either way;
-what changes is only whether the approach into that heading is continuous or an in-place turn the
-follower makes, which is the same convention A\* has always used for its last pose. Its motion
+`motion_model` declares what the vehicle can do, and the returned path contains nothing else:
+`Dubins` is forward arcs at or above the turning radius, and `Differential` adds turning on the spot,
+which is what a differential drive actually does. The difference is not cosmetic — on the reference
+map a requested goal heading is reachable in 3 of 8 directions under `Dubins` and in 8 of 8 under
+`Differential`, both with the same `1 / minimum_turning_radius` bound on every travelling segment.
+A turn on the spot appears as its own pose, so two consecutive poses can share a position; that is
+the one place the spacing contract below does not apply. Its motion
 primitives are straight plus a full and a half turn in each direction, so a heading can be nudged by a
 single bin instead of overshooting by two — that is what keeps detours from weaving.
 

@@ -28,6 +28,7 @@
 #include <numbers>
 #include <optional>
 #include <queue>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -41,6 +42,9 @@ namespace
 constexpr std::uint32_t INVALID_NODE = std::numeric_limits<std::uint32_t>::max();
 constexpr std::size_t BITS_PER_WORD = 64;
 
+/// Below this the analytic tail already points where the caller asked, so no turn is emitted.
+constexpr double SAME_HEADING = 1e-9;
+
 /// Nodes are appended as they are discovered, so no reservation proportional to the map is needed.
 constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
 
@@ -48,19 +52,35 @@ constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
 constexpr std::size_t BYTES_PER_STATE = sizeof(float) + sizeof(std::uint32_t);
 
 
-struct Motion
-{
-  /// Curvature as a signed fraction of 1 / minimum_turning_radius.
-  double curvature_scale;
-};
-
-/// The half-curvature pair exists so that a heading can be nudged by about one bin.
 constexpr std::array<int, 8> NEIGHBOR_DX{1, 1, 0, -1, -1, -1, 0, 1};
 constexpr std::array<int, 8> NEIGHBOR_DY{0, 1, 1, 1, 0, -1, -1, -1};
 
-constexpr std::array<Motion, 5> MOTIONS{
-  Motion{0.0}, Motion{-1.0}, Motion{1.0}, Motion{-0.5}, Motion{0.5}};
-constexpr std::uint8_t START_MODE = static_cast<std::uint8_t>(MOTIONS.size());
+/// One primitive of a control set, in units the map and the turning radius fix at plan time.
+struct Motion
+{
+  /// Travel as a signed fraction of motion_step; 0 turns on the spot.
+  double travel_scale;
+  /// Curvature as a signed fraction of 1 / minimum_turning_radius while travelling.
+  double curvature_scale;
+  /// Heading bins turned when travel_scale is 0.
+  int spin_bins;
+};
+
+constexpr std::array<Motion, 3> DUBINS_MOTIONS{
+  Motion{1.0, 0.0, 0}, Motion{1.0, -1.0, 0}, Motion{1.0, 1.0, 0}};
+
+constexpr std::array<Motion, 5> DIFFERENTIAL_MOTIONS{
+  Motion{1.0, 0.0, 0}, Motion{1.0, -1.0, 0}, Motion{1.0, 1.0, 0},
+  Motion{0.0, 0.0, -1}, Motion{0.0, 0.0, 1}};
+
+std::span<const Motion> control_set(MotionModel model) noexcept
+{
+  return model == MotionModel::Differential ? std::span<const Motion>{DIFFERENTIAL_MOTIONS}
+                                            : std::span<const Motion>{DUBINS_MOTIONS};
+}
+
+/// Not an index into any control set, so "no previous primitive" needs no separate flag.
+constexpr std::uint8_t START_MODE = 255;
 
 struct Node
 {
@@ -86,14 +106,19 @@ void set_closed(std::vector<std::uint64_t> & closed, std::uint32_t state) noexce
   closed[state / BITS_PER_WORD] |= std::uint64_t{1} << (state % BITS_PER_WORD);
 }
 
-Pose2D propagate(const Pose2D & pose, double distance, double curvature)
+/// Exact unicycle integration of one primitive: travel [m] along the body axis while turning `turn`.
+Pose2D propagate(const Pose2D & pose, double travel, double turn)
 {
-  if (curvature == 0.0) {
+  if (travel == 0.0) {
+    return Pose2D{pose.position, normalize_angle(pose.yaw + turn)};
+  }
+  if (turn == 0.0) {
     return Pose2D{
-      pose.position + distance * Eigen::Vector2d{std::cos(pose.yaw), std::sin(pose.yaw)}, pose.yaw};
+      pose.position + travel * Eigen::Vector2d{std::cos(pose.yaw), std::sin(pose.yaw)}, pose.yaw};
   }
 
-  const double next_yaw = normalize_angle(pose.yaw + distance * curvature);
+  const double curvature = turn / travel;
+  const double next_yaw = normalize_angle(pose.yaw + turn);
   return Pose2D{
     pose.position + Eigen::Vector2d{
                       (std::sin(next_yaw) - std::sin(pose.yaw)) / curvature,
@@ -123,16 +148,18 @@ bool motion_step_is_usable(
 
 /// Only the interior of the primitive; the caller has already accepted the end pose.
 bool interior_is_free(
-  const TraversabilityView & grid, const Pose2D & from, const Motion & motion, double motion_step,
-  double turning_radius, double collision_check_step)
+  const TraversabilityView & grid, const Pose2D & from, double travel, double turn,
+  double collision_check_step)
 {
+  // Turning on the spot keeps the reference point where it already is, so nothing new to check.
+  if (travel == 0.0) {
+    return true;
+  }
   const int sample_count =
-    std::max(1, static_cast<int>(std::ceil(motion_step / collision_check_step)));
-  const double curvature = motion.curvature_scale / turning_radius;
+    std::max(1, static_cast<int>(std::ceil(std::abs(travel) / collision_check_step)));
   for (int sample = 1; sample < sample_count; ++sample) {
-    const double distance =
-      motion_step * static_cast<double>(sample) / static_cast<double>(sample_count);
-    if (!grid.free(propagate(from, distance, curvature).position)) {
+    const double fraction = static_cast<double>(sample) / static_cast<double>(sample_count);
+    if (!grid.free(propagate(from, travel * fraction, turn * fraction).position)) {
       return false;
     }
   }
@@ -288,8 +315,12 @@ Path attach_tail(
     poses.pop_back();
   }
   poses.insert(poses.end(), connection.begin(), connection.end());
-  // The requested goal is what the caller asked for, so it is what the last pose carries.
-  poses[poses.size() - 1] = goal;
+  // Reaching the requested heading is a turn on the spot, so it gets a pose of its own.
+  if (std::abs(shortest_angular_distance(poses.back().yaw, goal.yaw)) > SAME_HEADING) {
+    poses.push_back(goal);
+  } else {
+    poses[poses.size() - 1] = goal;
+  }
   return Path{std::move(poses)};
 }
 
@@ -318,7 +349,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   }
   const std::size_t state_count = cells * heading_bins;
   // Node ids and state ids are 32 bit, and the search may append up to 3 nodes per expansion.
-  if (state_count > (INVALID_NODE - 1) / (MOTIONS.size() + 1)) {
+  if (state_count > (INVALID_NODE - 1) / (control_set(params.motion_model).size() + 1)) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
@@ -353,18 +384,30 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     const double cells_to_goal = remaining / resolution;
     return static_cast<std::size_t>(cells_to_goal / params.analytic_expansion_ratio);
   };
+  const std::span<const Motion> motions = control_set(params.motion_model);
+  const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
+  const auto travel_of = [&](const Motion & motion) { return motion.travel_scale * motion_step; };
+  const auto turn_of = [&](const Motion & motion) {
+    return motion.travel_scale == 0.0
+             ? static_cast<double>(motion.spin_bins) * bin_width
+             : travel_of(motion) * motion.curvature_scale / params.minimum_turning_radius;
+  };
   const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
-    const Motion & next = MOTIONS[next_mode];
+    const Motion & next = motions[next_mode];
+    // A turn on the spot is charged the arc it would have cost at the minimum turning radius.
+    if (next.travel_scale == 0.0) {
+      return std::abs(turn_of(next)) * params.minimum_turning_radius;
+    }
     // Any curvature costs the same, so a gentle primitive is not a cheaper way to travel.
     double multiplier = 1.0;
     if (next.curvature_scale != 0.0) {
       multiplier += params.steering_penalty;
     }
-    if (previous_mode != START_MODE) {
+    if (previous_mode != START_MODE && motions[previous_mode].travel_scale != 0.0) {
       multiplier += params.steering_change_penalty *
-                    std::abs(next.curvature_scale - MOTIONS[previous_mode].curvature_scale);
+                    std::abs(next.curvature_scale - motions[previous_mode].curvature_scale);
     }
-    return motion_step * multiplier;
+    return std::abs(travel_of(next)) * multiplier;
   };
 
   std::vector<float> g_score(state_count, std::numeric_limits<float>::infinity());
@@ -398,7 +441,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       skipped_attempts = 0;
       std::array<Pose2D, 3> targets{query.goal, query.goal, query.goal};
       std::size_t target_count = 1;
-      if (params.free_goal_yaw) {
+      // Turning on the spot is a primitive here, so arriving off-heading is a legal way to finish.
+      if (params.motion_model == MotionModel::Differential) {
         const std::optional<Pose2D> shortest =
           approach_pose(current.pose, query.goal.position, params.minimum_turning_radius);
         targets[1] = shortest.value_or(Pose2D{query.goal.position, current.pose.yaw});
@@ -428,11 +472,11 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     }
     ++expansions;
 
-    for (std::size_t index = 0; index < MOTIONS.size(); ++index) {
+    for (std::size_t index = 0; index < motions.size(); ++index) {
       const auto mode = static_cast<std::uint8_t>(index);
       // The cheap state and cost tests run first, so most primitives cost no collision sampling.
-      const Pose2D successor = propagate(
-        current.pose, motion_step, MOTIONS[mode].curvature_scale / params.minimum_turning_radius);
+      const Pose2D successor =
+        propagate(current.pose, travel_of(motions[mode]), turn_of(motions[mode]));
       const auto successor_index = geometry.world_to_map(successor.position);
       if (!successor_index.has_value() || !grid.free(successor.position)) {
         continue;
@@ -450,7 +494,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
         continue;
       }
       if (!interior_is_free(
-            grid, current.pose, MOTIONS[mode], motion_step, params.minimum_turning_radius,
+            grid, current.pose, travel_of(motions[mode]), turn_of(motions[mode]),
             collision_check_step)) {
         continue;
       }

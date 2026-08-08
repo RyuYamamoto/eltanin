@@ -394,7 +394,7 @@ TEST(HybridAStarPlanner, ReturnsTheOptimalDubinsPathOnAnOpenMap)
   }
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawReachesAHeadingTheGoalYawCannot)
+TEST(HybridAStarPlanner, ADifferentialDriveReachesAHeadingTheGoalYawCannot)
 {
   // A dead end 0.5 m wide; turning round inside it needs 0.8 m at the default turning radius.
   Costmap map(MapGeometry(40, 40, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
@@ -410,7 +410,7 @@ TEST(HybridAStarPlanner, AFreeGoalYawReachesAHeadingTheGoalYawCannot)
   ASSERT_FALSE(exact.has_value());
 
   HybridAStarParams params;
-  params.free_goal_yaw = true;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
   const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
   ASSERT_TRUE(free_yaw.has_value()) << eltanin::planner::to_string(free_yaw.error());
@@ -419,11 +419,11 @@ TEST(HybridAStarPlanner, AFreeGoalYawReachesAHeadingTheGoalYawCannot)
   expect_all_free(*free_yaw, map, make_cost_model());
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadiusUpToTheGoal)
+TEST(HybridAStarPlanner, ADifferentialDriveStillRespectsTheTurningRadiusUpToTheGoal)
 {
   const Costmap map = open_map(40, 40);
   HybridAStarParams params;
-  params.free_goal_yaw = true;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
   const Pose2D start = at_cell(map, 5, 5, 0.0);
 
   for (int quadrant = 0; quadrant < 8; ++quadrant) {
@@ -442,7 +442,7 @@ TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadiusUpToTheGoal)
   }
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawKeepsTheRequestedGoalPose)
+TEST(HybridAStarPlanner, ADifferentialDriveKeepsTheRequestedGoalPose)
 {
   // A dead end 0.5 m wide; the requested heading is one no forward-only arc can arrive at.
   Costmap map(MapGeometry(40, 40, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
@@ -454,7 +454,7 @@ TEST(HybridAStarPlanner, AFreeGoalYawKeepsTheRequestedGoalPose)
   const Pose2D start = at_cell(map, 4, 20, 0.0);
   const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
   HybridAStarParams params;
-  params.free_goal_yaw = true;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
 
   const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
@@ -463,13 +463,13 @@ TEST(HybridAStarPlanner, AFreeGoalYawKeepsTheRequestedGoalPose)
   expect_all_free(*path, map, make_cost_model());
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawPrefersTheRequestedPoseWhenItIsReachable)
+TEST(HybridAStarPlanner, ADifferentialDrivePrefersTheRequestedPoseWhenItIsReachable)
 {
   const Costmap map = open_map(40, 40);
   const Pose2D start = at_cell(map, 5, 20, 0.0);
   const Pose2D goal = at_cell(map, 30, 20, 0.0);
   HybridAStarParams params;
-  params.free_goal_yaw = true;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
 
   const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
   const auto exact = plan_hybrid_astar(map, make_cost_model(), start, goal);
@@ -491,14 +491,14 @@ TEST(HybridAStarPlanner, TheExactGoalYawIsStillTheDefault)
   expect_goal(*path, goal);
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawDoesNotLoopRoundJustToFaceBackwards)
+TEST(HybridAStarPlanner, ADifferentialDriveDoesNotLoopRoundJustToFaceBackwards)
 {
   const Costmap map = open_map(200, 200);
   const Pose2D start = at_cell(map, 30, 100, 0.0);
   const Pose2D ahead = at_cell(map, 130, 100, 0.0);
   const Pose2D backwards = at_cell(map, 130, 100, std::numbers::pi);
   HybridAStarParams params;
-  params.free_goal_yaw = true;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
 
   const auto straight = plan_hybrid_astar(map, make_cost_model(), start, ahead, params);
   const auto reversed = plan_hybrid_astar(map, make_cost_model(), start, backwards, params);
@@ -514,4 +514,70 @@ TEST(HybridAStarPlanner, AFreeGoalYawDoesNotLoopRoundJustToFaceBackwards)
       shortest_angular_distance((*reversed)[i].yaw, (*reversed)[i + 1].yaw), 0.0, TOLERANCE)
       << "step " << i;
   }
+}
+
+namespace
+{
+
+/// Every consecutive pair must be one primitive of the declared control set, and nothing else.
+void expect_follows_control_set(
+  const Path & path, const HybridAStarParams & params, double resolution)
+{
+  const double radius = params.minimum_turning_radius;
+  const bool may_spin = params.motion_model == eltanin::planner::MotionModel::Differential;
+  const double step = params.motion_step > 0.0 ? params.motion_step : std::numbers::sqrt2 * resolution;
+  for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+    const Eigen::Vector2d delta = path[i + 1].position - path[i].position;
+    const double chord = delta.norm();
+    const double turn = std::abs(shortest_angular_distance(path[i].yaw, path[i + 1].yaw));
+    if (chord <= TOLERANCE) {
+      EXPECT_TRUE(may_spin) << "step " << i << " turns on the spot but the model forbids it";
+      continue;
+    }
+    // Forward only: the body must move along its heading, never against it.
+    const Eigen::Vector2d heading{std::cos(path[i].yaw), std::sin(path[i].yaw)};
+    EXPECT_GT(delta.dot(heading), 0.0) << "step " << i << " travels backwards";
+    EXPECT_LE(chord, 1.5 * step + TOLERANCE) << "step " << i << " is longer than one primitive";
+    // A chord of this length cannot cover more heading than the minimum turning radius allows.
+    EXPECT_LE(turn, 2.0 * std::asin(std::min(1.0, chord / (2.0 * radius))) + 1e-6)
+      << "step " << i << " turns tighter than the radius allows";
+  }
+}
+
+}  // namespace
+
+TEST(HybridAStarPlanner, TheDubinsModelNeverTurnsOnTheSpot)
+{
+  const Costmap map = open_map(60, 60);
+  HybridAStarParams params;
+  const Pose2D start = at_cell(map, 5, 5, 0.0);
+
+  for (int quadrant = 0; quadrant < 8; ++quadrant) {
+    const Pose2D goal = at_cell(map, 45, 40, quadrant * std::numbers::pi / 4.0);
+    const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+    ASSERT_TRUE(path.has_value()) << "quadrant " << quadrant;
+    expect_goal(*path, goal);
+    expect_follows_control_set(*path, params, RESOLUTION);
+  }
+}
+
+TEST(HybridAStarPlanner, TheDifferentialModelOnlyEverAddsATurnOnTheSpot)
+{
+  Costmap map(MapGeometry(40, 40, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 2; mx <= 30; ++mx) {
+    for (int my = 18; my <= 22; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  HybridAStarParams params;
+  params.motion_model = eltanin::planner::MotionModel::Differential;
+  const Pose2D start = at_cell(map, 4, 20, 0.0);
+  const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
+
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(path.has_value());
+  expect_goal(*path, goal);
+  expect_follows_control_set(*path, params, RESOLUTION);
+  expect_all_free(*path, map, make_cost_model());
 }

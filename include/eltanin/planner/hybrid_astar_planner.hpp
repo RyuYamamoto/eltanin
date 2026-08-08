@@ -28,9 +28,20 @@ inline constexpr std::size_t DEFAULT_MAX_EXPANSIONS = 4000000;
 /// 256 MiB of search state, which covers roughly a 30 m square map at 0.05 m and 72 bins.
 inline constexpr std::size_t DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1024UL;
 
+/// What the vehicle can actually do, and therefore what the returned path may contain.
+enum class MotionModel
+{
+  /// Forward arcs at or above the minimum turning radius; a car cannot do better.
+  Dubins,
+  /// Adds turning on the spot, which is what a differential drive does.
+  Differential,
+};
+
 struct HybridAStarParams
 {
   PlannerParams common{};
+  /// Which primitives the search may use, and which the output is allowed to contain.
+  MotionModel motion_model{MotionModel::Dubins};
   int heading_bins{72};
   double minimum_turning_radius{0.4};
   /// Length of one motion primitive [m]; 0 selects sqrt(2) * resolution.
@@ -39,8 +50,6 @@ struct HybridAStarParams
   double collision_check_step{0.0};
   /// Dubins connection is attempted at every expanded node inside this distance from the goal [m].
   double dubins_expansion_distance{1.0};
-  /// true reaches the goal position at any heading, leaving the final yaw to the follower.
-  bool free_goal_yaw{false};
   /// Beyond that distance it is attempted every (cells to goal / this) nodes; larger tries more.
   double analytic_expansion_ratio{1.0};
   /// Weight on the over-cells distance heuristic; above ~0.9 it goes greedy and the path weaves.
