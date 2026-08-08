@@ -276,6 +276,8 @@ Path attach_tail(
     poses.pop_back();
   }
   poses.insert(poses.end(), connection.begin(), connection.end());
+  // The requested goal is what the caller asked for, so it is what the last pose carries.
+  poses[poses.size() - 1] = goal;
   return Path{std::move(poses)};
 }
 
@@ -382,13 +384,13 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       expansions == 0 || skipped_attempts >= attempt_interval(heuristic(current.pose));
     if (analytic_due) {
       skipped_attempts = 0;
-      // The shortest arrival heading first, then this node's own heading if there is no arc to it.
+      // The requested pose first; a free heading only relaxes what the search must achieve.
       const std::optional<Pose2D> shortest =
         params.free_goal_yaw
           ? approach_pose(current.pose, query.goal.position, params.minimum_turning_radius)
-          : std::optional<Pose2D>{query.goal};
-      const std::array<Pose2D, 2> targets{
-        shortest.value_or(Pose2D{query.goal.position, current.pose.yaw}),
+          : std::nullopt;
+      const std::array<Pose2D, 3> targets{
+        query.goal, shortest.value_or(Pose2D{query.goal.position, current.pose.yaw}),
         Pose2D{query.goal.position, current.pose.yaw}};
       const std::size_t target_count = params.free_goal_yaw ? targets.size() : 1;
       for (std::size_t i = 0; i < target_count; ++i) {
@@ -397,7 +399,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
           motion_step);
         if (connection.has_value()) {
           return PlanResult{attach_tail(
-            reconstruct_poses(nodes, current_id), *connection, targets[i], motion_step)};
+            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
         }
       }
     } else {

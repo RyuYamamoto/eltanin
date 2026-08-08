@@ -418,7 +418,7 @@ TEST(HybridAStarPlanner, AFreeGoalYawReachesAHeadingTheGoalYawCannot)
   expect_all_free(*free_yaw, map, make_cost_model());
 }
 
-TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadius)
+TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadiusUpToTheGoal)
 {
   const Costmap map = open_map(40, 40);
   HybridAStarParams params;
@@ -429,10 +429,9 @@ TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadius)
     const Pose2D goal = at_cell(map, 30, 25, quadrant * std::numbers::pi / 4.0);
     const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
     ASSERT_TRUE(path.has_value()) << "quadrant " << quadrant;
-    EXPECT_NEAR(
-      ((*path)[path->size() - 1].position - goal.position).norm(), 0.0, TOLERANCE)
-      << "quadrant " << quadrant;
-    for (std::size_t i = 0; i + 1 < path->size(); ++i) {
+    expect_goal(*path, goal);
+    // The last pose carries the requested yaw, which the follower may have to turn in place for.
+    for (std::size_t i = 0; i + 2 < path->size(); ++i) {
       const double chord = ((*path)[i + 1].position - (*path)[i].position).norm();
       const double delta =
         std::abs(shortest_angular_distance((*path)[i].yaw, (*path)[i + 1].yaw));
@@ -440,6 +439,43 @@ TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadius)
         << "quadrant " << quadrant << " step " << i;
     }
   }
+}
+
+TEST(HybridAStarPlanner, AFreeGoalYawKeepsTheRequestedGoalPose)
+{
+  // A dead end 0.5 m wide; the requested heading is one no forward-only arc can arrive at.
+  Costmap map(MapGeometry(40, 40, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 2; mx <= 30; ++mx) {
+    for (int my = 18; my <= 22; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  const Pose2D start = at_cell(map, 4, 20, 0.0);
+  const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
+  HybridAStarParams params;
+  params.free_goal_yaw = true;
+
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(path.has_value());
+  expect_goal(*path, goal);
+  expect_all_free(*path, map, make_cost_model());
+}
+
+TEST(HybridAStarPlanner, AFreeGoalYawPrefersTheRequestedPoseWhenItIsReachable)
+{
+  const Costmap map = open_map(40, 40);
+  const Pose2D start = at_cell(map, 5, 20, 0.0);
+  const Pose2D goal = at_cell(map, 30, 20, 0.0);
+  HybridAStarParams params;
+  params.free_goal_yaw = true;
+
+  const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+  const auto exact = plan_hybrid_astar(map, make_cost_model(), start, goal);
+
+  ASSERT_TRUE(free_yaw.has_value());
+  ASSERT_TRUE(exact.has_value());
+  expect_same_path(*free_yaw, *exact);
 }
 
 TEST(HybridAStarPlanner, TheExactGoalYawIsStillTheDefault)

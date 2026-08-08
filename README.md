@@ -188,8 +188,10 @@ tightens as the goal gets closer, so on an open map the returned path *is* the o
 rather than a heading-quantized weave. `analytic_expansion_ratio` controls the throttle; raising it
 above the default tries more often, which measurably degrades detours around obstacles.
 Requiring an exact goal heading is what makes a forward-only search fail on a reachable
-position, so `free_goal_yaw` aims at the goal *position* at whatever heading gets there and
-leaves the final turn to the follower — the natural setting for a robot that can turn in place. Its motion
+position, so `free_goal_yaw` falls back to the goal *position* at whatever heading gets there when
+no arc arrives at the requested one. The returned path still ends at the requested pose either way;
+what changes is only whether the approach into that heading is continuous or an in-place turn the
+follower makes, which is the same convention A\* has always used for its last pose. Its motion
 primitives are straight plus a full and a half turn in each direction, so a heading can be nudged by a
 single bin instead of overshooting by two — that is what keeps detours from weaving.
 
