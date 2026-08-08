@@ -179,6 +179,14 @@ std::optional<std::vector<Pose2D>> connect_goal(
   return samples;
 }
 
+/// The goal pose the analytic expansion aims at when the caller does not fix the goal heading.
+Pose2D free_goal_pose(const Pose2D & from, const Eigen::Vector2d & goal_position) noexcept
+{
+  const Eigen::Vector2d delta = goal_position - from.position;
+  const double bearing = delta.squaredNorm() > 0.0 ? std::atan2(delta.y(), delta.x()) : from.yaw;
+  return Pose2D{goal_position, bearing};
+}
+
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
 Path join_with_connection(
   std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
@@ -291,12 +299,19 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       expansions == 0 || skipped_attempts >= analytic_expansion_interval(heuristic(current.pose));
     if (analytic_due) {
       skipped_attempts = 0;
-      const auto connection = connect_goal(
-        grid, current.pose, query.goal, params.minimum_turning_radius, collision_check_step,
-        motion_step);
-      if (connection.has_value()) {
-        return PlanResult{join_with_connection(
-          reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
+      // A free goal heading is tried straight in first, then carrying the heading of this node.
+      const std::array<Pose2D, 2> targets{
+        params.free_goal_yaw ? free_goal_pose(current.pose, query.goal.position) : query.goal,
+        Pose2D{query.goal.position, current.pose.yaw}};
+      const std::size_t target_count = params.free_goal_yaw ? targets.size() : 1;
+      for (std::size_t i = 0; i < target_count; ++i) {
+        const auto connection = connect_goal(
+          grid, current.pose, targets[i], params.minimum_turning_radius, collision_check_step,
+          motion_step);
+        if (connection.has_value()) {
+          return PlanResult{join_with_connection(
+            reconstruct_poses(nodes, current_id), *connection, targets[i], motion_step)};
+        }
       }
     } else {
       ++skipped_attempts;

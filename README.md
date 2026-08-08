@@ -186,7 +186,10 @@ break the curvature bound.
 Hybrid A* tries its analytic Dubins connection at the first expanded node and then on a throttle that
 tightens as the goal gets closer, so on an open map the returned path *is* the optimal Dubins path
 rather than a heading-quantized weave. `analytic_expansion_ratio` controls the throttle; raising it
-above the default tries more often, which measurably degrades detours around obstacles. Its motion
+above the default tries more often, which measurably degrades detours around obstacles.
+Requiring an exact goal heading is what makes a forward-only search fail on a reachable
+position, so `free_goal_yaw` aims at the goal *position* at whatever heading gets there and
+leaves the final turn to the follower — the natural setting for a robot that can turn in place. Its motion
 primitives are straight plus a full and a half turn in each direction, so a heading can be nudged by a
 single bin instead of overshooting by two — that is what keeps detours from weaving.
 

@@ -39,6 +39,8 @@ struct HybridAStarParams
   double collision_check_step{0.0};
   /// Dubins connection is attempted at every expanded node inside this distance from the goal [m].
   double dubins_expansion_distance{1.0};
+  /// true reaches the goal position at any heading, leaving the final yaw to the follower.
+  bool free_goal_yaw{false};
   /// Beyond that distance it is attempted every (cells to goal / this) nodes; larger tries more.
   double analytic_expansion_ratio{1.0};
   double steering_penalty{0.05};

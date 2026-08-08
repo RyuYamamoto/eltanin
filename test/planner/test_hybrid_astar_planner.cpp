@@ -392,3 +392,64 @@ TEST(HybridAStarPlanner, ReturnsTheOptimalDubinsPathOnAnOpenMap)
     }
   }
 }
+
+TEST(HybridAStarPlanner, AFreeGoalYawReachesAHeadingTheGoalYawCannot)
+{
+  // A dead end 0.5 m wide; turning round inside it needs 0.8 m at the default turning radius.
+  Costmap map(MapGeometry(40, 40, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 2; mx <= 30; ++mx) {
+    for (int my = 18; my <= 22; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  const Pose2D start = at_cell(map, 4, 20, 0.0);
+  const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
+
+  const auto exact = plan_hybrid_astar(map, make_cost_model(), start, goal);
+  ASSERT_FALSE(exact.has_value());
+
+  HybridAStarParams params;
+  params.free_goal_yaw = true;
+  const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(free_yaw.has_value()) << eltanin::planner::to_string(free_yaw.error());
+  const Pose2D & last = (*free_yaw)[free_yaw->size() - 1];
+  EXPECT_NEAR((last.position - goal.position).norm(), 0.0, TOLERANCE);
+  expect_all_free(*free_yaw, map, make_cost_model());
+}
+
+TEST(HybridAStarPlanner, AFreeGoalYawStillRespectsTheTurningRadius)
+{
+  const Costmap map = open_map(40, 40);
+  HybridAStarParams params;
+  params.free_goal_yaw = true;
+  const Pose2D start = at_cell(map, 5, 5, 0.0);
+
+  for (int quadrant = 0; quadrant < 8; ++quadrant) {
+    const Pose2D goal = at_cell(map, 30, 25, quadrant * std::numbers::pi / 4.0);
+    const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+    ASSERT_TRUE(path.has_value()) << "quadrant " << quadrant;
+    EXPECT_NEAR(
+      ((*path)[path->size() - 1].position - goal.position).norm(), 0.0, TOLERANCE)
+      << "quadrant " << quadrant;
+    for (std::size_t i = 0; i + 1 < path->size(); ++i) {
+      const double chord = ((*path)[i + 1].position - (*path)[i].position).norm();
+      const double delta =
+        std::abs(shortest_angular_distance((*path)[i].yaw, (*path)[i + 1].yaw));
+      EXPECT_LE(delta, 2.0 * std::asin(std::min(1.0, chord / 0.8)) + TOLERANCE)
+        << "quadrant " << quadrant << " step " << i;
+    }
+  }
+}
+
+TEST(HybridAStarPlanner, TheExactGoalYawIsStillTheDefault)
+{
+  const Costmap map = open_map(40, 40);
+  const Pose2D start = at_cell(map, 5, 20, 0.0);
+  const Pose2D goal = at_cell(map, 30, 20, 1.0);
+
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal);
+
+  ASSERT_TRUE(path.has_value());
+  expect_goal(*path, goal);
+}
