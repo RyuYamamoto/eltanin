@@ -23,10 +23,10 @@ namespace eltanin::planner
 {
 
 /// Covers every reachable case measured in docs/planner-design.md §13.7 and bounds one call.
-inline constexpr std::size_t HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS = 4000000;
+inline constexpr std::size_t DEFAULT_MAX_EXPANSIONS = 4000000;
 
 /// 256 MiB of search state, which covers roughly a 30 m square map at 0.05 m and 72 bins.
-inline constexpr std::size_t HYBRID_ASTAR_DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1024UL;
+inline constexpr std::size_t DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1024UL;
 
 struct HybridAStarParams
 {
@@ -48,9 +48,9 @@ struct HybridAStarParams
   double steering_penalty{0.05};
   double steering_change_penalty{0.10};
   /// 0 allows the complete discretized state space to be expanded.
-  std::size_t max_expansions{HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS};
+  std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
   /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.
-  std::size_t max_state_memory_bytes{HYBRID_ASTAR_DEFAULT_MAX_STATE_MEMORY_BYTES};
+  std::size_t max_state_memory_bytes{DEFAULT_MAX_STATE_MEMORY_BYTES};
 };
 
 /// Forward-only Hybrid A* over (x, y, yaw); collisions are checked at the vehicle reference point.

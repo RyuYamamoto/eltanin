@@ -29,7 +29,7 @@ using eltanin::map::Costmap;
 using eltanin::map::FREE_SPACE;
 using eltanin::map::LETHAL_OBSTACLE;
 using eltanin::map::MapGeometry;
-using eltanin::map::cells_around;
+using eltanin::map::bounding_cells;
 using eltanin::map::crop_around;
 
 constexpr double RESOLUTION = 0.1;
@@ -53,7 +53,7 @@ TEST(MapCrop, CoversEveryPositionWithTheRequestedMargin)
   const std::vector<Vector2d> positions{
     map.geometry().map_to_world(10, 12), map.geometry().map_to_world(20, 15)};
 
-  const auto rect = cells_around(map.geometry(), positions, 3);
+  const auto rect = bounding_cells(map.geometry(), positions, 3);
 
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->min_x, 7);
@@ -67,7 +67,7 @@ TEST(MapCrop, ClampsTheMarginToTheMap)
   const Costmap map = numbered_map(12, 12);
   const std::vector<Vector2d> positions{map.geometry().map_to_world(1, 10)};
 
-  const auto rect = cells_around(map.geometry(), positions, 5);
+  const auto rect = bounding_cells(map.geometry(), positions, 5);
 
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->min_x, 0);
@@ -123,9 +123,9 @@ TEST(MapCrop, RefusesPositionsThatAreAllOutsideTheMap)
   const Costmap map = numbered_map(10, 10);
   const std::vector<Vector2d> outside{Vector2d{-5.0, -5.0}, Vector2d{50.0, 50.0}};
 
-  EXPECT_FALSE(cells_around(map.geometry(), outside, 2).has_value());
+  EXPECT_FALSE(bounding_cells(map.geometry(), outside, 2).has_value());
   EXPECT_FALSE(crop_around(map, outside, 2).has_value());
-  EXPECT_FALSE(cells_around(map.geometry(), {}, 2).has_value());
+  EXPECT_FALSE(bounding_cells(map.geometry(), {}, 2).has_value());
 }
 
 TEST(MapCrop, RefusesANegativeMargin)
@@ -133,7 +133,7 @@ TEST(MapCrop, RefusesANegativeMargin)
   const Costmap map = numbered_map(10, 10);
   const std::vector<Vector2d> positions{map.geometry().map_to_world(5, 5)};
 
-  EXPECT_FALSE(cells_around(map.geometry(), positions, -1).has_value());
+  EXPECT_FALSE(bounding_cells(map.geometry(), positions, -1).has_value());
 }
 
 TEST(MapCrop, IgnoresPositionsOutsideTheMapWhenOthersAreInside)
@@ -142,7 +142,7 @@ TEST(MapCrop, IgnoresPositionsOutsideTheMapWhenOthersAreInside)
   const std::vector<Vector2d> positions{
     Vector2d{-9.0, -9.0}, map.geometry().map_to_world(8, 8), Vector2d{99.0, 99.0}};
 
-  const auto rect = cells_around(map.geometry(), positions, 0);
+  const auto rect = bounding_cells(map.geometry(), positions, 0);
 
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->min_x, 8);

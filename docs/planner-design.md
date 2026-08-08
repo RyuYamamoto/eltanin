@@ -592,7 +592,7 @@ Hybrid A* には平滑化を掛けない (曲率制約を壊す)。`HybridAStarP
 
 **実地図全体には依然として適用できない。** 4000 x 4000 セルは状態 1.15e9 個 = 9.4 GB であり、既定の `max_state_memory_bytes` (256 MiB) が拒否する。呼び出し側の corridor 切り出し (§12.3) は残る。
 
-そのため切り出しを `eltanin::map::cells_around()` / `crop()` / `crop_around()` (`map/crop.hpp`) として公開した。利用者はデモと `eltanin_ros` の 2 つである。生 A* 経路を guide にして、その周囲 `margin_cells` の矩形だけを探索対象にする。実地図 (4000 x 4000、37.8 m の経路) での実測:
+そのため切り出しを `eltanin::map::bounding_cells()` / `crop()` / `crop_around()` (`map/crop.hpp`) として公開した。利用者はデモと `eltanin_ros` の 2 つである。生 A* 経路を guide にして、その周囲 `margin_cells` の矩形だけを探索対象にする。実地図 (4000 x 4000、37.8 m の経路) での実測:
 
 | `margin_cells` | corridor | 状態数 | guide + 切り出し + 探索 | ピーク RSS |
 |---|---|---|---|---|
@@ -658,7 +658,7 @@ Hybrid A* には平滑化を掛けない (曲率制約を壊す)。`HybridAStarP
 
 旧既定 0 (無制限) では、到達不能な goal に対しヒューリスティックが障害物を無視するため到達可能側の状態空間を全て展開していた。統合デモは再計画時に同じ呼び出しをするので、閉塞時に制御ループが止まる。
 
-既定を `HYBRID_ASTAR_DEFAULT_MAX_EXPANSIONS = 4000000` にした。`0 = 無制限` の意味は逃げ道として維持する。打ち切りは `ExpansionLimitReached`、探索が尽きたのは `Unreachable` で区別する。
+既定を `DEFAULT_MAX_EXPANSIONS = 4000000` にした。`0 = 無制限` の意味は逃げ道として維持する。打ち切りは `ExpansionLimitReached`、探索が尽きたのは `Unreachable` で区別する。
 
 根拠になった実測 (`resolution 0.05`、`max_expansions` を二分探索して「成功に必要な展開数」を求めた):
 

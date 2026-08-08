@@ -45,7 +45,7 @@ constexpr std::size_t BITS_PER_WORD = 64;
 constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
 
 /// g_score and best_node per state; the closed set costs one bit each.
-constexpr std::size_t STATE_ARRAY_BYTES_PER_STATE = sizeof(float) + sizeof(std::uint32_t);
+constexpr std::size_t BYTES_PER_STATE = sizeof(float) + sizeof(std::uint32_t);
 
 
 struct Motion
@@ -109,7 +109,7 @@ int heading_bin(double yaw, int bins)
 }
 
 /// Every primitive must leave the current cell, and a turn must also leave the cell or the bin.
-bool primitives_can_change_state(
+bool motion_step_is_usable(
   double motion_step, double resolution, double turning_radius, int heading_bins)
 {
   const double cell_diagonal = std::numbers::sqrt2 * resolution;
@@ -122,7 +122,7 @@ bool primitives_can_change_state(
 }
 
 /// Only the interior of the primitive; the caller has already accepted the end pose.
-bool primitive_interior_is_free(
+bool interior_is_free(
   const TraversabilityView & grid, const Pose2D & from, const Motion & motion, double motion_step,
   double turning_radius, double collision_check_step)
 {
@@ -184,7 +184,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
 }
 
 /// Cost to reach the goal cell over free cells, ignoring the turning radius; infinity when cut off.
-std::vector<float> obstacle_heuristic(const TraversabilityView & grid, const map::MapIndex & goal)
+std::vector<float> distance_to_goal(const TraversabilityView & grid, const map::MapIndex & goal)
 {
   const map::MapGeometry & geometry = grid.geometry();
   const std::size_t cells = grid.cell_count();
@@ -231,7 +231,7 @@ std::vector<float> obstacle_heuristic(const TraversabilityView & grid, const map
 }
 
 /// The goal pose the analytic expansion aims at when the caller does not fix the goal heading.
-Pose2D free_goal_pose(const Pose2D & from, const Eigen::Vector2d & goal_position) noexcept
+Pose2D approach_pose(const Pose2D & from, const Eigen::Vector2d & goal_position) noexcept
 {
   const Eigen::Vector2d delta = goal_position - from.position;
   const double bearing = delta.squaredNorm() > 0.0 ? std::atan2(delta.y(), delta.x()) : from.yaw;
@@ -239,7 +239,7 @@ Pose2D free_goal_pose(const Pose2D & from, const Eigen::Vector2d & goal_position
 }
 
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
-Path join_with_connection(
+Path attach_tail(
   std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
   double motion_step)
 {
@@ -269,14 +269,13 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     params.motion_step > 0.0 ? params.motion_step : std::numbers::sqrt2 * resolution;
   const double collision_check_step =
     params.collision_check_step > 0.0 ? params.collision_check_step : 0.5 * resolution;
-  if (!primitives_can_change_state(
+  if (!motion_step_is_usable(
         motion_step, resolution, params.minimum_turning_radius, params.heading_bins)) {
     return PlanResult{PlannerError::ParamsIncompatibleWithMap};
   }
 
   const auto heading_bins = static_cast<std::size_t>(params.heading_bins);
-  constexpr std::size_t MAX_SIZE = std::numeric_limits<std::size_t>::max();
-  if (cells > MAX_SIZE / heading_bins) {
+  if (cells > std::numeric_limits<std::size_t>::max() / heading_bins) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t state_count = cells * heading_bins;
@@ -285,7 +284,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
-  const std::size_t state_bytes = state_count * STATE_ARRAY_BYTES_PER_STATE +
+  const std::size_t state_bytes = state_count * BYTES_PER_STATE +
                                   closed_words * sizeof(std::uint64_t) + cells * sizeof(float);
   if (state_bytes > params.max_state_memory_bytes) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
@@ -298,7 +297,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   };
   // Distance over free cells beats the straight line: a wall between the two is what makes a
   // Euclidean heuristic expand the whole room (§13.19).
-  const std::vector<float> cost_to_go = obstacle_heuristic(grid, query.goal_index);
+  const std::vector<float> cost_to_go = distance_to_goal(grid, query.goal_index);
   const auto heuristic = [&](const Pose2D & pose) {
     const double straight = (query.goal.position - pose.position).norm();
     const std::optional<map::MapIndex> cell = geometry.world_to_map(pose.position);
@@ -309,7 +308,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     return std::max(straight, params.heuristic_weight * static_cast<double>(over_cells));
   };
   // Attempted at every node inside dubins_expansion_distance, and increasingly rarely beyond it.
-  const auto analytic_expansion_interval = [&](double remaining) -> std::size_t {
+  const auto attempt_interval = [&](double remaining) -> std::size_t {
     if (remaining <= params.dubins_expansion_distance) {
       return 0;
     }
@@ -356,12 +355,12 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
 
     // The first node is always tried: on an open map the analytic path from the start is the answer.
     const bool analytic_due =
-      expansions == 0 || skipped_attempts >= analytic_expansion_interval(heuristic(current.pose));
+      expansions == 0 || skipped_attempts >= attempt_interval(heuristic(current.pose));
     if (analytic_due) {
       skipped_attempts = 0;
       // A free goal heading is tried straight in first, then carrying the heading of this node.
       const std::array<Pose2D, 2> targets{
-        params.free_goal_yaw ? free_goal_pose(current.pose, query.goal.position) : query.goal,
+        params.free_goal_yaw ? approach_pose(current.pose, query.goal.position) : query.goal,
         Pose2D{query.goal.position, current.pose.yaw}};
       const std::size_t target_count = params.free_goal_yaw ? targets.size() : 1;
       for (std::size_t i = 0; i < target_count; ++i) {
@@ -369,7 +368,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
           grid, current.pose, targets[i], params.minimum_turning_radius, collision_check_step,
           motion_step);
         if (connection.has_value()) {
-          return PlanResult{join_with_connection(
+          return PlanResult{attach_tail(
             reconstruct_poses(nodes, current_id), *connection, targets[i], motion_step)};
         }
       }
@@ -402,7 +401,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       if (tentative >= g_score[successor_state]) {
         continue;
       }
-      if (!primitive_interior_is_free(
+      if (!interior_is_free(
             grid, current.pose, MOTIONS[mode], motion_step, params.minimum_turning_radius,
             collision_check_step)) {
         continue;

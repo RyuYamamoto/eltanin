@@ -74,14 +74,14 @@ public:
   /// Cells outside the map are not traversable; in_bounds() is always evaluated before index().
   [[nodiscard]] bool free(int mx, int my) const noexcept
   {
-    return geometry_->in_bounds(mx, my) && grid_[geometry_->index(mx, my)] == FREE_VALUE;
+    return geometry_->in_bounds(mx, my) && grid_[geometry_->index(mx, my)] == FREE_CELL;
   }
 
   /// Points outside the map are not traversable.
   [[nodiscard]] bool free(const Eigen::Vector2d & world) const noexcept
   {
     const auto index = geometry_->world_to_map(world);
-    return index.has_value() && grid_[geometry_->index(index->x, index->y)] == FREE_VALUE;
+    return index.has_value() && grid_[geometry_->index(index->x, index->y)] == FREE_CELL;
   }
 
   /// Precondition: geometry().in_bounds(mx, my).
@@ -92,7 +92,7 @@ public:
   }
 
 private:
-  static constexpr std::uint8_t FREE_VALUE = static_cast<std::uint8_t>(Traversability::Free);
+  static constexpr std::uint8_t FREE_CELL = static_cast<std::uint8_t>(Traversability::Free);
 
   const map::MapGeometry * geometry_;
   std::span<const std::uint8_t> grid_;

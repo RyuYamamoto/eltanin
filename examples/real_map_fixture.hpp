@@ -196,7 +196,7 @@ inline eltanin::map::Costmap crop_around(
   eltanin::map::MapIndex & lower_left)
 {
   const std::optional<eltanin::map::CellRect> rect =
-    eltanin::map::cells_around(map.geometry(), positions, CROP_MARGIN_CELLS);
+    eltanin::map::bounding_cells(map.geometry(), positions, CROP_MARGIN_CELLS);
   if (!rect.has_value()) {
     lower_left = eltanin::map::MapIndex{0, 0};
     return map;

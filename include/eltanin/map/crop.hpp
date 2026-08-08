@@ -27,7 +27,7 @@ namespace eltanin::map
 {
 
 /// Cells covering every in-map position, grown by margin_cells; nullopt when none are inside.
-inline std::optional<CellRect> cells_around(
+inline std::optional<CellRect> bounding_cells(
   const MapGeometry & geometry, std::span<const Eigen::Vector2d> positions,
   int margin_cells) noexcept
 {
@@ -85,7 +85,7 @@ template <class T>
 std::optional<GridMap<T>> crop_around(
   const GridMap<T> & map, std::span<const Eigen::Vector2d> positions, int margin_cells)
 {
-  const std::optional<CellRect> rect = cells_around(map.geometry(), positions, margin_cells);
+  const std::optional<CellRect> rect = bounding_cells(map.geometry(), positions, margin_cells);
   if (!rect.has_value()) {
     return std::nullopt;
   }
