@@ -3,6 +3,7 @@ add_executable(eltanin_test_planner
   test_astar_planner.cpp
   test_astar_bounds.cpp
   test_dubins_path.cpp
+  test_reeds_shepp_path.cpp
   test_hybrid_astar_planner.cpp
   test_planner_errors.cpp
   test_path_smoother.cpp

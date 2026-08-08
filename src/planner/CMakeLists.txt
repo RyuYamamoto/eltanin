@@ -2,7 +2,8 @@ add_library(eltanin_planner STATIC
   astar_planner.cpp
   dubins_path.cpp
   hybrid_astar_planner.cpp
-  path_smoother.cpp)
+  path_smoother.cpp
+  reeds_shepp_path.cpp)
 add_library(eltanin::planner ALIAS eltanin_planner)
 
 target_compile_features(eltanin_planner PUBLIC cxx_std_20)
