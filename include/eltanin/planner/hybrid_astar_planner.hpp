@@ -44,7 +44,7 @@ struct HybridAStarParams
   MotionModel motion_model{MotionModel::Dubins};
   int heading_bins{72};
   double minimum_turning_radius{0.4};
-  /// Length of one motion primitive [m]; 0 selects sqrt(2) * resolution.
+  /// Length of one motion primitive [m]; 0 derives a step that always changes the discrete state.
   double motion_step{0.0};
   /// Collision check interval along each primitive [m]; 0 selects half a map cell.
   double collision_check_step{0.0};

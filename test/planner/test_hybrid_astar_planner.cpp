@@ -525,7 +525,10 @@ void expect_follows_control_set(
 {
   const double radius = params.minimum_turning_radius;
   const bool may_spin = params.motion_model == eltanin::planner::MotionModel::Differential;
-  const double step = params.motion_step > 0.0 ? params.motion_step : std::numbers::sqrt2 * resolution;
+  const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
+  const double step = params.motion_step > 0.0
+                        ? params.motion_step
+                        : std::max(std::numbers::sqrt2 * resolution, radius * bin_width);
   for (std::size_t i = 0; i + 1 < path.size(); ++i) {
     const Eigen::Vector2d delta = path[i + 1].position - path[i].position;
     const double chord = delta.norm();
@@ -580,4 +583,22 @@ TEST(HybridAStarPlanner, TheDifferentialModelOnlyEverAddsATurnOnTheSpot)
   expect_goal(*path, goal);
   expect_follows_control_set(*path, params, RESOLUTION);
   expect_all_free(*path, map, make_cost_model());
+}
+
+TEST(HybridAStarPlanner, PlansAtRadiiOneTurnCannotResolveIntoAHeadingBin)
+{
+  const Costmap map = open_map(140, 140);
+  const Pose2D start = at_cell(map, 10, 10, 0.0);
+  const Pose2D goal = at_cell(map, 120, 110, 0.0);
+
+  // Above resolution * sqrt(2) / bin_width, one turn of the default step stays inside its own bin.
+  for (const double radius : {0.4, 1.0, 1.6, 1.7, 2.0, 2.5}) {
+    HybridAStarParams params;
+    params.minimum_turning_radius = radius;
+    const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+    ASSERT_TRUE(path.has_value())
+      << "radius " << radius << " failed with " << to_string(path.error());
+    expect_goal(*path, goal);
+    expect_follows_control_set(*path, params, RESOLUTION);
+  }
 }

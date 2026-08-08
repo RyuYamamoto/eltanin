@@ -334,8 +334,12 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   assert(grid.free(query.goal_index.x, query.goal_index.y));
 
   const double resolution = geometry.resolution();
+  const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
+  // Deriving the step from the bin width keeps one turn worth at least one bin at any radius.
   const double motion_step =
-    params.motion_step > 0.0 ? params.motion_step : std::numbers::sqrt2 * resolution;
+    params.motion_step > 0.0
+      ? params.motion_step
+      : std::max(std::numbers::sqrt2 * resolution, params.minimum_turning_radius * bin_width);
   const double collision_check_step =
     params.collision_check_step > 0.0 ? params.collision_check_step : 0.5 * resolution;
   if (!motion_step_is_usable(
@@ -385,7 +389,6 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     return static_cast<std::size_t>(cells_to_goal / params.analytic_expansion_ratio);
   };
   const std::span<const Motion> motions = control_set(params.motion_model);
-  const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
   const auto travel_of = [&](const Motion & motion) { return motion.travel_scale * motion_step; };
   const auto turn_of = [&](const Motion & motion) {
     return motion.travel_scale == 0.0
