@@ -1,5 +1,6 @@
 add_executable(eltanin_test_map
   test_map_geometry.cpp
+  test_crop.cpp
   test_grid_map.cpp
   test_cost_model.cpp
   test_static_layer.cpp

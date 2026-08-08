@@ -20,6 +20,7 @@
 #include <eltanin/core/polygon.hpp>
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/map/cost_model.hpp>
+#include <eltanin/map/crop.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/map/layers/inflation_layer.hpp>
 #include <eltanin/map_io/map_loader.hpp>
@@ -194,42 +195,14 @@ inline eltanin::map::Costmap crop_around(
   const eltanin::map::Costmap & map, std::span<const Eigen::Vector2d> positions,
   eltanin::map::MapIndex & lower_left)
 {
-  const eltanin::map::MapGeometry & geometry = map.geometry();
-  int min_x = map.size_x();
-  int min_y = map.size_y();
-  int max_x = 0;
-  int max_y = 0;
-  for (const Eigen::Vector2d & position : positions) {
-    const auto index = geometry.world_to_map(position);
-    if (!index.has_value()) {
-      continue;
-    }
-    min_x = std::min(min_x, index->x);
-    max_x = std::max(max_x, index->x);
-    min_y = std::min(min_y, index->y);
-    max_y = std::max(max_y, index->y);
+  const std::optional<eltanin::map::CellRect> rect =
+    eltanin::map::cells_around(map.geometry(), positions, CROP_MARGIN_CELLS);
+  if (!rect.has_value()) {
+    lower_left = eltanin::map::MapIndex{0, 0};
+    return map;
   }
-  min_x = std::max(0, min_x - CROP_MARGIN_CELLS);
-  min_y = std::max(0, min_y - CROP_MARGIN_CELLS);
-  max_x = std::min(map.size_x() - 1, max_x + CROP_MARGIN_CELLS);
-  max_y = std::min(map.size_y() - 1, max_y + CROP_MARGIN_CELLS);
-
-  const int size_x = max_x - min_x + 1;
-  const int size_y = max_y - min_y + 1;
-  const Eigen::Vector2d origin =
-    geometry.origin() + Eigen::Vector2d{
-                          static_cast<double>(min_x) * geometry.resolution(),
-                          static_cast<double>(min_y) * geometry.resolution()};
-
-  eltanin::map::Costmap crop(
-    eltanin::map::MapGeometry(size_x, size_y, geometry.resolution(), origin));
-  for (int my = 0; my < size_y; ++my) {
-    for (int mx = 0; mx < size_x; ++mx) {
-      crop(mx, my) = map(min_x + mx, min_y + my);
-    }
-  }
-  lower_left = eltanin::map::MapIndex{min_x, min_y};
-  return crop;
+  lower_left = eltanin::map::MapIndex{rect->min_x, rect->min_y};
+  return eltanin::map::crop(map, *rect);
 }
 
 inline std::vector<Eigen::Vector2d> positions_of(const eltanin::Path & path)

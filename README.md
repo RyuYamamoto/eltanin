@@ -193,8 +193,9 @@ single bin instead of overshooting by two — that is what keeps detours from we
 Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
 `heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
 `max_state_memory_bytes` (256 MiB by default) rejects anything larger with `StateSpaceTooLarge` rather
-than throwing, which means **a full 4000 x 4000 map does not fit** — crop a corridor around an A* guide
-first, as `eltanin_hybrid_astar_demo` and the navigation loop do. `docs/planner-design.md` §13 records
+than throwing, which means **a full 4000 x 4000 map does not fit** — crop a corridor around a raw A*
+guide first with `map::crop_around()`, as `eltanin_hybrid_astar_demo` and the navigation loop do. On the
+4000 x 4000 reference map that turns 1.15e9 states into 5.8e6 and plans in about 380 ms. `docs/planner-design.md` §13 records
 the measurements behind these numbers.
 
 `eltanin_navigate_on_real_map` closes the loop over every module in a single process. No ROS node, no
