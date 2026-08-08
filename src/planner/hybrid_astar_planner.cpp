@@ -47,6 +47,7 @@ constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
 /// g_score and best_node per state; the closed set costs one bit each.
 constexpr std::size_t STATE_ARRAY_BYTES_PER_STATE = sizeof(float) + sizeof(std::uint32_t);
 
+
 struct Motion
 {
   /// Curvature as a signed fraction of 1 / minimum_turning_radius.
@@ -54,6 +55,9 @@ struct Motion
 };
 
 /// The half-curvature pair exists so that a heading can be nudged by about one bin.
+constexpr std::array<int, 8> NEIGHBOR_DX{1, 1, 0, -1, -1, -1, 0, 1};
+constexpr std::array<int, 8> NEIGHBOR_DY{0, 1, 1, 1, 0, -1, -1, -1};
+
 constexpr std::array<Motion, 5> MOTIONS{
   Motion{0.0}, Motion{-1.0}, Motion{1.0}, Motion{-0.5}, Motion{0.5}};
 constexpr std::uint8_t START_MODE = static_cast<std::uint8_t>(MOTIONS.size());
@@ -179,6 +183,53 @@ std::optional<std::vector<Pose2D>> connect_goal(
   return samples;
 }
 
+/// Cost to reach the goal cell over free cells, ignoring the turning radius; infinity when cut off.
+std::vector<float> obstacle_heuristic(const TraversabilityView & grid, const map::MapIndex & goal)
+{
+  const map::MapGeometry & geometry = grid.geometry();
+  const std::size_t cells = grid.cell_count();
+  const auto size_x = static_cast<std::size_t>(geometry.size_x());
+  const auto orthogonal = static_cast<float>(geometry.resolution());
+  const auto diagonal = static_cast<float>(std::numbers::sqrt2 * geometry.resolution());
+
+  std::vector<float> cost(cells, std::numeric_limits<float>::infinity());
+  std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::greater<>> open;
+  const auto goal_cell = static_cast<std::uint32_t>(geometry.index(goal.x, goal.y));
+  cost[goal_cell] = 0.0F;
+  open.push(OpenEntry{0.0F, goal_cell});
+
+  while (!open.empty()) {
+    const OpenEntry top = open.top();
+    open.pop();
+    if (top.first > cost[top.second]) {
+      continue;
+    }
+    const int mx = static_cast<int>(top.second % size_x);
+    const int my = static_cast<int>(top.second / size_x);
+    for (std::size_t k = 0; k < NEIGHBOR_DX.size(); ++k) {
+      const int nx = mx + NEIGHBOR_DX[k];
+      const int ny = my + NEIGHBOR_DY[k];
+      if (!grid.free(nx, ny)) {
+        continue;
+      }
+      const bool is_diagonal = NEIGHBOR_DX[k] != 0 && NEIGHBOR_DY[k] != 0;
+      // Corner cutting is forbidden here too, so the two searches agree on what is connected.
+      if (
+        is_diagonal &&
+        (!grid.free(mx + NEIGHBOR_DX[k], my) || !grid.free(mx, my + NEIGHBOR_DY[k]))) {
+        continue;
+      }
+      const auto neighbor = static_cast<std::uint32_t>(geometry.index(nx, ny));
+      const float tentative = top.first + (is_diagonal ? diagonal : orthogonal);
+      if (tentative < cost[neighbor]) {
+        cost[neighbor] = tentative;
+        open.push(OpenEntry{tentative, neighbor});
+      }
+    }
+  }
+  return cost;
+}
+
 /// The goal pose the analytic expansion aims at when the caller does not fix the goal heading.
 Pose2D free_goal_pose(const Pose2D & from, const Eigen::Vector2d & goal_position) noexcept
 {
@@ -234,8 +285,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
-  const std::size_t state_bytes =
-    state_count * STATE_ARRAY_BYTES_PER_STATE + closed_words * sizeof(std::uint64_t);
+  const std::size_t state_bytes = state_count * STATE_ARRAY_BYTES_PER_STATE +
+                                  closed_words * sizeof(std::uint64_t) + cells * sizeof(float);
   if (state_bytes > params.max_state_memory_bytes) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
@@ -245,8 +296,17 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     const auto heading = static_cast<std::size_t>(heading_bin(yaw, params.heading_bins));
     return static_cast<std::uint32_t>(cell * heading_bins + heading);
   };
+  // Distance over free cells beats the straight line: a wall between the two is what makes a
+  // Euclidean heuristic expand the whole room (§13.19).
+  const std::vector<float> cost_to_go = obstacle_heuristic(grid, query.goal_index);
   const auto heuristic = [&](const Pose2D & pose) {
-    return (query.goal.position - pose.position).norm();
+    const double straight = (query.goal.position - pose.position).norm();
+    const std::optional<map::MapIndex> cell = geometry.world_to_map(pose.position);
+    if (!cell.has_value()) {
+      return straight;
+    }
+    const float over_cells = cost_to_go[geometry.index(cell->x, cell->y)];
+    return std::max(straight, params.heuristic_weight * static_cast<double>(over_cells));
   };
   // Attempted at every node inside dubins_expansion_distance, and increasingly rarely beyond it.
   const auto analytic_expansion_interval = [&](double remaining) -> std::size_t {
@@ -330,6 +390,10 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       if (!successor_index.has_value() || !grid.free(successor.position)) {
         continue;
       }
+      // A cell the goal cannot be reached from is not worth a state, let alone an expansion.
+      if (!std::isfinite(cost_to_go[geometry.index(successor_index->x, successor_index->y)])) {
+        continue;
+      }
       const std::uint32_t successor_state = state_index(*successor_index, successor.yaw);
       if (is_closed(closed, successor_state)) {
         continue;
@@ -364,7 +428,8 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
     params_.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
     params_.motion_step >= 0.0 && std::isfinite(params_.collision_check_step) &&
     params_.collision_check_step >= 0.0 && std::isfinite(params_.dubins_expansion_distance) &&
-    params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.analytic_expansion_ratio) &&
+    params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.heuristic_weight) &&
+    params_.heuristic_weight >= 0.0 && std::isfinite(params_.analytic_expansion_ratio) &&
     params_.analytic_expansion_ratio > 0.0 && std::isfinite(params_.steering_penalty) &&
     params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
     params_.steering_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;

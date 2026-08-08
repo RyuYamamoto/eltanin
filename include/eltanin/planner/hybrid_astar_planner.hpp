@@ -43,6 +43,8 @@ struct HybridAStarParams
   bool free_goal_yaw{false};
   /// Beyond that distance it is attempted every (cells to goal / this) nodes; larger tries more.
   double analytic_expansion_ratio{1.0};
+  /// Weight on the over-cells distance heuristic; above ~0.9 it goes greedy and the path weaves.
+  double heuristic_weight{0.8};
   double steering_penalty{0.05};
   double steering_change_penalty{0.10};
   /// 0 allows the complete discretized state space to be expanded.

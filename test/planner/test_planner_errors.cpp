@@ -176,6 +176,25 @@ TEST(PlannerErrors, ReportsAnUnreachableGoal)
 
 TEST(PlannerErrors, DistinguishesTheExpansionLimitFromUnreachability)
 {
+  // A gap at the top keeps the goal reachable, so the search stops on the limit, not on exhaustion.
+  Costmap map = open_map(36, 30);
+  for (int my = 0; my < 21; ++my) {
+    map(18, my) = LETHAL_OBSTACLE;
+  }
+  const Pose2D start = at_cell(map, 5, 10);
+  const Pose2D goal = at_cell(map, 30, 10);
+  HybridAStarParams params;
+  params.max_expansions = 1;
+
+  EXPECT_EQ(
+    plan_hybrid_astar(map, make_cost_model(), start, goal, params).error(),
+    PlannerError::ExpansionLimitReached);
+  EXPECT_TRUE(plan_hybrid_astar(map, make_cost_model(), start, goal).has_value());
+}
+
+TEST(PlannerErrors, ASplitMapIsUnreachableRatherThanCutOffByTheLimit)
+{
+  // The distance-over-cells heuristic marks the far side unreachable, so no expansion is wasted.
   const Costmap map = split_map();
   HybridAStarParams params;
   params.max_expansions = 1;
@@ -183,7 +202,7 @@ TEST(PlannerErrors, DistinguishesTheExpansionLimitFromUnreachability)
   EXPECT_EQ(
     plan_hybrid_astar(map, make_cost_model(), at_cell(map, 1, 4), at_cell(map, 10, 4), params)
       .error(),
-    PlannerError::ExpansionLimitReached);
+    PlannerError::Unreachable);
 }
 
 TEST(PlannerErrors, ReportsAStateSpaceThatExceedsTheMemoryBudget)
