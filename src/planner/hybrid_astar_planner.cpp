@@ -16,6 +16,7 @@
 
 #include <eltanin/core/angle.hpp>
 #include <eltanin/planner/dubins_path.hpp>
+#include <eltanin/planner/reeds_shepp_path.hpp>
 
 #include <algorithm>
 #include <array>
@@ -73,10 +74,21 @@ constexpr std::array<Motion, 5> DIFFERENTIAL_MOTIONS{
   Motion{1.0, 0.0, 0}, Motion{1.0, -1.0, 0}, Motion{1.0, 1.0, 0},
   Motion{0.0, 0.0, -1}, Motion{0.0, 0.0, 1}};
 
+constexpr std::array<Motion, 6> REEDS_SHEPP_MOTIONS{
+  Motion{1.0, 0.0, 0},  Motion{1.0, -1.0, 0},  Motion{1.0, 1.0, 0},
+  Motion{-1.0, 0.0, 0}, Motion{-1.0, -1.0, 0}, Motion{-1.0, 1.0, 0}};
+
 std::span<const Motion> control_set(MotionModel model) noexcept
 {
-  return model == MotionModel::Differential ? std::span<const Motion>{DIFFERENTIAL_MOTIONS}
-                                            : std::span<const Motion>{DUBINS_MOTIONS};
+  switch (model) {
+    case MotionModel::Differential:
+      return std::span<const Motion>{DIFFERENTIAL_MOTIONS};
+    case MotionModel::ReedsShepp:
+      return std::span<const Motion>{REEDS_SHEPP_MOTIONS};
+    case MotionModel::Dubins:
+      break;
+  }
+  return std::span<const Motion>{DUBINS_MOTIONS};
 }
 
 /// Not an index into any control set, so "no previous primitive" needs no separate flag.
@@ -176,38 +188,113 @@ std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint
   return poses;
 }
 
+template <class Curve>
+bool curve_is_free(const TraversabilityView & grid, const Curve & curve, double check_step)
+{
+  const double length = curve.length();
+  const int checks = std::max(1, static_cast<int>(std::ceil(length / check_step)));
+  for (int i = 1; i <= checks; ++i) {
+    const double s = length * static_cast<double>(i) / static_cast<double>(checks);
+    if (!grid.free(curve.sample(s).position)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Emits poses over (from, to]; rounding the count keeps each interval near output_step.
+template <class Curve>
+void append_run(
+  std::vector<Pose2D> & samples, const Curve & curve, double from, double to, double output_step)
+{
+  const double span = to - from;
+  const int count = std::max(1, static_cast<int>(std::lround(span / output_step)));
+  for (int i = 1; i <= count; ++i) {
+    samples.push_back(
+      curve.sample(from + span * static_cast<double>(i) / static_cast<double>(count)));
+  }
+}
+
+/// The tail is charged like the primitives are, so reverse_penalty still applies at the goal.
+double penalised_length(
+  const ReedsSheppPath & curve, const HybridAStarParams & params, double motion_step)
+{
+  double cost = 0.0;
+  for (const ReedsSheppSegment & segment : curve.segments()) {
+    const double span = std::abs(segment.length);
+    cost += segment.length < 0.0 ? span * params.reverse_penalty : span;
+  }
+  return cost + params.direction_change_penalty * motion_step *
+                  static_cast<double>(curve.direction_changes());
+}
+
 /// Checked at collision_check_step but emitted at output_step, so the output stays evenly spaced.
 std::optional<std::vector<Pose2D>> connect_goal(
   const TraversabilityView & grid, const Pose2D & start, const Pose2D & goal,
-  double turning_radius, double collision_check_step, double output_step)
+  const HybridAStarParams & params, double collision_check_step, double output_step)
 {
-  const auto dubins = solve_dubins_path(start, goal, turning_radius);
-  if (!dubins.has_value()) {
-    return std::nullopt;
-  }
-
-  std::vector<Pose2D> samples;
-  const double length = dubins->length();
-  if (length == 0.0) {
-    return samples;
-  }
-
-  const int checks = std::max(1, static_cast<int>(std::ceil(length / collision_check_step)));
-  for (int i = 1; i <= checks; ++i) {
-    const double s = length * static_cast<double>(i) / static_cast<double>(checks);
-    if (!grid.free(dubins->sample(s).position)) {
+  const auto dubins = solve_dubins_path(start, goal, params.minimum_turning_radius);
+  const auto forward_tail = [&]() -> std::optional<std::vector<Pose2D>> {
+    std::vector<Pose2D> samples;
+    if (!dubins.has_value()) {
       return std::nullopt;
     }
+    if (dubins->length() == 0.0) {
+      return samples;
+    }
+    if (!curve_is_free(grid, *dubins, collision_check_step)) {
+      return std::nullopt;
+    }
+    append_run(samples, *dubins, 0.0, dubins->length(), output_step);
+    return samples;
+  };
+  if (params.motion_model != MotionModel::ReedsShepp) {
+    return forward_tail();
   }
 
-  // Rounding rather than ceiling keeps every emitted interval inside [0.75, 1.0] * output_step.
-  const int count = std::max(1, static_cast<int>(std::lround(length / output_step)));
-  samples.reserve(static_cast<std::size_t>(count));
-  for (int i = 1; i <= count; ++i) {
-    const double s = length * static_cast<double>(i) / static_cast<double>(count);
-    samples.push_back(dubins->sample(s));
+  const auto reeds_shepp = solve_reeds_shepp_path(start, goal, params.minimum_turning_radius);
+  const auto reversing_tail = [&]() -> std::optional<std::vector<Pose2D>> {
+    std::vector<Pose2D> samples;
+    if (!reeds_shepp.has_value()) {
+      return std::nullopt;
+    }
+    if (reeds_shepp->length() == 0.0) {
+      return samples;
+    }
+    if (!curve_is_free(grid, *reeds_shepp, collision_check_step)) {
+      return std::nullopt;
+    }
+    // Each cusp ends a run, so a direction change always lands on a pose the follower can see.
+    double run_start = 0.0;
+    double consumed = 0.0;
+    int direction = 0;
+    for (const ReedsSheppSegment & segment : reeds_shepp->segments()) {
+      if (segment.length == 0.0) {
+        continue;
+      }
+      const int sign = segment.length > 0.0 ? 1 : -1;
+      if (direction != 0 && sign != direction) {
+        append_run(samples, *reeds_shepp, run_start, consumed, output_step);
+        run_start = consumed;
+      }
+      direction = sign;
+      consumed += std::abs(segment.length);
+    }
+    append_run(samples, *reeds_shepp, run_start, consumed, output_step);
+    return samples;
+  };
+
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double reversing_cost = reeds_shepp.has_value()
+                                  ? penalised_length(*reeds_shepp, params, output_step)
+                                  : infinity;
+  const double forward_cost = dubins.has_value() ? dubins->length() : infinity;
+  if (forward_cost <= reversing_cost) {
+    const auto forward = forward_tail();
+    return forward.has_value() ? forward : reversing_tail();
   }
-  return samples;
+  const auto reversing = reversing_tail();
+  return reversing.has_value() ? reversing : forward_tail();
 }
 
 /// Cost to reach the goal cell over free cells, ignoring the turning radius; infinity when cut off.
@@ -406,11 +493,20 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     if (next.curvature_scale != 0.0) {
       multiplier += params.steering_penalty;
     }
+    double gear_change = 0.0;
     if (previous_mode != START_MODE && motions[previous_mode].travel_scale != 0.0) {
+      const Motion & previous = motions[previous_mode];
       multiplier += params.steering_change_penalty *
-                    std::abs(next.curvature_scale - motions[previous_mode].curvature_scale);
+                    std::abs(next.curvature_scale - previous.curvature_scale);
+      // Swapping between forward and reverse costs a full stop whatever the geometry says.
+      if (previous.travel_scale * next.travel_scale < 0.0) {
+        gear_change = params.direction_change_penalty * motion_step;
+      }
     }
-    return std::abs(travel_of(next)) * multiplier;
+    if (next.travel_scale < 0.0) {
+      multiplier *= params.reverse_penalty;
+    }
+    return std::abs(travel_of(next)) * multiplier + gear_change;
   };
 
   std::vector<float> g_score(state_count, std::numeric_limits<float>::infinity());
@@ -459,9 +555,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
           });
       }
       for (std::size_t i = 0; i < target_count; ++i) {
-        const auto connection = connect_goal(
-          grid, current.pose, targets[i], params.minimum_turning_radius, collision_check_step,
-          motion_step);
+        const auto connection =
+          connect_goal(grid, current.pose, targets[i], params, collision_check_step, motion_step);
         if (connection.has_value()) {
           return PlanResult{attach_tail(
             reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
@@ -526,7 +621,9 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
     params_.heuristic_weight >= 0.0 && std::isfinite(params_.analytic_expansion_ratio) &&
     params_.analytic_expansion_ratio > 0.0 && std::isfinite(params_.steering_penalty) &&
     params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
-    params_.steering_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
+    params_.steering_change_penalty >= 0.0 && std::isfinite(params_.reverse_penalty) &&
+    params_.reverse_penalty > 0.0 && std::isfinite(params_.direction_change_penalty) &&
+    params_.direction_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
   if (!valid) {
     throw std::invalid_argument("invalid HybridAStarParams");
   }

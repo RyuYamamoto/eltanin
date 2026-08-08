@@ -35,6 +35,8 @@ enum class MotionModel
   Dubins,
   /// Adds turning on the spot, which is what a differential drive does.
   Differential,
+  /// Adds driving in reverse, so the analytic connection becomes a Reeds-Shepp path.
+  ReedsShepp,
 };
 
 struct HybridAStarParams
@@ -56,6 +58,10 @@ struct HybridAStarParams
   double heuristic_weight{0.8};
   double steering_penalty{0.05};
   double steering_change_penalty{0.10};
+  /// Multiplies the cost of driving in reverse; 1 makes it as cheap as going forward.
+  double reverse_penalty{2.0};
+  /// Charged once per switch between forward and reverse, as a multiple of one motion step.
+  double direction_change_penalty{2.0};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
   /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.

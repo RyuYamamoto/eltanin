@@ -525,6 +525,7 @@ void expect_follows_control_set(
 {
   const double radius = params.minimum_turning_radius;
   const bool may_spin = params.motion_model == eltanin::planner::MotionModel::Differential;
+  const bool may_reverse = params.motion_model == eltanin::planner::MotionModel::ReedsShepp;
   const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
   const double step = params.motion_step > 0.0
                         ? params.motion_step
@@ -537,9 +538,13 @@ void expect_follows_control_set(
       EXPECT_TRUE(may_spin) << "step " << i << " turns on the spot but the model forbids it";
       continue;
     }
-    // Forward only: the body must move along its heading, never against it.
+    // The body moves along its heading; only a Reeds-Shepp drive may run the other way down it.
     const Eigen::Vector2d heading{std::cos(path[i].yaw), std::sin(path[i].yaw)};
-    EXPECT_GT(delta.dot(heading), 0.0) << "step " << i << " travels backwards";
+    const double along = delta.dot(heading);
+    EXPECT_NE(along, 0.0) << "step " << i << " moves sideways";
+    if (!may_reverse) {
+      EXPECT_GT(along, 0.0) << "step " << i << " travels backwards";
+    }
     EXPECT_LE(chord, 1.5 * step + TOLERANCE) << "step " << i << " is longer than one primitive";
     // A chord of this length cannot cover more heading than the minimum turning radius allows.
     EXPECT_LE(turn, 2.0 * std::asin(std::min(1.0, chord / (2.0 * radius))) + 1e-6)
@@ -583,6 +588,112 @@ TEST(HybridAStarPlanner, TheDifferentialModelOnlyEverAddsATurnOnTheSpot)
   expect_goal(*path, goal);
   expect_follows_control_set(*path, params, RESOLUTION);
   expect_all_free(*path, map, make_cost_model());
+}
+
+namespace
+{
+
+/// Steps whose travel opposes the body heading; zero means the path never reverses.
+int reversing_steps(const Path & path)
+{
+  int count = 0;
+  for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+    const Eigen::Vector2d delta = path[i + 1].position - path[i].position;
+    if (delta.norm() <= TOLERANCE) {
+      continue;
+    }
+    if (delta.dot(Eigen::Vector2d{std::cos(path[i].yaw), std::sin(path[i].yaw)}) < 0.0) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+}  // namespace
+
+TEST(HybridAStarPlanner, AReedsSheppDriveBacksUpInsteadOfLoopingRound)
+{
+  const Costmap map = open_map(120, 120);
+  const Pose2D start = at_cell(map, 60, 60, 0.0);
+  // Two metres straight behind, facing the same way: backing up is exactly that distance.
+  const Pose2D goal = at_cell(map, 40, 60, 0.0);
+
+  HybridAStarParams params;
+  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  const auto reversing = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  HybridAStarParams forward_only;
+  const auto forward = plan_hybrid_astar(map, make_cost_model(), start, goal, forward_only);
+
+  ASSERT_TRUE(reversing.has_value());
+  ASSERT_TRUE(forward.has_value());
+  expect_goal(*reversing, goal);
+  EXPECT_NEAR(eltanin::path_length(*reversing), 2.0, 1e-6);
+  EXPECT_GT(reversing_steps(*reversing), 0);
+  EXPECT_LT(eltanin::path_length(*reversing), eltanin::path_length(*forward));
+  expect_follows_control_set(*reversing, params, RESOLUTION);
+}
+
+TEST(HybridAStarPlanner, AReedsSheppDriveTurnsRoundWhereDubinsCannot)
+{
+  // A corridor narrower than the turning diameter, so a forward-only U-turn does not fit.
+  Costmap map(MapGeometry(120, 60, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 5; mx < 90; ++mx) {
+    for (int my = 26; my < 34; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  const Pose2D start = at_cell(map, 70, 30, 0.0);
+  const Pose2D goal = at_cell(map, 20, 30, std::numbers::pi);
+
+  HybridAStarParams reeds_shepp;
+  reeds_shepp.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  const auto reversing = plan_hybrid_astar(map, make_cost_model(), start, goal, reeds_shepp);
+
+  const auto forward = plan_hybrid_astar(map, make_cost_model(), start, goal, HybridAStarParams{});
+
+  EXPECT_FALSE(forward.has_value());
+  ASSERT_TRUE(reversing.has_value()) << to_string(reversing.error());
+  expect_goal(*reversing, goal);
+  EXPECT_GT(reversing_steps(*reversing), 0);
+  expect_all_free(*reversing, map, make_cost_model());
+  // Every cusp must be its own pose, or a step would turn more than its chord allows.
+  expect_follows_control_set(*reversing, reeds_shepp, RESOLUTION);
+}
+
+TEST(HybridAStarPlanner, AHighReversePenaltyKeepsTheReedsSheppDriveGoingForward)
+{
+  const Costmap map = open_map(120, 120);
+  const Pose2D start = at_cell(map, 60, 60, 0.0);
+  const Pose2D goal = at_cell(map, 40, 60, 0.0);
+
+  HybridAStarParams params;
+  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  params.reverse_penalty = 1000.0;
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  const auto forward = plan_hybrid_astar(map, make_cost_model(), start, goal, HybridAStarParams{});
+
+  ASSERT_TRUE(path.has_value());
+  ASSERT_TRUE(forward.has_value());
+  EXPECT_EQ(reversing_steps(*path), 0);
+  EXPECT_NEAR(eltanin::path_length(*path), eltanin::path_length(*forward), 1e-6);
+}
+
+TEST(HybridAStarPlanner, AReedsSheppDriveIsDeterministic)
+{
+  const Costmap map = open_map(120, 120);
+  HybridAStarParams params;
+  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  const Pose2D start = at_cell(map, 60, 60, 0.0);
+  const Pose2D goal = at_cell(map, 35, 48, 2.0);
+
+  const auto first = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+  const auto second = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  expect_same_path(*first, *second);
 }
 
 TEST(HybridAStarPlanner, PlansAtRadiiOneTurnCannotResolveIntoAHeadingBin)
