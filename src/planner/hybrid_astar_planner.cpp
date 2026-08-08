@@ -262,6 +262,18 @@ std::optional<Pose2D> approach_pose(
   return best;
 }
 
+/// Driving to `target` plus the on-the-spot turn from its heading to the one the caller asked for.
+double arrival_cost(
+  const Pose2D & from, const Pose2D & target, double requested_yaw, double turning_radius)
+{
+  const auto dubins = solve_dubins_path(from, target, turning_radius);
+  if (!dubins.has_value()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double turn = std::abs(shortest_angular_distance(target.yaw, requested_yaw));
+  return dubins->length() + turn * turning_radius;
+}
+
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
 Path attach_tail(
   std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
@@ -384,15 +396,21 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       expansions == 0 || skipped_attempts >= attempt_interval(heuristic(current.pose));
     if (analytic_due) {
       skipped_attempts = 0;
-      // The requested pose first; a free heading only relaxes what the search must achieve.
-      const std::optional<Pose2D> shortest =
-        params.free_goal_yaw
-          ? approach_pose(current.pose, query.goal.position, params.minimum_turning_radius)
-          : std::nullopt;
-      const std::array<Pose2D, 3> targets{
-        query.goal, shortest.value_or(Pose2D{query.goal.position, current.pose.yaw}),
-        Pose2D{query.goal.position, current.pose.yaw}};
-      const std::size_t target_count = params.free_goal_yaw ? targets.size() : 1;
+      std::array<Pose2D, 3> targets{query.goal, query.goal, query.goal};
+      std::size_t target_count = 1;
+      if (params.free_goal_yaw) {
+        const std::optional<Pose2D> shortest =
+          approach_pose(current.pose, query.goal.position, params.minimum_turning_radius);
+        targets[1] = shortest.value_or(Pose2D{query.goal.position, current.pose.yaw});
+        targets[2] = Pose2D{query.goal.position, current.pose.yaw};
+        target_count = targets.size();
+        // Arriving off-heading costs the follower a turn on the spot, so charge it as arc length.
+        std::sort(
+          targets.begin(), targets.end(), [&](const Pose2D & lhs, const Pose2D & rhs) {
+            return arrival_cost(current.pose, lhs, query.goal.yaw, params.minimum_turning_radius) <
+                   arrival_cost(current.pose, rhs, query.goal.yaw, params.minimum_turning_radius);
+          });
+      }
       for (std::size_t i = 0; i < target_count; ++i) {
         const auto connection = connect_goal(
           grid, current.pose, targets[i], params.minimum_turning_radius, collision_check_step,

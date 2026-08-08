@@ -13,6 +13,7 @@
 // limitations under the License
 
 #include <eltanin/core/angle.hpp>
+#include <eltanin/core/path.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/planner/astar_planner.hpp>
@@ -488,4 +489,29 @@ TEST(HybridAStarPlanner, TheExactGoalYawIsStillTheDefault)
 
   ASSERT_TRUE(path.has_value());
   expect_goal(*path, goal);
+}
+
+TEST(HybridAStarPlanner, AFreeGoalYawDoesNotLoopRoundJustToFaceBackwards)
+{
+  const Costmap map = open_map(200, 200);
+  const Pose2D start = at_cell(map, 30, 100, 0.0);
+  const Pose2D ahead = at_cell(map, 130, 100, 0.0);
+  const Pose2D backwards = at_cell(map, 130, 100, std::numbers::pi);
+  HybridAStarParams params;
+  params.free_goal_yaw = true;
+
+  const auto straight = plan_hybrid_astar(map, make_cost_model(), start, ahead, params);
+  const auto reversed = plan_hybrid_astar(map, make_cost_model(), start, backwards, params);
+
+  ASSERT_TRUE(straight.has_value());
+  ASSERT_TRUE(reversed.has_value());
+  expect_goal(*reversed, backwards);
+  // Turning round on the spot at the goal beats driving a loop to arrive already facing back.
+  EXPECT_NEAR(
+    eltanin::path_length(*reversed), eltanin::path_length(*straight), 1e-9);
+  for (std::size_t i = 0; i + 2 < reversed->size(); ++i) {
+    EXPECT_NEAR(
+      shortest_angular_distance((*reversed)[i].yaw, (*reversed)[i + 1].yaw), 0.0, TOLERANCE)
+      << "step " << i;
+  }
 }
