@@ -2,6 +2,7 @@ add_library(eltanin_planner STATIC
   astar_planner.cpp
   dubins_path.cpp
   hybrid_astar_planner.cpp
+  obstacle_field.cpp
   path_smoother.cpp
   reeds_shepp_path.cpp)
 add_library(eltanin::planner ALIAS eltanin_planner)
