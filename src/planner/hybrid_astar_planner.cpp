@@ -230,12 +230,36 @@ std::vector<float> distance_to_goal(const TraversabilityView & grid, const map::
   return cost;
 }
 
-/// The goal pose the analytic expansion aims at when the caller does not fix the goal heading.
-Pose2D approach_pose(const Pose2D & from, const Eigen::Vector2d & goal_position) noexcept
+/// Arrival heading of the shortest forward path to a point: turn on one circle, then go straight.
+std::optional<Pose2D> approach_pose(
+  const Pose2D & from, const Eigen::Vector2d & goal_position, double turning_radius)
 {
-  const Eigen::Vector2d delta = goal_position - from.position;
-  const double bearing = delta.squaredNorm() > 0.0 ? std::atan2(delta.y(), delta.x()) : from.yaw;
-  return Pose2D{goal_position, bearing};
+  const Eigen::Vector2d forward{std::cos(from.yaw), std::sin(from.yaw)};
+  const Eigen::Vector2d left{-forward.y(), forward.x()};
+  std::optional<Pose2D> best;
+  double best_length = std::numeric_limits<double>::infinity();
+
+  for (const double turn : {1.0, -1.0}) {
+    const Eigen::Vector2d centre = from.position + turn * turning_radius * left;
+    const Eigen::Vector2d to_goal = goal_position - centre;
+    const double distance = to_goal.norm();
+    if (distance < turning_radius) {
+      continue;
+    }
+    const double straight =
+      std::sqrt(std::max(0.0, distance * distance - turning_radius * turning_radius));
+    const double departure = std::atan2(to_goal.y(), to_goal.x()) -
+                             turn * std::atan2(straight, turning_radius);
+    const Eigen::Vector2d start_angle = from.position - centre;
+    const double swept = normalize_angle_positive(
+      turn * (departure - std::atan2(start_angle.y(), start_angle.x())));
+    const double length = turning_radius * swept + straight;
+    if (length < best_length) {
+      best_length = length;
+      best = Pose2D{goal_position, normalize_angle(departure + turn * 0.5 * std::numbers::pi)};
+    }
+  }
+  return best;
 }
 
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
@@ -358,9 +382,13 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       expansions == 0 || skipped_attempts >= attempt_interval(heuristic(current.pose));
     if (analytic_due) {
       skipped_attempts = 0;
-      // A free goal heading is tried straight in first, then carrying the heading of this node.
+      // The shortest arrival heading first, then this node's own heading if there is no arc to it.
+      const std::optional<Pose2D> shortest =
+        params.free_goal_yaw
+          ? approach_pose(current.pose, query.goal.position, params.minimum_turning_radius)
+          : std::optional<Pose2D>{query.goal};
       const std::array<Pose2D, 2> targets{
-        params.free_goal_yaw ? approach_pose(current.pose, query.goal.position) : query.goal,
+        shortest.value_or(Pose2D{query.goal.position, current.pose.yaw}),
         Pose2D{query.goal.position, current.pose.yaw}};
       const std::size_t target_count = params.free_goal_yaw ? targets.size() : 1;
       for (std::size_t i = 0; i < target_count; ++i) {
