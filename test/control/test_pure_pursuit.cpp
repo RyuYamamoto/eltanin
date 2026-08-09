@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 
 namespace
@@ -34,8 +35,11 @@ namespace
 using eltanin::normalize_angle;
 using eltanin::Path;
 using eltanin::Pose2D;
+using eltanin::control::FollowerState;
+using eltanin::control::FollowStatus;
 using eltanin::control::PurePursuit;
 using eltanin::control::PurePursuitParams;
+using eltanin::Twist2D;
 using eltanin_test::ALIGNMENT_ANGULAR_VEL_RATIO;
 using eltanin_test::LINEAR_VEL_GAIN;
 using eltanin_test::make_straight_path;
@@ -53,21 +57,40 @@ PurePursuit make_tracker(const PurePursuitParams & params = PurePursuitParams{})
   return *tracker;
 }
 
+/// FollowResult and the lookahead accessor read back together, as the old Result carried both.
+struct Result
+{
+  Twist2D command{};
+  FollowStatus status{FollowStatus::NoPath};
+  std::size_t target_index{0};
+  Vector2d lookahead_point{Vector2d::Zero()};
+};
+
+Result compute(
+  PurePursuit & tracker, const Pose2D & robot, const Path & path, double dt,
+  const std::optional<Twist2D> & twist = std::nullopt)
+{
+  const eltanin::control::FollowResult followed =
+    tracker.follow(FollowerState{robot, twist}, path, dt);
+  const PurePursuit::Lookahead & lookahead = tracker.lookahead();
+  return Result{followed.command, followed.status, lookahead.target_index, lookahead.point};
+}
+
 /// Heading error the tracker saw, recovered from the reported lookahead point.
-double alpha_of(const PurePursuit::Result & result, const Pose2D & robot)
+double alpha_of(const Result & result, const Pose2D & robot)
 {
   const Vector2d delta = result.lookahead_point - robot.position;
   return normalize_angle(std::atan2(delta.y(), delta.x()) - robot.yaw);
 }
 
-void expect_zero_command(const PurePursuit::Result & result)
+void expect_zero_command(const Result & result)
 {
   EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
   EXPECT_DOUBLE_EQ(result.command.linear.y(), 0.0);
   EXPECT_DOUBLE_EQ(result.command.angular, 0.0);
 }
 
-void expect_same_result(const PurePursuit::Result & lhs, const PurePursuit::Result & rhs)
+void expect_same_result(const Result & lhs, const Result & rhs)
 {
   EXPECT_EQ(lhs.status, rhs.status);
   EXPECT_EQ(lhs.target_index, rhs.target_index);
@@ -170,8 +193,8 @@ TEST(PurePursuit, EmptyPathReturnsNoPathAndZeroCommand)
 {
   PurePursuit tracker = make_tracker();
   const Path path;
-  const PurePursuit::Result result = tracker.compute(Pose2D{}, path, SIMULATION_DT);
-  EXPECT_EQ(result.status, PurePursuit::Status::NoPath);
+  const Result result = compute(tracker, Pose2D{}, path, SIMULATION_DT);
+  EXPECT_EQ(result.status, FollowStatus::NoPath);
   expect_zero_command(result);
 }
 
@@ -179,10 +202,10 @@ TEST(PurePursuit, ComputeRejectsInvalidRuntimeInput)
 {
   PurePursuit tracker = make_tracker();
   const Path path = make_straight_path(1.0, 0.05);
-  EXPECT_THROW(tracker.compute(Pose2D{}, path, 0.0), std::invalid_argument);
-  EXPECT_THROW(tracker.compute(Pose2D{}, path, kInf), std::invalid_argument);
+  EXPECT_THROW(compute(tracker, Pose2D{}, path, 0.0), std::invalid_argument);
+  EXPECT_THROW(compute(tracker, Pose2D{}, path, kInf), std::invalid_argument);
   EXPECT_THROW(
-    tracker.compute(Pose2D{Vector2d{kNan, 0.0}, 0.0}, path, SIMULATION_DT),
+    compute(tracker, Pose2D{Vector2d{kNan, 0.0}, 0.0}, path, SIMULATION_DT),
     std::invalid_argument);
 }
 
@@ -190,9 +213,9 @@ TEST(PurePursuit, SinglePosePathReturnsGoalReached)
 {
   PurePursuit tracker = make_tracker();
   const Path path{Pose2D{Vector2d{1.0, 2.0}, 0.3}};
-  const PurePursuit::Result result =
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
-  EXPECT_EQ(result.status, PurePursuit::Status::GoalReached);
+  const Result result =
+    compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  EXPECT_EQ(result.status, FollowStatus::GoalReached);
   expect_zero_command(result);
 }
 
@@ -202,8 +225,8 @@ TEST(PurePursuit, GoalReachedIsIdempotent)
   const Path path = make_straight_path(1.0, 0.05);
   const Pose2D robot{Vector2d{1.0, 0.0}, 0.0};
   for (int i = 0; i < 3; ++i) {
-    const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
-    EXPECT_EQ(result.status, PurePursuit::Status::GoalReached) << "call " << i;
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    EXPECT_EQ(result.status, FollowStatus::GoalReached) << "call " << i;
     expect_zero_command(result);
   }
 }
@@ -216,9 +239,9 @@ TEST(PurePursuit, LastPoseNearestButOutsideTerminalToleranceKeepsTracking)
     Pose2D{Vector2d{0.10, 0.0}, 0.0}};
   const Pose2D robot{Vector2d{0.10, 0.25}, 0.0};
 
-  const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
+  const Result result = compute(tracker, robot, path, SIMULATION_DT);
 
-  EXPECT_EQ(result.status, PurePursuit::Status::Tracking);
+  EXPECT_EQ(result.status, FollowStatus::Tracking);
   EXPECT_EQ(result.target_index, path.size() - 1);
   EXPECT_EQ(result.lookahead_point, path[path.size() - 1].position);
 }
@@ -230,14 +253,14 @@ TEST(PurePursuit, RealignsInPlaceWhenTheCloseTerminalPointMovesToTheSide)
     Pose2D{Vector2d{0.00, 0.0}, 0.0}, Pose2D{Vector2d{0.05, 0.0}, 0.0},
     Pose2D{Vector2d{0.10, 0.0}, 0.0}};
 
-  const PurePursuit::Result initial =
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  const Result initial =
+    compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
   ASSERT_GT(initial.command.linear.x(), 0.0);
 
-  const PurePursuit::Result terminal =
-    tracker.compute(Pose2D{Vector2d{0.10, 0.25}, 0.0}, path, SIMULATION_DT);
+  const Result terminal =
+    compute(tracker, Pose2D{Vector2d{0.10, 0.25}, 0.0}, path, SIMULATION_DT);
 
-  EXPECT_EQ(terminal.status, PurePursuit::Status::Tracking);
+  EXPECT_EQ(terminal.status, FollowStatus::Tracking);
   EXPECT_EQ(terminal.target_index, path.size() - 1);
   EXPECT_DOUBLE_EQ(terminal.command.linear.x(), 0.0);
   EXPECT_LT(terminal.command.angular, 0.0);
@@ -251,17 +274,17 @@ TEST(PurePursuit, NearestPathProgressDoesNotRegressAndResetClearsIt)
     Pose2D{Vector2d{2.0, 0.0}, 0.0}, Pose2D{Vector2d{2.0, 1.0}, 0.0},
     Pose2D{Vector2d{1.0, 1.0}, 0.0}, Pose2D{Vector2d{0.0, 1.0}, 0.0}};
 
-  const PurePursuit::Result later =
-    tracker.compute(Pose2D{Vector2d{1.0, 1.0}, std::numbers::pi}, path, SIMULATION_DT);
+  const Result later =
+    compute(tracker, Pose2D{Vector2d{1.0, 1.0}, std::numbers::pi}, path, SIMULATION_DT);
   ASSERT_EQ(later.target_index, 5u);
 
-  const PurePursuit::Result after_jump =
-    tracker.compute(Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  const Result after_jump =
+    compute(tracker, Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
   EXPECT_EQ(after_jump.target_index, 4u);
 
   tracker.reset();
-  const PurePursuit::Result after_reset =
-    tracker.compute(Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  const Result after_reset =
+    compute(tracker, Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
   EXPECT_EQ(after_reset.target_index, 2u);
 }
 
@@ -269,15 +292,15 @@ TEST(PurePursuit, ResultObservablesAreZeroWhenNotTracking)
 {
   PurePursuit tracker = make_tracker();
   const Path empty;
-  const PurePursuit::Result no_path = tracker.compute(Pose2D{}, empty, SIMULATION_DT);
+  const Result no_path = compute(tracker, Pose2D{}, empty, SIMULATION_DT);
   EXPECT_EQ(no_path.target_index, 0u);
   EXPECT_DOUBLE_EQ(no_path.lookahead_point.x(), 0.0);
   EXPECT_DOUBLE_EQ(no_path.lookahead_point.y(), 0.0);
 
   const Path path = make_straight_path(1.0, 0.05);
-  const PurePursuit::Result reached =
-    tracker.compute(Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
-  EXPECT_EQ(reached.status, PurePursuit::Status::GoalReached);
+  const Result reached =
+    compute(tracker, Pose2D{Vector2d{1.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  EXPECT_EQ(reached.status, FollowStatus::GoalReached);
   EXPECT_EQ(reached.target_index, 0u);
   EXPECT_DOUBLE_EQ(reached.lookahead_point.x(), 0.0);
   EXPECT_DOUBLE_EQ(reached.lookahead_point.y(), 0.0);
@@ -292,8 +315,8 @@ TEST(PurePursuit, PathIsNotModified)
   Pose2D robot{Vector2d{0.0, 0.1}, 0.4};
   bool reached = false;
   for (std::size_t step = 0; step < 4000 && !reached; ++step) {
-    const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
-    reached = result.status == PurePursuit::Status::GoalReached;
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    reached = result.status == FollowStatus::GoalReached;
     const double v = result.command.linear.x();
     robot.position.x() += v * std::cos(robot.yaw) * SIMULATION_DT;
     robot.position.y() += v * std::sin(robot.yaw) * SIMULATION_DT;
@@ -316,16 +339,16 @@ TEST(PurePursuit, FirstCallIsDeterministicAcrossInstances)
   const Path path = make_lookahead_probe_path();
   const Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
   expect_same_result(
-    first.compute(robot, path, SIMULATION_DT), second.compute(robot, path, SIMULATION_DT));
+    compute(first, robot, path, SIMULATION_DT), compute(second, robot, path, SIMULATION_DT));
 }
 
 TEST(PurePursuit, FirstCallLinearVelMatchesRampFromZero)
 {
   PurePursuit tracker = make_tracker();
   const Path path = make_straight_path(2.0, 0.05);
-  const PurePursuit::Result result =
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
-  ASSERT_EQ(result.status, PurePursuit::Status::Tracking);
+  const Result result =
+    compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  ASSERT_EQ(result.status, FollowStatus::Tracking);
 
   const PurePursuitParams defaults;
   const double expected =
@@ -339,10 +362,10 @@ TEST(PurePursuit, FirstCallLookaheadUsesZeroLinearVel)
 {
   PurePursuit tracker = make_tracker();
   const Path path = make_lookahead_probe_path();
-  const PurePursuit::Result result =
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  const Result result =
+    compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
 
-  ASSERT_EQ(result.status, PurePursuit::Status::Tracking);
+  ASSERT_EQ(result.status, FollowStatus::Tracking);
   const PurePursuitParams defaults;
   EXPECT_EQ(result.target_index, 1u);
   EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
@@ -355,14 +378,14 @@ TEST(PurePursuit, ResetRestoresFirstCallResult)
   PurePursuit tracker = make_tracker();
   const Path path = make_lookahead_probe_path();
   const Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
-  const PurePursuit::Result first = tracker.compute(robot, path, SIMULATION_DT);
+  const Result first = compute(tracker, robot, path, SIMULATION_DT);
 
   const Path straight = make_straight_path(2.0, 0.05);
   for (int i = 0; i < 100; ++i) {
-    tracker.compute(Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
+    compute(tracker, Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
   }
   tracker.reset();
-  expect_same_result(tracker.compute(robot, path, SIMULATION_DT), first);
+  expect_same_result(compute(tracker, robot, path, SIMULATION_DT), first);
 }
 
 TEST(PurePursuit, NoPathResetsInternalState)
@@ -370,15 +393,15 @@ TEST(PurePursuit, NoPathResetsInternalState)
   PurePursuit tracker = make_tracker();
   const Path path = make_lookahead_probe_path();
   const Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
-  const PurePursuit::Result first = tracker.compute(robot, path, SIMULATION_DT);
+  const Result first = compute(tracker, robot, path, SIMULATION_DT);
 
   const Path straight = make_straight_path(2.0, 0.05);
   for (int i = 0; i < 100; ++i) {
-    tracker.compute(Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
+    compute(tracker, Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
   }
   const Path empty;
-  ASSERT_EQ(tracker.compute(robot, empty, SIMULATION_DT).status, PurePursuit::Status::NoPath);
-  expect_same_result(tracker.compute(robot, path, SIMULATION_DT), first);
+  ASSERT_EQ(compute(tracker, robot, empty, SIMULATION_DT).status, FollowStatus::NoPath);
+  expect_same_result(compute(tracker, robot, path, SIMULATION_DT), first);
 }
 
 TEST(PurePursuit, GoalReachedResetsInternalState)
@@ -386,16 +409,16 @@ TEST(PurePursuit, GoalReachedResetsInternalState)
   PurePursuit tracker = make_tracker();
   const Path path = make_lookahead_probe_path();
   const Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
-  const PurePursuit::Result first = tracker.compute(robot, path, SIMULATION_DT);
+  const Result first = compute(tracker, robot, path, SIMULATION_DT);
 
   const Path straight = make_straight_path(2.0, 0.05);
   for (int i = 0; i < 100; ++i) {
-    tracker.compute(Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
+    compute(tracker, Pose2D{Vector2d{0.2, 0.0}, 0.0}, straight, SIMULATION_DT);
   }
   ASSERT_EQ(
-    tracker.compute(Pose2D{Vector2d{2.0, 0.0}, 0.0}, straight, SIMULATION_DT).status,
-    PurePursuit::Status::GoalReached);
-  expect_same_result(tracker.compute(robot, path, SIMULATION_DT), first);
+    compute(tracker, Pose2D{Vector2d{2.0, 0.0}, 0.0}, straight, SIMULATION_DT).status,
+    FollowStatus::GoalReached);
+  expect_same_result(compute(tracker, robot, path, SIMULATION_DT), first);
 }
 
 TEST(PurePursuit, AlignmentTurnsInPlaceAtFixedRate)
@@ -407,8 +430,8 @@ TEST(PurePursuit, AlignmentTurnsInPlaceAtFixedRate)
 
   std::size_t turning_steps = 0;
   for (std::size_t step = 0; step < 2000; ++step) {
-    const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
-    ASSERT_EQ(result.status, PurePursuit::Status::Tracking) << "step " << step;
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    ASSERT_EQ(result.status, FollowStatus::Tracking) << "step " << step;
     if (result.command.linear.x() > 0.0) {
       break;
     }
@@ -435,8 +458,8 @@ TEST(PurePursuit, AlignmentSignFollowsAlpha)
   for (const double yaw : {0.5 * kPi, -0.5 * kPi}) {
     PurePursuit tracker = make_tracker();
     const Pose2D robot{Vector2d{0.0, 0.0}, yaw};
-    const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
-    ASSERT_EQ(result.status, PurePursuit::Status::Tracking);
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    ASSERT_EQ(result.status, FollowStatus::Tracking);
     EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0) << "yaw=" << yaw;
     EXPECT_GT(result.command.angular * alpha_of(result, robot), 0.0) << "yaw=" << yaw;
   }
@@ -451,8 +474,8 @@ TEST(PurePursuit, AlignmentCompletionDrivesSameCycle)
 
   bool driving = false;
   for (std::size_t step = 0; step < 2000 && !driving; ++step) {
-    const PurePursuit::Result result = tracker.compute(robot, path, SIMULATION_DT);
-    ASSERT_EQ(result.status, PurePursuit::Status::Tracking) << "step " << step;
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    ASSERT_EQ(result.status, FollowStatus::Tracking) << "step " << step;
     const double alpha = alpha_of(result, robot);
     if (std::abs(alpha) < defaults.yaw_tolerance) {
       // navyu turned once more here, and with alpha == 0 it turned the wrong way.
@@ -472,11 +495,11 @@ TEST(PurePursuit, OnceAlignedDoesNotRealignAwayFromTheEndpoint)
   PurePursuit tracker = make_tracker();
   const Path path = make_straight_path(2.0, 0.05);
   const Pose2D aligned{Vector2d{0.0, 0.0}, 0.0};
-  ASSERT_GT(tracker.compute(aligned, path, SIMULATION_DT).command.linear.x(), 0.0);
+  ASSERT_GT(compute(tracker, aligned, path, SIMULATION_DT).command.linear.x(), 0.0);
 
   const Pose2D turned{Vector2d{0.2, 0.0}, 0.5 * kPi};
-  const PurePursuit::Result result = tracker.compute(turned, path, SIMULATION_DT);
-  EXPECT_EQ(result.status, PurePursuit::Status::Tracking);
+  const Result result = compute(tracker, turned, path, SIMULATION_DT);
+  EXPECT_EQ(result.status, FollowStatus::Tracking);
   EXPECT_GT(result.command.linear.x(), 0.0);
 }
 
@@ -490,8 +513,8 @@ TEST(PurePursuit, AlignmentConvergesAtLargeDt)
 
   bool driving = false;
   for (std::size_t step = 0; step < 1000 && !driving; ++step) {
-    const PurePursuit::Result result = tracker.compute(robot, path, dt);
-    ASSERT_EQ(result.status, PurePursuit::Status::Tracking) << "step " << step;
+    const Result result = compute(tracker, robot, path, dt);
+    ASSERT_EQ(result.status, FollowStatus::Tracking) << "step " << step;
     driving = result.command.linear.x() > 0.0;
     robot.position.x() += result.command.linear.x() * std::cos(robot.yaw) * dt;
     robot.position.y() += result.command.linear.x() * std::sin(robot.yaw) * dt;
@@ -507,15 +530,15 @@ TEST(PurePursuit, AngularVelocityIsClamped)
   const Path straight = make_straight_path(2.0, 0.05);
   const Pose2D aligned{Vector2d{0.0, 0.0}, 0.0};
   for (int i = 0; i < 300; ++i) {
-    tracker.compute(aligned, straight, SIMULATION_DT);
+    compute(tracker, aligned, straight, SIMULATION_DT);
   }
 
   Path sideways;
   for (int i = 0; i <= 20; ++i) {
     sideways.push_back(Pose2D{Vector2d{0.0, 0.05 * static_cast<double>(i)}, 0.5 * kPi});
   }
-  const PurePursuit::Result result = tracker.compute(aligned, sideways, SIMULATION_DT);
-  ASSERT_EQ(result.status, PurePursuit::Status::Tracking);
+  const Result result = compute(tracker, aligned, sideways, SIMULATION_DT);
+  ASSERT_EQ(result.status, FollowStatus::Tracking);
   EXPECT_DOUBLE_EQ(result.command.angular, defaults.max_angular_vel);
 }
 
@@ -525,11 +548,26 @@ TEST(PurePursuit, DuplicatePosesDoNotDivideByZero)
   const Path path{
     Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{0.0, 0.0}, 0.0},
     Pose2D{Vector2d{0.0, 0.0}, 0.0}};
-  const PurePursuit::Result result =
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  const Result result =
+    compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
 
-  ASSERT_EQ(result.status, PurePursuit::Status::Tracking);
+  ASSERT_EQ(result.status, FollowStatus::Tracking);
   EXPECT_TRUE(std::isfinite(result.command.linear.x()));
   EXPECT_TRUE(std::isfinite(result.command.angular));
   EXPECT_DOUBLE_EQ(result.command.angular, 0.0);
+}
+
+TEST(PurePursuit, TheMeasuredTwistIsIgnored)
+{
+  PurePursuit tracker = make_tracker();
+  PurePursuit reference = make_tracker();
+  const Path path = make_lookahead_probe_path();
+  const Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
+
+  for (int i = 0; i < 5; ++i) {
+    const Result with_twist =
+      compute(tracker, robot, path, SIMULATION_DT, Twist2D{Vector2d{0.4, 0.0}, -0.9});
+    const Result without = compute(reference, robot, path, SIMULATION_DT);
+    expect_same_result(with_twist, without);
+  }
 }

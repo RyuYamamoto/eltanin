@@ -43,6 +43,9 @@ using eltanin::Pose2D;
 using eltanin::Twist2D;
 using eltanin::collision::VelocityLimiter;
 using eltanin::collision::VelocityLimiterParams;
+using eltanin::control::FollowerState;
+using eltanin::control::FollowResult;
+using eltanin::control::FollowStatus;
 using eltanin::control::PurePursuit;
 using eltanin::control::PurePursuitParams;
 using eltanin::map::Costmap;
@@ -111,8 +114,8 @@ std::vector<Sample> run(
   std::vector<Sample> samples;
   SimpleSimulator plant(start);
   for (std::size_t step = 0; step < MAX_STEPS; ++step) {
-    const PurePursuit::Result tracking = tracker.compute(plant.pose(), path, CONTROL_DT);
-    if (tracking.status != PurePursuit::Status::Tracking) {
+    const FollowResult tracking = tracker.follow(FollowerState{plant.pose()}, path, CONTROL_DT);
+    if (tracking.status != FollowStatus::Tracking) {
       break;
     }
     const VelocityLimiter::Result limited =

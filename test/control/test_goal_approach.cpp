@@ -566,7 +566,8 @@ TEST(GoalApproachIntegration, TerminalApproachDoesNotOrbitAfterTheGoalMovesToThe
 
   // Reproduce the nav run: normal tracking has already latched its initial heading alignment.
   ASSERT_GT(
-    tracker.compute(Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, APPROACH_DT).command.linear.x(),
+    tracker.follow(eltanin::control::FollowerState{Pose2D{Vector2d{0.0, 0.0}, 0.0}}, path, APPROACH_DT)
+      .command.linear.x(),
     0.0);
 
   Pose2D robot{Vector2d{0.10, 0.25}, 0.0};
@@ -584,8 +585,9 @@ TEST(GoalApproachIntegration, TerminalApproachDoesNotOrbitAfterTheGoalMovesToThe
     if (goal.state == GoalApproach::State::Aligning) {
       command = goal.command;
     } else {
-      const PurePursuit::Result tracking = tracker.compute(robot, path, APPROACH_DT);
-      ASSERT_EQ(tracking.status, PurePursuit::Status::Tracking);
+      const eltanin::control::FollowResult tracking =
+        tracker.follow(eltanin::control::FollowerState{robot}, path, APPROACH_DT);
+      ASSERT_EQ(tracking.status, eltanin::control::FollowStatus::Tracking);
       command = apply_linear_limit(tracking.command, goal.linear_vel_limit);
     }
     robot = eltanin::integrate_differential_drive(robot, command, APPROACH_DT);

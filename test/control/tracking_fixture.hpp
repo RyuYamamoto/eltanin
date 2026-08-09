@@ -171,8 +171,9 @@ public:
 
   std::optional<eltanin::Twist2D> operator()(const eltanin::Pose2D & robot, double dt)
   {
-    const auto result = pursuit_.compute(robot, *path_, dt);
-    if (result.status != eltanin::control::PurePursuit::Status::Tracking) {
+    const eltanin::control::FollowResult result =
+      pursuit_.follow(eltanin::control::FollowerState{robot}, *path_, dt);
+    if (result.status != eltanin::control::FollowStatus::Tracking) {
       return std::nullopt;
     }
     return result.command;

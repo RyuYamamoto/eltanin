@@ -708,13 +708,14 @@ inline NavigateResult navigate(
     if (approach.state == GoalApproach::State::Aligning) {
       requested = approach.command;
     } else {
-      const PurePursuit::Result tracking = tracker->compute(plant.pose(), *path, config.control_dt);
-      if (tracking.status == PurePursuit::Status::NoPath) {
+      const eltanin::control::FollowResult tracking =
+        tracker->follow(eltanin::control::FollowerState{plant.pose()}, *path, config.control_dt);
+      if (tracking.status == eltanin::control::FollowStatus::NoPath) {
         result.outcome = NavigateOutcome::NoPath;
         result.message = "PurePursuit reported NoPath on leg " + std::to_string(leg);
         break;
       }
-      if (tracking.status == PurePursuit::Status::GoalReached) {
+      if (tracking.status == eltanin::control::FollowStatus::GoalReached) {
         result.outcome = NavigateOutcome::GoalToleranceFailed;
         result.message =
           "PurePursuit reached the last path pose before GoalApproach accepted the goal";

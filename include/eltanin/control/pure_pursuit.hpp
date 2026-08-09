@@ -15,6 +15,7 @@
 #ifndef ELTANIN__CONTROL__PURE_PURSUIT_HPP_
 #define ELTANIN__CONTROL__PURE_PURSUIT_HPP_
 
+#include <eltanin/control/path_follower.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
@@ -40,33 +41,29 @@ struct PurePursuitParams
   double min_lookahead_dist{0.3};
 };
 
-class PurePursuit
+class PurePursuit : public PathFollower
 {
 public:
-  /// NoPath and GoalReached both come with a zero command, so the caller always has one to send.
-  enum class Status { NoPath, Tracking, GoalReached };
-
-  struct Result
+  /// The pose the geometry aimed at last cycle; zeroed whenever the follower is not Tracking.
+  struct Lookahead
   {
-    Twist2D command{};
-    Status status{Status::NoPath};
-    /// Index of the lookahead pose in the path; 0 unless status is Tracking.
     std::size_t target_index{0};
-    /// World position of the lookahead pose; zero unless status is Tracking.
-    Eigen::Vector2d lookahead_point{Eigen::Vector2d::Zero()};
+    Eigen::Vector2d point{Eigen::Vector2d::Zero()};
   };
 
   /// nullopt when a parameter is non-finite or outside its admissible range.
   static std::optional<PurePursuit> create(const PurePursuitParams & params);
 
-  /// Reads `path` only; goal arrival is reported through Status, never by clearing the path.
-  /// Throws std::invalid_argument when the robot pose or dt is invalid.
-  Result compute(const Pose2D & robot, const Path & path, double dt);
-
-  /// Clears path progress, the velocity ramp, and the alignment latch; call for every new path.
-  void reset() noexcept;
+  /// Valid until the next follow(); FollowerState::twist is not read at all.
+  const Lookahead & lookahead() const noexcept { return lookahead_; }
 
   const PurePursuitParams & params() const noexcept { return params_; }
+
+protected:
+  [[nodiscard]] FollowResult follow_on_path(
+    const FollowerState & state, const Path & path, double dt) override;
+
+  void reset_derived() noexcept override;
 
 private:
   explicit PurePursuit(const PurePursuitParams & params) : params_(params) {}
@@ -76,6 +73,7 @@ private:
   std::size_t nearest_index_{0};
   double linear_vel_{0.0};
   bool yaw_aligned_{false};
+  Lookahead lookahead_{};
 };
 
 }  // namespace eltanin::control

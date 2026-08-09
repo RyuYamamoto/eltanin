@@ -68,7 +68,8 @@ int main()
     std::cerr << "PurePursuit::create unexpectedly failed\n";
     return EXIT_FAILURE;
   }
-  const eltanin::control::PurePursuit::Result command = tracker->compute(start, smoothed, 0.01);
+  const eltanin::control::FollowResult command =
+    tracker->follow(eltanin::control::FollowerState{start}, smoothed, 0.01);
 
   auto approach = eltanin::control::GoalApproach::create(eltanin::control::GoalApproachParams{});
   if (!approach.has_value()) {

@@ -42,6 +42,9 @@ using eltanin::Path;
 using eltanin::Pose2D;
 using eltanin::Traversability;
 using eltanin::Twist2D;
+using eltanin::control::FollowerState;
+using eltanin::control::FollowResult;
+using eltanin::control::FollowStatus;
 using eltanin::control::PurePursuit;
 using eltanin::control::PurePursuitParams;
 using eltanin::map::Costmap;
@@ -95,13 +98,13 @@ std::vector<Sample> track(PurePursuit & tracker, const Path & path, const Pose2D
   Pose2D pose = start;
   double travelled = 0.0;
   for (std::size_t step = 0; step < MAX_STEPS; ++step) {
-    const PurePursuit::Result result = tracker.compute(pose, path, CONTROL_DT);
-    if (result.status != PurePursuit::Status::Tracking) {
+    const FollowResult result = tracker.follow(FollowerState{pose}, path, CONTROL_DT);
+    if (result.status != FollowStatus::Tracking) {
       break;
     }
     samples.push_back(Sample{
-      pose, result.command, lateral_error(path, pose.position), travelled, result.target_index,
-      result.lookahead_point});
+      pose, result.command, lateral_error(path, pose.position), travelled,
+      tracker.lookahead().target_index, tracker.lookahead().point});
 
     const double v = result.command.linear.x();
     pose.position.x() += v * std::cos(pose.yaw) * CONTROL_DT;

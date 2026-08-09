@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
-#include <stdexcept>
 
 namespace eltanin::control
 {
@@ -96,21 +95,10 @@ std::optional<PurePursuit> PurePursuit::create(const PurePursuitParams & params)
   return PurePursuit(params);
 }
 
-PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path, double dt)
+FollowResult PurePursuit::follow_on_path(
+  const FollowerState & state, const Path & path, double dt)
 {
-  if (!std::isfinite(dt) || dt <= 0.0 || !robot.position.allFinite() ||
-      !std::isfinite(robot.yaw)) {
-    throw std::invalid_argument("PurePursuit requires a finite pose and positive finite dt");
-  }
-
-  if (path.empty()) {
-    reset();
-    return Result{Twist2D{}, Status::NoPath, 0, Eigen::Vector2d::Zero()};
-  }
-  if (path.size() == 1) {
-    reset();
-    return Result{Twist2D{}, Status::GoalReached, 0, Eigen::Vector2d::Zero()};
-  }
+  const Pose2D & robot = state.pose;
 
   const std::size_t nearest = nearest_index(path, robot.position, nearest_index_);
   nearest_index_ = nearest;
@@ -120,7 +108,7 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
     const double distance_to_goal = (path[path.size() - 1].position - robot.position).norm();
     if (distance_to_goal <= 0.5 * terminal_spacing) {
       reset();
-      return Result{Twist2D{}, Status::GoalReached, 0, Eigen::Vector2d::Zero()};
+      return FollowResult{Twist2D{}, FollowStatus::GoalReached};
     }
   }
 
@@ -132,15 +120,16 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
                          ? 0.0
                          : normalize_angle(std::atan2(delta.y(), delta.x()) - robot.yaw);
 
+  lookahead_ = Lookahead{target, path[target].position};
+
   // Once the endpoint is the only remaining target, driving with a large bearing error creates
   // an orbit around it. A differential-drive robot can instead face the endpoint before moving.
   if (
     target + 1 == path.size() && distance <= params_.min_lookahead_dist &&
     std::abs(alpha) >= params_.yaw_tolerance) {
     linear_vel_ = 0.0;
-    return Result{
-      alignment_command(alpha, params_.max_angular_vel), Status::Tracking, target,
-      path[target].position};
+    return FollowResult{
+      alignment_command(alpha, params_.max_angular_vel), FollowStatus::Tracking};
   }
 
   if (!yaw_aligned_) {
@@ -149,7 +138,7 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
       yaw_aligned_ = true;
     } else {
       const Twist2D command = alignment_command(alpha, params_.max_angular_vel);
-      return Result{command, Status::Tracking, target, path[target].position};
+      return FollowResult{command, FollowStatus::Tracking};
     }
   }
 
@@ -162,14 +151,15 @@ PurePursuit::Result PurePursuit::compute(const Pose2D & robot, const Path & path
     params_.max_angular_vel);
 
   const Twist2D command{Eigen::Vector2d{linear_vel_, 0.0}, angular_vel};
-  return Result{command, Status::Tracking, target, path[target].position};
+  return FollowResult{command, FollowStatus::Tracking};
 }
 
-void PurePursuit::reset() noexcept
+void PurePursuit::reset_derived() noexcept
 {
   nearest_index_ = 0;
   linear_vel_ = 0.0;
   yaw_aligned_ = false;
+  lookahead_ = Lookahead{};
 }
 
 }  // namespace eltanin::control
