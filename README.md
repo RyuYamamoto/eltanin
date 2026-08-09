@@ -210,11 +210,22 @@ When the `Free` cells leave start and goal disconnected — a doorway the robot 
 `NarrowPassageFallback` retries once with `Traversability::Circumscribed` opened up, charging its
 `penalty` per metre of band used so it crosses where the band is thinnest, and marks the result with
 `PlanResult::narrow_passage()`. **It is off by default and unsafe to switch on blindly:**
-`Circumscribed` means a collision is *possible depending on heading*, and both planners only check the
-vehicle reference point, so the returned path can put the footprint through a wall. Measured on a
+`Circumscribed` means a collision is *possible depending on heading*, and A* only checks the vehicle
+reference point, so the returned path can put the footprint through a wall. **Hybrid A* has a better
+answer: give it `HybridAStarParams::footprint` and it enters the band only at headings where the
+outline actually clears** (see below), which needs no fallback at all. Measured on a
 0.44 x 0.30 m robot, a 0.30 m gap yields a path where 10 of 101 poses (A*) or 9 of 72 (Hybrid A*)
 collide. If you enable it, verify every pose with `collision::check_footprint_exact()` before
 following. `docs/planner-design.md` §14.6 has the numbers.
+
+Give `HybridAStarParams::footprint` the body outline and the search stops treating the inflation band
+as a wall: a `Free` cell is taken as before, a `Circumscribed` cell is accepted only when the outline
+*at that heading* clears every obstacle cell, and an `Inscribed` cell is always refused. Since `Free`
+needs `2 x circumscribed_radius` of corridor, this is the difference between planning and not
+planning: for a 0.387 x 0.240 m body (`circumscribed_radius` 0.266 m) a 0.30 m corridor is
+`Unreachable` without the outline and drivable with zero footprint collisions with it, while a 0.20 m
+corridor stays `Unreachable` because the body genuinely does not fit. On an open map the path is
+bit-identical either way, so the check costs nothing where it is not needed.
 
 Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
 `heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
