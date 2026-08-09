@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include <numbers>
 #include <optional>
 
 namespace
@@ -103,7 +104,7 @@ TEST(FootprintAwareSearch, ACorridorNarrowerThanTheCircumscribedCircleIsStillDri
 
   HybridAStarParams blind;
   HybridAStarParams aware;
-  aware.footprint = body();
+  aware.common.footprint = body();
 
   const auto without = plan_hybrid_astar(scene.inflated, scene.model, start, goal, blind);
   const auto with = plan_hybrid_astar(scene.inflated, scene.model, start, goal, aware);
@@ -116,7 +117,7 @@ TEST(FootprintAwareSearch, ACorridorNarrowerThanTheCircumscribedCircleIsStillDri
 TEST(FootprintAwareSearch, NeverReturnsAPathWhoseFootprintTouchesAnObstacle)
 {
   HybridAStarParams aware;
-  aware.footprint = body();
+  aware.common.footprint = body();
 
   for (const int cells : {8, 10, 12, 16, 20, 24}) {
     const Scene scene = corridor(cells);
@@ -139,7 +140,7 @@ TEST(FootprintAwareSearch, ACorridorNarrowerThanTheBodyStaysUnreachable)
   const Pose2D goal{scene.inflated.geometry().map_to_world(180, 40), 0.0};
 
   HybridAStarParams aware;
-  aware.footprint = body();
+  aware.common.footprint = body();
 
   EXPECT_FALSE(plan_hybrid_astar(scene.inflated, scene.model, start, goal, aware).has_value());
 }
@@ -153,7 +154,7 @@ TEST(FootprintAwareSearch, AnOpenMapPlansTheSamePathWithOrWithoutTheOutline)
 
   HybridAStarParams blind;
   HybridAStarParams aware;
-  aware.footprint = body();
+  aware.common.footprint = body();
 
   const auto without = plan_hybrid_astar(scene.inflated, scene.model, start, goal, blind);
   const auto with = plan_hybrid_astar(scene.inflated, scene.model, start, goal, aware);
@@ -165,4 +166,51 @@ TEST(FootprintAwareSearch, AnOpenMapPlansTheSamePathWithOrWithoutTheOutline)
     EXPECT_EQ((*without)[i].position.x(), (*with)[i].position.x()) << "pose " << i;
     EXPECT_EQ((*without)[i].position.y(), (*with)[i].position.y()) << "pose " << i;
   }
+}
+
+namespace
+{
+
+/// An L-shaped corridor `cells` wide: no straight analytic shot exists, so the search must work.
+Scene bent_corridor(int cells)
+{
+  const auto radii = CollisionRadii::from_footprint(body(), 0.55);
+  const auto inflation = InflationCostModel::create(*radii, 10.0);
+  Costmap raw(MapGeometry(160, 160, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 10; mx < 80 + cells; ++mx) {
+    for (int my = 80; my < 80 + cells; ++my) {
+      raw(mx, my) = FREE_SPACE;
+    }
+  }
+  for (int my = 10; my < 80 + cells; ++my) {
+    for (int mx = 80; mx < 80 + cells; ++mx) {
+      raw(mx, my) = FREE_SPACE;
+    }
+  }
+  Costmap inflated = raw;
+  eltanin::map::InflationLayer(*inflation, false).update_costs(inflated);
+  return Scene{std::move(raw), std::move(inflated),
+               CostTraversabilityModel(inflation->circumscribed_cost(), false)};
+}
+
+}  // namespace
+
+TEST(FootprintAwareSearch, TurnsACornerInACorridorNoAnalyticShotCanCross)
+{
+  // 0.35 m of corridor bent through a right angle: only the search can find its way round.
+  const Scene scene = bent_corridor(14);
+  // Both ends sit far enough in that the body, whose origin is off centre, stays inside.
+  const Pose2D start{scene.inflated.geometry().map_to_world(22, 86), 0.0};
+  const Pose2D goal{scene.inflated.geometry().map_to_world(86, 22), -std::numbers::pi / 2.0};
+
+  HybridAStarParams aware;
+  aware.common.footprint = body();
+  aware.minimum_turning_radius = 0.15;
+
+  const auto path = plan_hybrid_astar(scene.inflated, scene.model, start, goal, aware);
+
+  ASSERT_TRUE(path.has_value()) << to_string(path.error());
+  EXPECT_EQ(footprint_collisions(*path, scene), 0u);
+  // Going round the corner means the path is far longer than the straight-line distance.
+  EXPECT_GT(eltanin::path_length(*path), 2.0);
 }

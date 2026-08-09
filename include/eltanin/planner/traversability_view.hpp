@@ -18,11 +18,14 @@
 #include <eltanin/core/traversability.hpp>
 #include <eltanin/core/types.hpp>
 #include <eltanin/map/cell_map.hpp>
+#include <eltanin/core/polygon.hpp>
+#include <eltanin/map/crop.hpp>
 #include <eltanin/map/map_geometry.hpp>
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -152,6 +155,43 @@ private:
   std::uint8_t limit_{FREE_CELL};
   double circumscribed_penalty_{0.0};
 };
+
+/// True when the body outline at this pose keeps clear of every cell that is an obstacle itself.
+[[nodiscard]] inline bool footprint_fits(
+  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
+{
+  const map::MapGeometry & geometry = grid.geometry();
+  const Polygon2D outline = transform(footprint, pose);
+  const std::optional<map::CellRect> rect = map::bounding_cells(geometry, outline.vertices(), 0);
+  if (!rect.has_value()) {
+    return false;
+  }
+  for (int my = rect->min_y; my <= rect->max_y; ++my) {
+    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
+      if (grid.blocked(mx, my) && contains(outline, geometry.map_to_world(mx, my))) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/// Free needs no outline, the band needs one at this heading, and Inscribed always collides.
+[[nodiscard]] inline bool pose_is_usable(
+  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
+{
+  if (grid.traversable(pose.position)) {
+    return true;
+  }
+  if (footprint.empty()) {
+    return false;
+  }
+  const std::optional<map::MapIndex> index = grid.geometry().world_to_map(pose.position);
+  if (!index.has_value() || grid.at(index->x, index->y) != Traversability::Circumscribed) {
+    return false;
+  }
+  return footprint_fits(grid, footprint, pose);
+}
 
 }  // namespace eltanin::planner
 

@@ -26,6 +26,7 @@
 #include <eltanin/planner/traversable_search.hpp>
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 
 namespace eltanin::planner
@@ -46,6 +47,8 @@ struct PlannerParams
   /// Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
   int start_search_radius_cells{8};
   NarrowPassageFallback narrow_passage{};
+  /// Body outline; given one, the band is usable at headings where it actually clears.
+  Polygon2D footprint{};
 };
 
 namespace detail
@@ -137,12 +140,20 @@ private:
     const Pose2D & goal, const TraversabilityPolicy & policy) const
   {
     const map::MapGeometry & geometry = map.geometry();
+    const TraversabilityView view{geometry, grid, policy};
     // A blocked goal is reported rather than silently moved away from the requested target.
-    if (model.classify(map(goal_index.x, goal_index.y)) > policy.limit) {
+    if (
+      model.classify(map(goal_index.x, goal_index.y)) > policy.limit &&
+      !pose_is_usable(view, params_.footprint, goal)) {
       return PlanResult{PlannerError::GoalBlocked};
     }
-    const auto search_start = find_nearest_traversable(
-      map, model, start_index, params_.start_search_radius_cells, policy.limit);
+    // A start the body already fits at needs no rescue, even when its cell is only in the band.
+    std::optional<map::MapIndex> search_start = start_index;
+    if (!view.traversable(start_index.x, start_index.y) &&
+        !pose_is_usable(view, params_.footprint, start)) {
+      search_start = find_nearest_traversable(
+        map, model, start_index, params_.start_search_radius_cells, policy.limit);
+    }
     if (!search_start.has_value()) {
       return PlanResult{PlannerError::StartRescueFailed};
     }
@@ -151,9 +162,7 @@ private:
     if (search_start->x != start_index.x || search_start->y != start_index.y) {
       effective_start.position = geometry.map_to_world(search_start->x, search_start->y);
     }
-    return plan_on_grid(PlanQuery{
-      TraversabilityView{geometry, grid, policy}, *search_start, goal_index, effective_start,
-      goal});
+    return plan_on_grid(PlanQuery{view, *search_start, goal_index, effective_start, goal});
   }
 
   PlannerParams params_;

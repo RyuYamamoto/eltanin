@@ -160,43 +160,6 @@ bool motion_step_is_usable(
   return motion_step / turning_radius >= bin_width || chord >= cell_diagonal;
 }
 
-/// True when the body outline at this pose covers the centre of a cell that is the obstacle itself.
-bool footprint_hits_obstacle(
-  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
-{
-  const map::MapGeometry & geometry = grid.geometry();
-  const Polygon2D outline = transform(footprint, pose);
-  const std::optional<map::CellRect> rect = map::bounding_cells(geometry, outline.vertices(), 0);
-  if (!rect.has_value()) {
-    return true;
-  }
-  for (int my = rect->min_y; my <= rect->max_y; ++my) {
-    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
-      if (grid.blocked(mx, my) && contains(outline, geometry.map_to_world(mx, my))) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/// Free needs no outline, the band needs one at this heading, and Inscribed always collides.
-bool pose_is_usable(
-  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
-{
-  if (grid.traversable(pose.position)) {
-    return true;
-  }
-  if (footprint.empty()) {
-    return false;
-  }
-  const std::optional<map::MapIndex> index = grid.geometry().world_to_map(pose.position);
-  if (!index.has_value() || grid.at(index->x, index->y) != Traversability::Circumscribed) {
-    return false;
-  }
-  return !footprint_hits_obstacle(grid, footprint, pose);
-}
-
 /// Only the interior of the primitive; the caller has already accepted the end pose.
 bool interior_is_free(
   const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & from, double travel,
@@ -283,7 +246,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (dubins->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, params.footprint, *dubins, collision_check_step)) {
+    if (!curve_is_free(grid, params.common.footprint, *dubins, collision_check_step)) {
       return std::nullopt;
     }
     append_run(samples, *dubins, 0.0, dubins->length(), output_step);
@@ -302,7 +265,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (reeds_shepp->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, params.footprint, *reeds_shepp, collision_check_step)) {
+    if (!curve_is_free(grid, params.common.footprint, *reeds_shepp, collision_check_step)) {
       return std::nullopt;
     }
     // Each cusp ends a run, so a direction change always lands on a pose the follower can see.
@@ -339,8 +302,15 @@ std::optional<std::vector<Pose2D>> connect_goal(
 }
 
 /// Cost to reach the goal cell over free cells, ignoring the turning radius; infinity when cut off.
-std::vector<float> distance_to_goal(const TraversabilityView & grid, const map::MapIndex & goal)
+std::vector<float> distance_to_goal(
+  const TraversabilityView & grid, const map::MapIndex & goal, bool allow_band)
 {
+  // With an outline the band is a candidate, so connectivity has to be judged over it too.
+  const auto passable = [&](int mx, int my) {
+    return grid.traversable(mx, my) ||
+           (allow_band && grid.geometry().in_bounds(mx, my) &&
+            grid.at(mx, my) == Traversability::Circumscribed);
+  };
   const map::MapGeometry & geometry = grid.geometry();
   const std::size_t cells = grid.cell_count();
   const auto size_x = static_cast<std::size_t>(geometry.size_x());
@@ -364,14 +334,14 @@ std::vector<float> distance_to_goal(const TraversabilityView & grid, const map::
     for (std::size_t k = 0; k < NEIGHBOR_DX.size(); ++k) {
       const int nx = mx + NEIGHBOR_DX[k];
       const int ny = my + NEIGHBOR_DY[k];
-      if (!grid.traversable(nx, ny)) {
+      if (!passable(nx, ny)) {
         continue;
       }
       const bool is_diagonal = NEIGHBOR_DX[k] != 0 && NEIGHBOR_DY[k] != 0;
       // Corner cutting is forbidden here too, so the two searches agree on what is connected.
       if (
         is_diagonal &&
-        (!grid.traversable(mx + NEIGHBOR_DX[k], my) || !grid.traversable(mx, my + NEIGHBOR_DY[k]))) {
+        (!passable(mx + NEIGHBOR_DX[k], my) || !passable(mx, my + NEIGHBOR_DY[k]))) {
         continue;
       }
       const auto neighbor = static_cast<std::uint32_t>(geometry.index(nx, ny));
@@ -458,8 +428,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   const map::MapGeometry & geometry = grid.geometry();
   const std::size_t cells = grid.cell_count();
   assert(cells > 0);
-  assert(grid.traversable(query.start_index.x, query.start_index.y));
-  assert(grid.traversable(query.goal_index.x, query.goal_index.y));
+  assert(pose_is_usable(grid, params.common.footprint, query.start));
+  assert(pose_is_usable(grid, params.common.footprint, query.goal));
 
   const double resolution = geometry.resolution();
   const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
@@ -501,7 +471,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   };
   // Distance over free cells beats the straight line: a wall between the two is what makes a
   // Euclidean heuristic expand the whole room (§13.19).
-  const std::vector<float> cost_to_go = distance_to_goal(grid, query.goal_index);
+  const std::vector<float> cost_to_go =
+    distance_to_goal(grid, query.goal_index, !params.common.footprint.empty());
   const auto heuristic = [&](const Pose2D & pose) {
     const double straight = (query.goal.position - pose.position).norm();
     const std::optional<map::MapIndex> cell = geometry.world_to_map(pose.position);
@@ -631,7 +602,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       const Pose2D successor =
         propagate(current.pose, travel_of(motions[mode]), turn_of(motions[mode]));
       const auto successor_index = geometry.world_to_map(successor.position);
-      if (!successor_index.has_value() || !pose_is_usable(grid, params.footprint, successor)) {
+      if (!successor_index.has_value() || !pose_is_usable(grid, params.common.footprint, successor)) {
         continue;
       }
       // A cell the goal cannot be reached from is not worth a state, let alone an expansion.
@@ -650,7 +621,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
         continue;
       }
       if (!interior_is_free(
-            grid, params.footprint, current.pose, travel_of(motions[mode]),
+            grid, params.common.footprint, current.pose, travel_of(motions[mode]),
             turn_of(motions[mode]), collision_check_step)) {
         continue;
       }

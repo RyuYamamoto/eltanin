@@ -66,8 +66,6 @@ struct HybridAStarParams
   double direction_change_penalty{2.0};
   /// On by default: this search already runs on a corridor, so the distance field is cheap.
   ClearanceCost clearance{0.3, 0.2};
-  /// Body outline; given one, the band is entered only at headings where it actually clears.
-  Polygon2D footprint{};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
   /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.
