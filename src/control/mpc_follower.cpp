@@ -120,6 +120,8 @@ struct MpcFollower::Impl
   detail::MpcProblem problem;
   std::unique_ptr<detail::QpSolver> solver;
   detail::MpcReference reference{};
+  /// The path with the terminal heading replaced; the caller's copy is never touched.
+  Path working_path{};
   std::vector<double> arc_lengths;
   std::vector<double> solution;
   std::vector<Pose2D> predicted;
@@ -195,23 +197,33 @@ FollowResult MpcFollower::follow_on_path(
   const MpcFollowerParams & params = impl.params;
 
   if (!impl.arc_valid) {
-    impl.arc_lengths = cumulative_arc_length(path);
+    impl.working_path = path;
+    // The last pose carries the goal orientation, which is GoalApproach's business, not a heading
+    // to steer towards; the tangent of the final segment is what the body actually travels along.
+    const std::size_t last = impl.working_path.size() - 1;
+    const Eigen::Vector2d final_step =
+      impl.working_path[last].position - impl.working_path[last - 1].position;
+    if (final_step.squaredNorm() > 0.0) {
+      impl.working_path[last].yaw = std::atan2(final_step.y(), final_step.x());
+    }
+    impl.arc_lengths = cumulative_arc_length(impl.working_path);
     impl.arc_valid = true;
   }
+  const Path & route = impl.working_path;
 
   const double terminal_spacing =
-    (path[path.size() - 1].position - path[path.size() - 2].position).norm();
-  if ((path[path.size() - 1].position - state.pose.position).norm() <= 0.5 * terminal_spacing) {
+    (route[route.size() - 1].position - route[route.size() - 2].position).norm();
+  if ((route[route.size() - 1].position - state.pose.position).norm() <= 0.5 * terminal_spacing) {
     reset();
     return FollowResult{Twist2D{}, FollowStatus::GoalReached};
   }
 
   const detail::PathProjection projection =
-    detail::project_on_path(path, impl.arc_lengths, state.pose.position, impl.progress);
+    detail::project_on_path(route, impl.arc_lengths, state.pose.position, impl.progress);
   impl.progress = projection.index;
 
   detail::build_reference(
-    path, impl.arc_lengths, projection, params.prediction_dt, params.max_linear_vel, profile(),
+    route, impl.arc_lengths, projection, params.prediction_dt, params.max_linear_vel, profile(),
     impl.reference);
 
   const Pose2D & anchor = impl.reference.states.front();

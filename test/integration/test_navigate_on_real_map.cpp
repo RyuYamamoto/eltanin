@@ -410,3 +410,59 @@ TEST(NavigationLoopWindow, ClampsTheWindowToTheStaticMap)
   EXPECT_DOUBLE_EQ(upper.x(), last_origin);
   EXPECT_DOUBLE_EQ(upper.y(), last_origin);
 }
+
+#ifdef ELTANIN_WITH_MPC
+TEST_F(NavigateOnRealMap, TheMpcFollowerReachesTheGoalOnTheCleanMap)
+{
+  if (!map_available()) {
+    GTEST_SKIP() << "reference map not available at " << map_yaml();
+  }
+  NavigateConfig config;
+  config.obstacle_fraction = 0.0;
+  config.follower.type = eltanin::control::FollowerType::Mpc;
+
+  const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
+
+  EXPECT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
+  EXPECT_LE(result.final_position_error, config.goal_tolerance);
+  EXPECT_EQ(result.colliding_poses, 0u);
+  EXPECT_EQ(result.replans, 0u);
+  EXPECT_FALSE(result.samples.empty());
+}
+
+TEST_F(NavigateOnRealMap, TheMpcFollowerIsDeterministic)
+{
+  if (!map_available()) {
+    GTEST_SKIP() << "reference map not available at " << map_yaml();
+  }
+  NavigateConfig config;
+  config.obstacle_fraction = 0.0;
+  config.max_sim_time = DETERMINISM_SIM_TIME;
+  config.follower.type = eltanin::control::FollowerType::Mpc;
+
+  const NavigateResult first = eltanin_examples::navigate(static_map(), robot(), config);
+  const NavigateResult second = eltanin_examples::navigate(static_map(), robot(), config);
+
+  ASSERT_EQ(first.outcome, second.outcome);
+  ASSERT_FALSE(first.samples.empty());
+  ASSERT_EQ(first.samples.size(), second.samples.size());
+  for (std::size_t i = 0; i < first.samples.size(); ++i) {
+    EXPECT_TRUE(same_sample(first.samples[i], second.samples[i])) << "cycle " << i << " differs";
+  }
+}
+
+TEST_F(NavigateOnRealMap, TheMpcFollowerReplansAroundAnUnknownObstacle)
+{
+  if (!map_available()) {
+    GTEST_SKIP() << "reference map not available at " << map_yaml();
+  }
+  NavigateConfig config;
+  config.follower.type = eltanin::control::FollowerType::Mpc;
+
+  const NavigateResult result = eltanin_examples::navigate(static_map(), robot(), config);
+
+  EXPECT_EQ(result.outcome, NavigateOutcome::Reached) << result.message;
+  EXPECT_GE(result.replans, 1u);
+  EXPECT_EQ(result.colliding_poses, 0u);
+}
+#endif

@@ -14,6 +14,7 @@
 
 #include <real_map_fixture.hpp>
 
+#include <eltanin/control/follower_factory.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin/core/angle.hpp>
 #include <eltanin/core/geometry.hpp>
@@ -27,10 +28,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -42,11 +45,15 @@ using eltanin::Path;
 using eltanin::Pose2D;
 using eltanin::Traversability;
 using eltanin::Twist2D;
+using eltanin::control::FollowerFactoryParams;
 using eltanin::control::FollowerState;
+using eltanin::control::FollowerType;
 using eltanin::control::FollowResult;
 using eltanin::control::FollowStatus;
+using eltanin::control::PathFollower;
 using eltanin::control::PurePursuit;
 using eltanin::control::PurePursuitParams;
+using eltanin::control::VelocityProfileParams;
 using eltanin::map::Costmap;
 using eltanin::map::CostTraversabilityModel;
 using eltanin::map::MapGeometry;
@@ -74,6 +81,8 @@ struct Sample
   double travelled{0.0};
   std::size_t target_index{0};
   Eigen::Vector2d lookahead_point{Eigen::Vector2d::Zero()};
+  double solve_time{0.0};
+  int solver_iterations{0};
 };
 
 /// Minimum distance from `position` to the path polyline [m].
@@ -90,21 +99,36 @@ double lateral_error(const Path & path, const Eigen::Vector2d & position)
   return minimum;
 }
 
-/// Explicit Euler integration of a differential-drive robot driven by PurePursuit.
-std::vector<Sample> track(PurePursuit & tracker, const Path & path, const Pose2D & start)
+/// Explicit Euler integration of a differential-drive robot driven by the selected follower.
+std::vector<Sample> track(PathFollower & follower, const Path & path, const Pose2D & start)
 {
+  const auto * pursuit = dynamic_cast<const PurePursuit *>(&follower);
+#ifdef ELTANIN_WITH_MPC
+  const auto * mpc = dynamic_cast<const eltanin::control::MpcFollower *>(&follower);
+#endif
   std::vector<Sample> samples;
   samples.reserve(MAX_STEPS / 10);
   Pose2D pose = start;
   double travelled = 0.0;
+  std::optional<Twist2D> measured;
   for (std::size_t step = 0; step < MAX_STEPS; ++step) {
-    const FollowResult result = tracker.follow(FollowerState{pose}, path, CONTROL_DT);
+    const FollowResult result = follower.follow(FollowerState{pose, measured}, path, CONTROL_DT);
     if (result.status != FollowStatus::Tracking) {
       break;
     }
-    samples.push_back(Sample{
-      pose, result.command, lateral_error(path, pose.position), travelled,
-      tracker.lookahead().target_index, tracker.lookahead().point});
+    measured = result.command;
+    Sample sample{pose, result.command, lateral_error(path, pose.position), travelled};
+    if (pursuit != nullptr) {
+      sample.target_index = pursuit->lookahead().target_index;
+      sample.lookahead_point = pursuit->lookahead().point;
+    }
+#ifdef ELTANIN_WITH_MPC
+    if (mpc != nullptr) {
+      sample.solve_time = mpc->solver_stats().solve_time;
+      sample.solver_iterations = mpc->solver_stats().iterations;
+    }
+#endif
+    samples.push_back(sample);
 
     const double v = result.command.linear.x();
     pose.position.x() += v * std::cos(pose.yaw) * CONTROL_DT;
@@ -122,13 +146,15 @@ bool write_trajectory_csv(const std::filesystem::path & file, const std::vector<
   if (!out) {
     return false;
   }
-  out << "t,x,y,yaw,v,w,lateral_error,travelled,target_index,lookahead_x,lookahead_y\n";
+  out << "t,x,y,yaw,v,w,lateral_error,travelled,target_index,lookahead_x,lookahead_y"
+         ",solve_time,solver_iterations\n";
   double time = 0.0;
   for (const Sample & sample : samples) {
     out << time << ',' << sample.pose.position.x() << ',' << sample.pose.position.y() << ','
         << sample.pose.yaw << ',' << sample.command.linear.x() << ',' << sample.command.angular
         << ',' << sample.lateral_error << ',' << sample.travelled << ',' << sample.target_index
-        << ',' << sample.lookahead_point.x() << ',' << sample.lookahead_point.y() << '\n';
+        << ',' << sample.lookahead_point.x() << ',' << sample.lookahead_point.y() << ','
+        << sample.solve_time << ',' << sample.solver_iterations << '\n';
     time += CONTROL_DT;
   }
   return static_cast<bool>(out);
@@ -168,24 +194,76 @@ Intrusions count_intrusions(
 
 int usage(const char * program)
 {
-  std::cerr << "usage: " << program << " <map.yaml> <output_dir>"
+  std::cerr << "usage: " << program << " [--follower <name>] [--velocity-profile] [--vmax <v>]"
+            << " <map.yaml> <output_dir>"
             << " [start_x start_y goal_x goal_y] [lateral_offset]\n"
-            << "  Without explicit poses, a reachable start/goal pair is picked automatically.\n"
+            << "  --follower is pure_pursuit (default) or mpc; --velocity-profile caps the speed\n"
+            << "  by the path curvature. Without explicit poses a reachable pair is picked.\n"
             << "  lateral_offset [m] displaces the robot sideways from the path start, which\n"
             << "  exercises the transient instead of only the steady-state error.\n"
             << "  Writes crop.pgm, path.csv, trajectory.csv and meta.txt into <output_dir>.\n";
   return EXIT_FAILURE;
 }
 
+/// Pulls the named options out of the command line, leaving the positional arguments behind.
+std::optional<FollowerFactoryParams> take_options(std::vector<std::string> & arguments)
+{
+  FollowerFactoryParams params;
+  std::optional<VelocityProfileParams> profile;
+  double max_linear_vel = params.pure_pursuit.desired_linear_vel;
+  std::vector<std::string> rest;
+  for (std::size_t i = 0; i < arguments.size(); ++i) {
+    if (arguments[i] == "--follower" && i + 1 < arguments.size()) {
+      const std::optional<FollowerType> type =
+        eltanin::control::to_follower_type(arguments[++i]);
+      if (!type.has_value()) {
+        return std::nullopt;
+      }
+      params.type = *type;
+    } else if (arguments[i] == "--velocity-profile") {
+      profile = VelocityProfileParams{};
+    } else if (arguments[i] == "--vmax" && i + 1 < arguments.size()) {
+      max_linear_vel = std::stod(arguments[++i]);
+    } else {
+      rest.push_back(arguments[i]);
+    }
+  }
+  arguments = rest;
+
+  params.pure_pursuit.desired_linear_vel = max_linear_vel;
+#ifdef ELTANIN_WITH_MPC
+  params.mpc.max_linear_vel = max_linear_vel;
+#endif
+  if (profile.has_value()) {
+    profile->max_linear_vel = max_linear_vel;
+    params.pure_pursuit.velocity_profile = profile;
+#ifdef ELTANIN_WITH_MPC
+    params.mpc.velocity_profile = profile;
+#endif
+  }
+  return params;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv)
 {
-  if (argc < 3 || argc == 5 || argc == 6 || argc > 8) {
+  std::vector<std::string> arguments(argv + 1, argv + argc);
+  std::optional<FollowerFactoryParams> options;
+  try {
+    options = take_options(arguments);
+  } catch (const std::exception &) {
     return usage(argv[0]);
   }
-  const std::filesystem::path yaml = argv[1];
-  const std::filesystem::path output_dir = argv[2];
+  if (!options.has_value()) {
+    return usage(argv[0]);
+  }
+  const std::size_t count = arguments.size();
+  if (count != 2 && count != 3 && count != 6 && count != 7) {
+    return usage(argv[0]);
+  }
+  const std::filesystem::path yaml = arguments[0];
+  const std::filesystem::path output_dir = arguments[1];
 
   const auto inflated = eltanin_examples::load_and_inflate(yaml);
   if (!inflated.has_value()) {
@@ -198,19 +276,19 @@ int main(int argc, char ** argv)
   Pose2D goal;
   double offset = 0.0;
   try {
-    if (argc >= 7) {
-      start.position = Eigen::Vector2d{std::stod(argv[3]), std::stod(argv[4])};
-      goal.position = Eigen::Vector2d{std::stod(argv[5]), std::stod(argv[6])};
+    if (count >= 6) {
+      start.position = Eigen::Vector2d{std::stod(arguments[2]), std::stod(arguments[3])};
+      goal.position = Eigen::Vector2d{std::stod(arguments[4]), std::stod(arguments[5])};
     }
-    if (argc == 4) {
-      offset = std::stod(argv[3]);
-    } else if (argc == 8) {
-      offset = std::stod(argv[7]);
+    if (count == 3) {
+      offset = std::stod(arguments[2]);
+    } else if (count == 7) {
+      offset = std::stod(arguments[6]);
     }
   } catch (const std::exception &) {
     return usage(argv[0]);
   }
-  if (argc < 7) {
+  if (count < 6) {
     const auto pair = eltanin_examples::auto_start_goal(costmap, model);
     if (!pair.has_value()) {
       return EXIT_FAILURE;
@@ -231,17 +309,27 @@ int main(int argc, char ** argv)
     return EXIT_FAILURE;
   }
 
-  auto tracker = PurePursuit::create(PurePursuitParams{});
-  if (!tracker.has_value()) {
-    std::cerr << "failed to build the tracker\n";
+  eltanin::control::FollowerResult built = eltanin::control::make_path_follower(*options);
+  if (!built.has_value()) {
+    std::cerr << "failed to build the follower: " << eltanin::control::to_string(built.error())
+              << '\n';
     return EXIT_FAILURE;
   }
-  const PurePursuitParams & params = tracker->params();
+  const std::unique_ptr<PathFollower> follower = built.take();
+  const bool profiled = options->pure_pursuit.velocity_profile.has_value();
+  double max_linear_vel_limit = options->pure_pursuit.desired_linear_vel;
+  double max_angular_vel_limit = options->pure_pursuit.max_angular_vel;
+#ifdef ELTANIN_WITH_MPC
+  if (options->type == FollowerType::Mpc) {
+    max_linear_vel_limit = options->mpc.max_linear_vel;
+    max_angular_vel_limit = options->mpc.max_angular_vel;
+  }
+#endif
 
   // The robot starts on the path tangent; `offset` moves it sideways to excite the transient.
   Pose2D robot{path[0].position, path[0].yaw};
   robot.position += offset * Eigen::Vector2d{-std::sin(robot.yaw), std::cos(robot.yaw)};
-  const std::vector<Sample> samples = track(*tracker, path, robot);
+  const std::vector<Sample> samples = track(*follower, path, robot);
 
   double max_error = 0.0;
   double max_error_after_gate = 0.0;
@@ -259,6 +347,17 @@ int main(int argc, char ** argv)
   const double remaining = (path[path.size() - 1].position - last.pose.position).norm();
   const bool reached = samples.size() < MAX_STEPS;
   const Intrusions intrusions = count_intrusions(samples, costmap, model);
+
+  std::vector<double> solve_times;
+  int solver_iterations_max = 0;
+  for (const Sample & sample : samples) {
+    solve_times.push_back(sample.solve_time);
+    solver_iterations_max = std::max(solver_iterations_max, sample.solver_iterations);
+  }
+  std::sort(solve_times.begin(), solve_times.end());
+  const double solve_time_p50 = solve_times[solve_times.size() / 2];
+  const double solve_time_p99 = solve_times[solve_times.size() * 99 / 100];
+  const double solve_time_max = solve_times.back();
 
   std::error_code directory_error;
   std::filesystem::create_directories(output_dir, directory_error);
@@ -288,11 +387,10 @@ int main(int argc, char ** argv)
   }
   write_meta(meta, crop, lower_left, *inflated);
   meta << "control_dt " << CONTROL_DT << '\n'
-       << "desired_linear_vel " << params.desired_linear_vel << '\n'
-       << "max_angular_vel " << params.max_angular_vel << '\n'
-       << "yaw_tolerance " << params.yaw_tolerance << '\n'
-       << "lookahead_time " << params.lookahead_time << '\n'
-       << "min_lookahead_dist " << params.min_lookahead_dist << '\n'
+       << "follower " << eltanin::control::name_of(options->type) << '\n'
+       << "velocity_profile " << static_cast<int>(profiled) << '\n'
+       << "desired_linear_vel " << max_linear_vel_limit << '\n'
+       << "max_angular_vel " << max_angular_vel_limit << '\n'
        << "initial_lateral_offset " << offset << '\n'
        << "path_poses " << path.size() << '\n'
        << "path_length " << eltanin::path_length(path) << '\n'
@@ -308,7 +406,11 @@ int main(int argc, char ** argv)
        << "max_abs_angular_vel " << max_abs_angular_vel << '\n'
        << "trajectory_circumscribed " << intrusions.circumscribed << '\n'
        << "trajectory_inscribed " << intrusions.inscribed << '\n'
-       << "trajectory_outside_map " << intrusions.outside << '\n';
+       << "trajectory_outside_map " << intrusions.outside << '\n'
+       << "solve_time_p50 " << solve_time_p50 << '\n'
+       << "solve_time_p99 " << solve_time_p99 << '\n'
+       << "solve_time_max " << solve_time_max << '\n'
+       << "solver_iterations_max " << solver_iterations_max << '\n';
 
   std::cout << "crop " << crop_geometry.size_x() << " x " << crop_geometry.size_y() << " cells @ "
             << crop_geometry.resolution() << " m\n"
@@ -319,9 +421,12 @@ int main(int argc, char ** argv)
             << " m\n"
             << "lateral error: max " << max_error << " m, after " << TRANSIENT_GATE << " m "
             << max_error_after_gate << " m, final " << last.lateral_error << " m\n"
-            << "command peaks: v " << max_linear_vel << " m/s (limit "
-            << params.desired_linear_vel << "), |w| " << max_abs_angular_vel << " rad/s (limit "
-            << params.max_angular_vel << ")\n"
+            << "command peaks: v " << max_linear_vel << " m/s (limit " << max_linear_vel_limit
+            << "), |w| " << max_abs_angular_vel << " rad/s (limit " << max_angular_vel_limit
+            << ")\n"
+            << "solve time: p50 " << solve_time_p50 * 1e3 << " ms, p99 " << solve_time_p99 * 1e3
+            << " ms, max " << solve_time_max * 1e3 << " ms, iterations max "
+            << solver_iterations_max << '\n'
             << "trajectory left the Free band: circumscribed " << intrusions.circumscribed
             << ", inscribed " << intrusions.inscribed << ", outside map " << intrusions.outside
             << '\n'

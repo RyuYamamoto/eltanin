@@ -46,13 +46,15 @@ int usage(const char * program)
   std::cerr
     << "usage: " << program << " <output_dir> [options]\n"
     << "  Runs the whole eltanin navigation stack in one process, without ROS: map_io ->\n"
-    << "  LayeredCostmap -> selected global planner -> PurePursuit -> VelocityLimiter ->\n"
-    << "  SimpleSimulator, replanning once the observations block the path.\n"
+    << "  LayeredCostmap -> selected global planner -> selected follower ->\n"
+    << "  VelocityLimiter -> SimpleSimulator, replanning once the path is blocked.\n"
     << "options:\n"
     << "  --map <map.yaml>           default: " << DEFAULT_MAP_DIR << "/map.yaml\n"
     << "  --start <x> <y>            default: picked from the map, with --goal\n"
     << "  --goal <x> <y>             default: picked from the map, with --start\n"
     << "  --planner <name>           astar (default) or hybrid-astar\n"
+    << "  --follower <name>          pure_pursuit (default) or mpc\n"
+    << "  --velocity-profile         cap the speed by the path curvature\n"
     << "  --obstacle-fraction <f>    where the unknown obstacle sits on the path; 0 disables it\n"
     << "  --obstacle-half-width <n>  half width of that obstacle [cells]\n"
     << "  --dt <s>                   control period\n"
@@ -106,6 +108,19 @@ std::optional<Arguments> parse(int argc, char ** argv)
         } else {
           return std::nullopt;
         }
+      } else if (option == "--follower" && has_values(argc, i, 1)) {
+        const std::optional<eltanin::control::FollowerType> type =
+          eltanin::control::to_follower_type(argv[++i]);
+        if (!type.has_value()) {
+          return std::nullopt;
+        }
+        arguments.config.follower.type = *type;
+      } else if (option == "--velocity-profile") {
+        const eltanin::control::VelocityProfileParams profile;
+        arguments.config.follower.pure_pursuit.velocity_profile = profile;
+#ifdef ELTANIN_WITH_MPC
+        arguments.config.follower.mpc.velocity_profile = profile;
+#endif
       } else if (option == "--obstacle-fraction" && has_values(argc, i, 1)) {
         arguments.config.obstacle_fraction = std::stod(argv[++i]);
       } else if (option == "--obstacle-half-width" && has_values(argc, i, 1)) {

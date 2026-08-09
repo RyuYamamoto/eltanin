@@ -1,4 +1,5 @@
 add_library(eltanin_control STATIC
+  follower_factory.cpp
   goal_approach.cpp
   path_follower.cpp
   pure_pursuit.cpp

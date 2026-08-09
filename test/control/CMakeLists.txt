@@ -1,4 +1,5 @@
 add_executable(eltanin_test_control
+  test_follower_factory.cpp
   test_goal_approach.cpp
   test_path_follower.cpp
   test_pure_pursuit.cpp

@@ -19,8 +19,9 @@
 
 #include <eltanin/collision/collision_checker.hpp>
 #include <eltanin/collision/velocity_limiter.hpp>
+#include <eltanin/control/follower_factory.hpp>
 #include <eltanin/control/goal_approach.hpp>
-#include <eltanin/control/pure_pursuit.hpp>
+#include <eltanin/control/path_follower.hpp>
 #include <eltanin/core/geometry.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/polygon.hpp>
@@ -44,6 +45,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <ostream>
@@ -109,7 +111,7 @@ struct NavigateConfig
   std::optional<std::pair<eltanin::Pose2D, eltanin::Pose2D>> start_goal{};
   /// Footprint aside, these are the limiter defaults docs/collision-design.md was measured with.
   eltanin::collision::VelocityLimiterParams limiter{.footprint = robot_footprint()};
-  eltanin::control::PurePursuitParams tracker{};
+  eltanin::control::FollowerFactoryParams follower{};
   eltanin::control::GoalApproachParams goal_approach{};
 };
 
@@ -498,7 +500,7 @@ inline NavigateResult navigate(
   using eltanin::collision::CollisionCheck;
   using eltanin::collision::VelocityLimiter;
   using eltanin::control::GoalApproach;
-  using eltanin::control::PurePursuit;
+  using eltanin::control::PathFollower;
   using eltanin::map::Costmap;
   using eltanin::map::InflationLayer;
   using eltanin::map::LayeredCostmap;
@@ -544,16 +546,18 @@ inline NavigateResult navigate(
 
   eltanin::control::GoalApproachParams goal_approach_params = config.goal_approach;
   goal_approach_params.xy_goal_tolerance = config.goal_tolerance;
-  std::optional<PurePursuit> tracker = PurePursuit::create(config.tracker);
+  eltanin::control::FollowerResult built = eltanin::control::make_path_follower(config.follower);
   std::optional<GoalApproach> goal_approach = GoalApproach::create(goal_approach_params);
   std::optional<VelocityLimiter> limiter = VelocityLimiter::create(config.limiter);
-  if (!tracker.has_value() || !goal_approach.has_value() || !limiter.has_value()) {
+  if (!built.has_value() || !goal_approach.has_value() || !limiter.has_value()) {
     result.outcome = NavigateOutcome::ModelFailed;
-    result.message =
-      "PurePursuit::create, GoalApproach::create, or VelocityLimiter::create rejected its "
-      "parameters";
+    result.message = built.has_value()
+                       ? "GoalApproach::create or VelocityLimiter::create rejected its parameters"
+                       : std::string("make_path_follower failed: ") +
+                           eltanin::control::to_string(built.error());
     return result;
   }
+  const std::unique_ptr<PathFollower> follower = built.take();
   const eltanin::Polygon2D & footprint = limiter->footprint();
 
   LayeredCostmap global(static_geometry, eltanin::map::NO_INFORMATION);
@@ -654,6 +658,8 @@ inline NavigateResult navigate(
   const double clearance_reach = robot.distance_model.circumscribed_radius() + CLEARANCE_SEARCH_MARGIN;
   std::size_t leg = 0;
   int zero_cycles = 0;
+  /// What the plant was last told to do; the follower reads it instead of guessing its own state.
+  std::optional<eltanin::Twist2D> measured{};
   double progress_since_replan = 0.0;
   bool path_blocked = false;
   bool at_goal = false;
@@ -708,17 +714,17 @@ inline NavigateResult navigate(
     if (approach.state == GoalApproach::State::Aligning) {
       requested = approach.command;
     } else {
-      const eltanin::control::FollowResult tracking =
-        tracker->follow(eltanin::control::FollowerState{plant.pose()}, *path, config.control_dt);
+      const eltanin::control::FollowResult tracking = follower->follow(
+        eltanin::control::FollowerState{plant.pose(), measured}, *path, config.control_dt);
       if (tracking.status == eltanin::control::FollowStatus::NoPath) {
         result.outcome = NavigateOutcome::NoPath;
-        result.message = "PurePursuit reported NoPath on leg " + std::to_string(leg);
+        result.message = "the follower reported NoPath on leg " + std::to_string(leg);
         break;
       }
       if (tracking.status == eltanin::control::FollowStatus::GoalReached) {
         result.outcome = NavigateOutcome::GoalToleranceFailed;
         result.message =
-          "PurePursuit reached the last path pose before GoalApproach accepted the goal";
+          "the follower reached the last path pose before GoalApproach accepted the goal";
         break;
       }
       requested = eltanin::control::detail::apply_linear_limit(
@@ -787,8 +793,9 @@ inline NavigateResult navigate(
       }
       path = replanned.path();
       goal_approach->reset();
-      // PurePursuit owns progress and heading state for one path; a replacement must reset both.
-      tracker->reset();
+      measured.reset();
+      // A follower owns progress and heading state for one path; a replacement must reset both.
+      follower->reset();
       if (!stopped_too_long) {
         ++result.replans_on_blocked_path;
       }
@@ -803,6 +810,7 @@ inline NavigateResult navigate(
 
     const Eigen::Vector2d before = plant.pose().position;
     plant.update(limited.command, config.control_dt);
+    measured = limited.command;
     progress_since_replan += (plant.pose().position - before).norm();
 
     // Verifying after the step checks the pose the limited command actually produced.
@@ -824,7 +832,7 @@ inline NavigateResult navigate(
       result.outcome = NavigateOutcome::Reached;
     } else {
       result.outcome = NavigateOutcome::GoalToleranceFailed;
-      result.message = "PurePursuit reported GoalReached but the final position error is " +
+      result.message = "the follower reported GoalReached but the final position error is " +
                        std::to_string(result.final_position_error) + " m";
     }
   } else if (result.message.empty()) {
@@ -954,6 +962,7 @@ inline bool write_output_files(
   write_meta(meta, crop, lower_left, robot.inflation, robot.distance_model);
   const eltanin::collision::VelocityLimiterParams & limits = config.limiter;
   meta << "planner " << planner_name(config.planner) << '\n'
+       << "follower " << eltanin::control::name_of(config.follower.type) << '\n'
        << "control_dt " << config.control_dt << '\n'
        << "sensor_decimation " << config.sensor_decimation << '\n'
        << "local_window_size " << config.local_window_size << '\n'
