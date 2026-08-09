@@ -22,7 +22,7 @@ namespace eltanin::control
 struct QpSolverParams
 {
   /// Iteration cap; the follower falls back rather than commanding an unconverged solution.
-  int max_iterations{200};
+  int max_iterations{500};
   /// Absolute residual tolerance; 1e-3 is coarse for a command in m/s.
   double eps_abs{1e-4};
   double eps_rel{1e-4};

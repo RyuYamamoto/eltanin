@@ -110,6 +110,12 @@ protected:
   /// Same bound read by arc length instead of by pose index.
   [[nodiscard]] double limit_at_arc(double arc_length) const noexcept;
 
+  /// nullptr when the profile is disabled, for followers that read the whole bound at once.
+  [[nodiscard]] const VelocityProfile * profile() const noexcept
+  {
+    return profile_.has_value() ? &*profile_ : nullptr;
+  }
+
 private:
   Twist2D last_command_{};
   std::optional<VelocityProfile> profile_{};

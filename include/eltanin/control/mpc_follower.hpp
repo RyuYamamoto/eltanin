@@ -20,7 +20,9 @@
 #include <eltanin/control/velocity_profile.hpp>
 #include <eltanin/core/types.hpp>
 
+#include <memory>
 #include <optional>
+#include <span>
 
 namespace eltanin::control
 {
@@ -42,14 +44,14 @@ struct MpcFollowerParams
   /// Same for the angular velocity [rad/s^2]; unmeasured on hardware, so this one is a guess.
   double max_angular_accel{3.0};
   /// Weight on the error across the reference heading; the quantity the tracking tests measure.
-  double weight_lateral{10.0};
+  double weight_lateral{200.0};
   /// Weight on the error along the reference heading.
   double weight_longitudinal{1.0};
   double weight_yaw{5.0};
   double weight_linear_vel{1.0};
   double weight_angular_vel{1.0};
-  double weight_linear_vel_rate{10.0};
-  double weight_angular_vel_rate{10.0};
+  double weight_linear_vel_rate{1.0};
+  double weight_angular_vel_rate{1.0};
   /// Multiplies the state weights on the last horizon step.
   double terminal_weight_scale{10.0};
   /// Heading error below which the initial in-place alignment ends [rad].
@@ -61,6 +63,56 @@ struct MpcFollowerParams
   QpSolverParams solver{};
   /// nullopt keeps the reference speed at max_linear_vel everywhere.
   std::optional<VelocityProfileParams> velocity_profile{};
+};
+
+/// What the last solve did; recorded for the logs, never read back by the follower itself.
+struct MpcSolverStats
+{
+  /// One of detail::to_string(QpStatus); "unsolved" before the first solve.
+  const char * status{"unsolved"};
+  int iterations{0};
+  double objective{0.0};
+  double solve_time{0.0};
+  int consecutive_failures{0};
+};
+
+/// Reference and prediction of the last cycle; both spans stay valid until the next follow().
+struct MpcPrediction
+{
+  std::span<const Pose2D> reference{};
+  std::span<const Pose2D> predicted{};
+  /// Error across the reference heading [m], positive to the left of it.
+  double lateral_error{0.0};
+  double yaw_error{0.0};
+};
+
+/// Linear time-varying MPC over the differential-drive model, solved as one sparse QP per cycle.
+class MpcFollower : public PathFollower
+{
+public:
+  /// nullopt when a parameter is out of range or the solver backend refuses the problem.
+  static std::optional<MpcFollower> create(const MpcFollowerParams & params);
+
+  MpcFollower(MpcFollower &&) noexcept;
+  MpcFollower & operator=(MpcFollower &&) noexcept;
+  ~MpcFollower() override;
+
+  [[nodiscard]] const MpcPrediction & prediction() const noexcept;
+  [[nodiscard]] const MpcSolverStats & solver_stats() const noexcept;
+  [[nodiscard]] const MpcFollowerParams & params() const noexcept;
+
+protected:
+  [[nodiscard]] FollowResult follow_on_path(
+    const FollowerState & state, const Path & path, double dt) override;
+
+  void reset_derived() noexcept override;
+
+private:
+  struct Impl;
+
+  MpcFollower(std::unique_ptr<Impl> impl, std::optional<VelocityProfile> profile);
+
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace eltanin::control

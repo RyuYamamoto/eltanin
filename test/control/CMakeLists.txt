@@ -7,7 +7,11 @@ add_executable(eltanin_test_control
   test_velocity_profile_tracking.cpp)
 
 if(ELTANIN_ENABLE_MPC)
-  target_sources(eltanin_test_control PRIVATE test_mpc_problem.cpp test_qp_solver.cpp)
+  target_sources(eltanin_test_control PRIVATE
+    test_mpc_follower.cpp
+    test_mpc_problem.cpp
+    test_mpc_tracking.cpp
+    test_qp_solver.cpp)
   # The QP abstraction stays out of the public headers, so the test reaches into src/.
   target_include_directories(eltanin_test_control PRIVATE ${PROJECT_SOURCE_DIR}/src/control)
 endif()
