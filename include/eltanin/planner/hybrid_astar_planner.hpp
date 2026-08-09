@@ -64,7 +64,7 @@ struct HybridAStarParams
   /// Charged once per switch between forward and reverse, as a multiple of one motion step.
   double direction_change_penalty{2.0};
   /// On by default: this search already runs on a corridor, so the distance field is cheap.
-  ClearanceCost clearance{1.0, 0.5};
+  ClearanceCost clearance{0.3, 0.2};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
   /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.

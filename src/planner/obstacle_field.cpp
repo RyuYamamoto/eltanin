@@ -136,16 +136,11 @@ std::vector<float> distance_in_rect(
   transpose(transposed, squared, size_x, size_y);
 
   const auto resolution = static_cast<float>(geometry.resolution());
+  // The edge of a map is not a wall: it is usually just where a corridor was cropped out.
+  const auto span = static_cast<float>(std::hypot(geometry.size_x(), geometry.size_y()));
   for (int y = 0; y < size_y; ++y) {
     for (int x = 0; x < size_x; ++x) {
-      // Driving off the map is no more allowed than driving into a wall, so the border bounds it.
-      const int global_x = min_x + x;
-      const int global_y = min_y + y;
-      const int to_border = std::min(
-        {global_x + 1, global_y + 1, geometry.size_x() - global_x,
-         geometry.size_y() - global_y});
-      const float inside = std::sqrt(squared[at(x, y)]);
-      float metres = std::min(inside, static_cast<float>(to_border)) * resolution;
+      const float metres = std::min(std::sqrt(squared[at(x, y)]), span) * resolution;
       // A window only knows what is inside it, so anything past its reach reads as the reach.
       squared[at(x, y)] = cap > 0.0F ? std::min(metres, cap) : metres;
     }

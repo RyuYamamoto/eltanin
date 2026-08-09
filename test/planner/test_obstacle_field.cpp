@@ -39,13 +39,11 @@ using eltanin::planner::detail::build_obstacle_distance;
 using eltanin::planner::detail::build_traversability_grid;
 using eltanin_test::make_cost_model;
 
-/// Nearest blocked cell by exhaustive search, with the first cell outside the map counting too.
+/// Nearest blocked cell by exhaustive search; the map edge is not one, so it never bounds this.
 double nearest_blocked(const TraversabilityView & view, int mx, int my, double resolution)
 {
   const auto & geometry = view.geometry();
-  double best = static_cast<double>(std::min(
-                  {mx + 1, my + 1, geometry.size_x() - mx, geometry.size_y() - my})) *
-                resolution;
+  double best = std::hypot(geometry.size_x(), geometry.size_y()) * resolution;
   for (int qy = 0; qy < geometry.size_y(); ++qy) {
     for (int qx = 0; qx < geometry.size_x(); ++qx) {
       if (view.traversable(qx, qy)) {
@@ -84,6 +82,21 @@ TEST(ObstacleField, MatchesAnExhaustiveNearestObstacleSearch)
       }
     }
   }
+}
+
+TEST(ObstacleField, TreatsTheMapEdgeAsOpenRatherThanAsAWall)
+{
+  // A cropped corridor has map edges everywhere; taking them for walls would squeeze it shut.
+  Costmap map(MapGeometry(10, 10, 0.1, Vector2d::Zero()), FREE_SPACE);
+  map(9, 9) = LETHAL_OBSTACLE;
+
+  const auto grid = build_traversability_grid(map, make_cost_model());
+  const TraversabilityView view{map.geometry(), grid};
+  const auto distance = build_obstacle_distance(view);
+  const ObstacleField field{map.geometry(), distance};
+
+  // The far corner sits one cell from the edge but nine cells from the only obstacle.
+  EXPECT_NEAR(field.at(0, 0), std::hypot(9.0, 9.0) * 0.1, 1e-5);
 }
 
 TEST(ObstacleField, ReportsZeroOnBlockedCellsAndOutsideTheMap)
