@@ -441,7 +441,8 @@ Path attach_tail(
   return Path{std::move(poses)};
 }
 
-PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
+PlanResult search(
+  const PlanQuery & query, const HybridAStarParams & params, double * shortest_route = nullptr)
 {
   const TraversabilityView & grid = query.grid;
   const map::MapGeometry & geometry = grid.geometry();
@@ -492,6 +493,10 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   // Euclidean heuristic expand the whole room (§13.19).
   const std::vector<float> cost_to_go =
     distance_to_goal(grid, query.goal_index, !params.common.footprint.empty());
+  if (shortest_route != nullptr) {
+    *shortest_route =
+      static_cast<double>(cost_to_go[geometry.index(query.start_index.x, query.start_index.y)]);
+  }
   const auto heuristic = [&](const Pose2D & pose) {
     const double straight = (query.goal.position - pose.position).norm();
     const std::optional<map::MapIndex> cell = geometry.world_to_map(pose.position);
@@ -700,7 +705,29 @@ PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const
 {
   // The state arrays are sized before allocating, but a tight rlimit can still fail the request.
   try {
-    return search(query, params_);
+    double shortest = 0.0;
+    PlanResult roomy = search(query, params_, &shortest);
+    if (!params_.clearance_fallback.enabled) {
+      return roomy;
+    }
+
+    HybridAStarParams tight = params_;
+    tight.clearance = params_.clearance_fallback.clearance;
+    tight.clearance_fallback.enabled = false;
+    if (!roomy.has_value()) {
+      return search(query, tight);
+    }
+    // Demanding room is worth a detour, but not a walk around the building.
+    const double travelled = path_length(*roomy);
+    const double allowed = shortest * (1.0 + params_.clearance_fallback.detour_tolerance);
+    if (!std::isfinite(shortest) || shortest <= 0.0 || travelled <= allowed) {
+      return roomy;
+    }
+    PlanResult direct = search(query, tight);
+    if (!direct.has_value() || path_length(*direct) >= travelled) {
+      return roomy;
+    }
+    return direct;
   } catch (const std::bad_alloc &) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }

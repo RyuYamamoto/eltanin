@@ -30,6 +30,15 @@ inline constexpr std::size_t DEFAULT_MAX_EXPANSIONS = 4000000;
 /// 256 MiB of search state, which covers roughly a 30 m square map at 0.05 m and 72 bins.
 inline constexpr std::size_t DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1024UL;
 
+/// Second attempt with less room demanded, for gaps the roomy pass would rather walk around.
+struct ClearanceFallback
+{
+  bool enabled{true};
+  ClearanceCost clearance{0.5, 0.4};
+  /// Retry once the roomy path is longer than the shortest route by more than this fraction.
+  double detour_tolerance{0.25};
+};
+
 /// What the vehicle can actually do, and therefore what the returned path may contain.
 enum class MotionModel
 {
@@ -65,7 +74,8 @@ struct HybridAStarParams
   /// Charged once per switch between forward and reverse, as a multiple of one motion step.
   double direction_change_penalty{2.0};
   /// On by default: this search already runs on a corridor, so the distance field is cheap.
-  ClearanceCost clearance{0.5, 0.4};
+  ClearanceCost clearance{1.0, 0.6};
+  ClearanceFallback clearance_fallback{};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
   /// Upper bound on the search state arrays; bigger problems fail with StateSpaceTooLarge.
