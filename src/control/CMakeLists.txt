@@ -15,6 +15,7 @@ set_target_properties(eltanin_control PROPERTIES EXPORT_NAME control)
 
 if(ELTANIN_ENABLE_MPC)
   target_sources(eltanin_control PRIVATE
+    mpc_problem.cpp
     qp_solver.cpp
     qp_solver_osqp.cpp)
   # PUBLIC so that a downstream translation unit compiles the headers exactly as we did.
