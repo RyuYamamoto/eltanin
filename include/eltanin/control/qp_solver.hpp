@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#ifndef ELTANIN_SRC__CONTROL__QP_SOLVER_HPP_
-#define ELTANIN_SRC__CONTROL__QP_SOLVER_HPP_
+#ifndef ELTANIN__CONTROL__QP_SOLVER_HPP_
+#define ELTANIN__CONTROL__QP_SOLVER_HPP_
 
 #include <eltanin/control/qp_solver_params.hpp>
 
@@ -118,4 +118,4 @@ std::unique_ptr<QpSolver> make_osqp_solver(
 
 }  // namespace eltanin::control::detail
 
-#endif  // ELTANIN_SRC__CONTROL__QP_SOLVER_HPP_
+#endif  // ELTANIN__CONTROL__QP_SOLVER_HPP_

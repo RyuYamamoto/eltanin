@@ -994,9 +994,12 @@ ELTANIN_MPC_SOLVER_PROVIDER = fetch (既定) | package
   `eltanin_vendor` の `ExternalProject_Add` に 2 行足すだけで有効化できる。オフライン CI もこちらを選べる。
 
 `MpcFollower` は OSQP の型を 1 つも持たない。差し替え時に置き換わるのは `src/control/qp_solver_osqp.cpp`
-1 ファイルである。抽象 (`detail::QpSolver` / `QpStructure` / `QpStats`) は公開ヘッダにせず `src/control/` に
-閉じた (§9.2「利用者が現に存在しないものを public にしない」)。テストは `src/control` を include path に
-足して届かせている。
+1 ファイルである。抽象 (`QpSolver` / `QpStructure` / `QpStats`) と QP の組み立て (`MpcProblem` / `MpcReference`) は
+`eltanin::control::detail` に置いた。**ヘッダ自体は `include/eltanin/control/` に置く。** 内部機構を
+`detail` 名前空間で表し、置き場所はモジュールの公開ツリーに揃えるのが本リポジトリの既存の形であり
+(`planner/clearance_map.hpp` の `detail::build_clearance_map()`、`planner/traversability_view.hpp` の
+`detail::build_traversability_grid()`、`control/goal_approach.hpp` の `detail::apply_linear_limit()`)、
+`src/` は `.cpp` だけに保つ。名前空間で非公開を表すので §9.2 の意図は満たされる。
 
 OSQP のビルド設定は `OSQP_BUILD_SHARED_LIB=OFF` / `OSQP_BUILD_DEMO_EXE=OFF` / `OSQP_BUILD_UNITTESTS=OFF` /
 `OSQP_ALGEBRA_BACKEND=builtin` / `OSQP_ENABLE_INTERRUPT=OFF` / `OSQP_ENABLE_PRINTING=OFF` /

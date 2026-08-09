@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include <mpc_problem.hpp>
+#include <eltanin/control/mpc_problem.hpp>
 
 #include <control/tracking_fixture.hpp>
 #include <eltanin/control/mpc_follower.hpp>

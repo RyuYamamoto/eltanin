@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#ifndef ELTANIN_SRC__CONTROL__MPC_PROBLEM_HPP_
-#define ELTANIN_SRC__CONTROL__MPC_PROBLEM_HPP_
-
-#include "qp_solver.hpp"
+#ifndef ELTANIN__CONTROL__MPC_PROBLEM_HPP_
+#define ELTANIN__CONTROL__MPC_PROBLEM_HPP_
 
 #include <eltanin/control/mpc_follower.hpp>
+#include <eltanin/control/qp_solver.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
@@ -105,4 +104,4 @@ private:
 
 }  // namespace eltanin::control::detail
 
-#endif  // ELTANIN_SRC__CONTROL__MPC_PROBLEM_HPP_
+#endif  // ELTANIN__CONTROL__MPC_PROBLEM_HPP_

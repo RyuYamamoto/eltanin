@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include <qp_solver.hpp>
+#include <eltanin/control/qp_solver.hpp>
 
 #include <eltanin/control/qp_solver_params.hpp>
 

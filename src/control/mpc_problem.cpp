@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include "mpc_problem.hpp"
+#include <eltanin/control/mpc_problem.hpp>
 
 #include <eltanin/core/angle.hpp>
 #include <eltanin/core/differential_drive.hpp>

@@ -14,10 +14,9 @@
 
 #include <eltanin/control/mpc_follower.hpp>
 
-#include "mpc_problem.hpp"
-#include "qp_solver.hpp"
-
 #include <eltanin/control/goal_approach.hpp>
+#include <eltanin/control/mpc_problem.hpp>
+#include <eltanin/control/qp_solver.hpp>
 #include <eltanin/core/angle.hpp>
 
 #include <algorithm>
