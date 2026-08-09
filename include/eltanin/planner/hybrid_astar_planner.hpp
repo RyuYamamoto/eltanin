@@ -77,6 +77,8 @@ struct HybridAStarParams
   double direction_change_penalty{2.0};
   /// On by default: this search already runs on a corridor, so the distance field is cheap.
   ClearanceCost clearance{0.5, 0.4};
+  /// Extra cost per metre of travel through the inflation band, once the outline lets it in.
+  double band_penalty{6.0};
   ClearanceFallback clearance_fallback{};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};

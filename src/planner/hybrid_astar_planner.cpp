@@ -424,14 +424,23 @@ double arrival_cost(
 
 /// Length of a tail, charged for clearance exactly as a primitive would be.
 double tail_cost(
-  const std::vector<Pose2D> & connection, const Pose2D & from, const ObstacleField & field,
-  const ClearanceCost & clearance)
+  const std::vector<Pose2D> & connection, const Pose2D & from, const TraversabilityView & grid,
+  const ObstacleField & field, const HybridAStarParams & params)
 {
+  const bool charges_band = !params.common.footprint.empty();
   double cost = 0.0;
   Eigen::Vector2d previous = from.position;
   for (const Pose2D & pose : connection) {
     const double step = (pose.position - previous).norm();
-    cost += step * (1.0 + clearance_penalty(clearance, field.at(pose.position)));
+    double rate = 1.0 + clearance_penalty(params.clearance, field.at(pose.position));
+    // The tail crosses the same band the search pays for, so it pays the same rate.
+    if (charges_band) {
+      const std::optional<map::MapIndex> cell = grid.geometry().world_to_map(pose.position);
+      if (cell.has_value() && grid.at(cell->x, cell->y) == Traversability::Circumscribed) {
+        rate += params.band_penalty;
+      }
+    }
+    cost += step * rate;
     previous = pose.position;
   }
   return cost;
@@ -539,10 +548,16 @@ PlanResult search(
     clearance = detail::build_obstacle_distance(grid);
   }
   const ObstacleField field{geometry, clearance};
-  // Distance to the walls, plus whatever the relaxed pass charges for using the band at all.
+  // Distance to the walls, plus what the band costs: it is safety margin, not a shortcut.
   const auto surcharge = [&](const map::MapIndex & index) {
-    return clearance_penalty(params.clearance, field.at(index.x, index.y)) +
-           grid.surcharge(index.x, index.y);
+    double extra = clearance_penalty(params.clearance, field.at(index.x, index.y)) +
+                   grid.surcharge(index.x, index.y);
+    if (
+      !params.common.footprint.empty() && grid.geometry().in_bounds(index.x, index.y) &&
+      grid.at(index.x, index.y) == Traversability::Circumscribed) {
+      extra += params.band_penalty;
+    }
+    return extra;
   };
   ControlSet primitives{};
   const std::span<const Motion> motions = control_set(params.motion_model, primitives);
@@ -648,7 +663,7 @@ PlanResult search(
         }
         // Scored rather than taken: a tail that hugs a wall must lose to a search that does not.
         const double cost =
-          current.g + tail_cost(*connection, current.pose, field, params.clearance);
+          current.g + tail_cost(*connection, current.pose, grid, field, params);
         if (cost < best_cost) {
           best_cost = cost;
           best_path = attach_tail(
@@ -724,7 +739,8 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
     params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
     params_.steering_change_penalty >= 0.0 && std::isfinite(params_.reverse_penalty) &&
     params_.reverse_penalty > 0.0 && std::isfinite(params_.direction_change_penalty) &&
-    params_.direction_change_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
+    params_.direction_change_penalty >= 0.0 && std::isfinite(params_.band_penalty) &&
+    params_.band_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
   if (!valid) {
     throw std::invalid_argument("invalid HybridAStarParams");
   }
