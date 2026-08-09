@@ -30,7 +30,7 @@ namespace eltanin::planner
 namespace detail
 {
 
-/// Exact Euclidean distance [m] to the nearest cell this pass may not enter; off the map counts.
+/// Exact Euclidean distance [m] to the nearest obstacle cell, not to the inflation around it.
 std::vector<float> build_obstacle_distance(const TraversabilityView & grid);
 
 }  // namespace detail

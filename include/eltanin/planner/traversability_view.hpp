@@ -61,6 +61,9 @@ TraversabilityGrid build_traversability_grid(const Map & map, const Model & mode
         if (model.is_obstacle(map(mx, my))) {
           cell |= OBSTACLE_BIT;
         }
+      } else if (cell == static_cast<std::uint8_t>(Traversability::Inscribed)) {
+        // Without an occupancy answer the inscribed band is the closest conservative stand-in.
+        cell |= OBSTACLE_BIT;
       }
       grid[geometry.index(mx, my)] = cell;
     }

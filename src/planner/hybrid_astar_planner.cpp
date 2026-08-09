@@ -212,6 +212,10 @@ void append_run(
   std::vector<Pose2D> & samples, const Curve & curve, double from, double to, double output_step)
 {
   const double span = to - from;
+  // A run of no length would emit a pose on top of the previous one, which is not a primitive.
+  if (span <= SAME_HEADING) {
+    return;
+  }
   const int count = std::max(1, static_cast<int>(std::lround(span / output_step)));
   for (int i = 1; i <= count; ++i) {
     samples.push_back(
@@ -399,6 +403,21 @@ double arrival_cost(
   return dubins->length() + turn * turning_radius;
 }
 
+/// Length of a tail, charged for clearance exactly as a primitive would be.
+double tail_cost(
+  const std::vector<Pose2D> & connection, const Pose2D & from, const ObstacleField & field,
+  const ClearanceCost & clearance)
+{
+  double cost = 0.0;
+  Eigen::Vector2d previous = from.position;
+  for (const Pose2D & pose : connection) {
+    const double step = (pose.position - previous).norm();
+    cost += step * (1.0 + clearance_penalty(clearance, field.at(pose.position)));
+    previous = pose.position;
+  }
+  return cost;
+}
+
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
 Path attach_tail(
   std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
@@ -550,7 +569,13 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
 
   std::size_t expansions = 0;
   std::size_t skipped_attempts = 0;
+  double best_cost = std::numeric_limits<double>::infinity();
+  std::optional<Path> best_path;
   while (!open.empty()) {
+    // The heuristic is a lower bound, so nothing left in the queue can beat the tail already found.
+    if (best_path.has_value() && open.top().first >= best_cost) {
+      break;
+    }
     const std::uint32_t current_id = open.top().second;
     open.pop();
     const Node current = nodes[current_id];
@@ -583,16 +608,25 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       for (std::size_t i = 0; i < target_count; ++i) {
         const auto connection =
           connect_goal(grid, current.pose, targets[i], params, collision_check_step, motion_step);
-        if (connection.has_value()) {
-          return PlanResult{attach_tail(
-            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step)};
+        if (!connection.has_value()) {
+          continue;
         }
+        // Scored rather than taken: a tail that hugs a wall must lose to a search that does not.
+        const double cost =
+          current.g + tail_cost(*connection, current.pose, field, params.clearance);
+        if (cost < best_cost) {
+          best_cost = cost;
+          best_path = attach_tail(
+            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step);
+        }
+        break;
       }
     } else {
       ++skipped_attempts;
     }
     if (params.max_expansions != 0 && expansions >= params.max_expansions) {
-      return PlanResult{PlannerError::ExpansionLimitReached};
+      return best_path.has_value() ? PlanResult{std::move(*best_path)}
+                                   : PlanResult{PlannerError::ExpansionLimitReached};
     }
     ++expansions;
 
@@ -632,6 +666,9 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       best_node[successor_state] = successor_id;
       open.push(OpenEntry{static_cast<float>(tentative + heuristic(successor)), successor_id});
     }
+  }
+  if (best_path.has_value()) {
+    return PlanResult{std::move(*best_path)};
   }
   return PlanResult{PlannerError::Unreachable};
 }

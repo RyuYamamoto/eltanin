@@ -124,7 +124,7 @@ std::vector<float> distance_in_rect(
   std::vector<float> squared(cells, 0.0F);
   for (int y = 0; y < size_y; ++y) {
     for (int x = 0; x < size_x; ++x) {
-      squared[at(x, y)] = grid.traversable(min_x + x, min_y + y) ? UNREACHED : 0.0F;
+      squared[at(x, y)] = grid.blocked(min_x + x, min_y + y) ? 0.0F : UNREACHED;
     }
   }
 
