@@ -197,6 +197,7 @@ int usage(const char * program)
   std::cerr << "usage: " << program << " [--follower <name>] [--velocity-profile] [--vmax <v>]"
             << " <map.yaml> <output_dir>"
             << " [start_x start_y goal_x goal_y] [lateral_offset]\n"
+            << "  [--curvature-window <m>]\n"
             << "  --follower is pure_pursuit (default) or mpc; --velocity-profile caps the speed\n"
             << "  by the path curvature. Without explicit poses a reachable pair is picked.\n"
             << "  lateral_offset [m] displaces the robot sideways from the path start, which\n"
@@ -210,6 +211,7 @@ std::optional<FollowerFactoryParams> take_options(std::vector<std::string> & arg
 {
   FollowerFactoryParams params;
   std::optional<VelocityProfileParams> profile;
+  std::optional<double> window;
   double max_linear_vel = params.pure_pursuit.desired_linear_vel;
   std::vector<std::string> rest;
   for (std::size_t i = 0; i < arguments.size(); ++i) {
@@ -224,6 +226,8 @@ std::optional<FollowerFactoryParams> take_options(std::vector<std::string> & arg
       profile = VelocityProfileParams{};
     } else if (arguments[i] == "--vmax" && i + 1 < arguments.size()) {
       max_linear_vel = std::stod(arguments[++i]);
+    } else if (arguments[i] == "--curvature-window" && i + 1 < arguments.size()) {
+      window = std::stod(arguments[++i]);
     } else {
       rest.push_back(arguments[i]);
     }
@@ -236,6 +240,9 @@ std::optional<FollowerFactoryParams> take_options(std::vector<std::string> & arg
 #endif
   if (profile.has_value()) {
     profile->max_linear_vel = max_linear_vel;
+    if (window.has_value()) {
+      profile->curvature_window = *window;
+    }
     params.pure_pursuit.velocity_profile = profile;
 #ifdef ELTANIN_WITH_MPC
     params.mpc.velocity_profile = profile;
