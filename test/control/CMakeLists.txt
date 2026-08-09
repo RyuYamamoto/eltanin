@@ -2,7 +2,9 @@ add_executable(eltanin_test_control
   test_goal_approach.cpp
   test_path_follower.cpp
   test_pure_pursuit.cpp
-  test_pure_pursuit_tracking.cpp)
+  test_pure_pursuit_tracking.cpp
+  test_velocity_profile.cpp
+  test_velocity_profile_tracking.cpp)
 
 target_link_libraries(eltanin_test_control PRIVATE eltanin::control GTest::gtest_main)
 target_include_directories(eltanin_test_control PRIVATE ${PROJECT_SOURCE_DIR}/test)

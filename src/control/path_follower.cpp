@@ -14,7 +14,9 @@
 
 #include <eltanin/control/path_follower.hpp>
 
+#include <cassert>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace eltanin::control
@@ -41,6 +43,14 @@ FollowResult PathFollower::follow(const FollowerState & state, const Path & path
     return FollowResult{Twist2D{}, FollowStatus::GoalReached};
   }
 
+  if (profile_.has_value()) {
+    if (!profile_->built()) {
+      profile_->build(path);
+      profile_path_size_ = path.size();
+    }
+    assert(profile_path_size_ == path.size() && "a new path needs reset() before follow()");
+  }
+
   const FollowResult result = follow_on_path(state, path, dt);
   last_command_ = result.command;
   return result;
@@ -49,7 +59,31 @@ FollowResult PathFollower::follow(const FollowerState & state, const Path & path
 void PathFollower::reset() noexcept
 {
   last_command_ = Twist2D{};
+  if (profile_.has_value()) {
+    profile_->clear();
+  }
+  profile_path_size_ = 0;
   reset_derived();
+}
+
+std::optional<double> PathFollower::velocity_limit_at(double arc_length) const noexcept
+{
+  if (!profile_.has_value() || !profile_->built()) {
+    return std::nullopt;
+  }
+  return profile_->at_arc(arc_length);
+}
+
+double PathFollower::limit_at_index(std::size_t index) const noexcept
+{
+  return profile_.has_value() ? profile_->at_index(index)
+                              : std::numeric_limits<double>::infinity();
+}
+
+double PathFollower::limit_at_arc(double arc_length) const noexcept
+{
+  return profile_.has_value() ? profile_->at_arc(arc_length)
+                              : std::numeric_limits<double>::infinity();
 }
 
 }  // namespace eltanin::control

@@ -14,6 +14,8 @@
 
 #include <eltanin/control/path_follower.hpp>
 
+#include <eltanin/control/velocity_profile.hpp>
+
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -33,6 +35,8 @@ using eltanin::control::FollowerType;
 using eltanin::control::FollowResult;
 using eltanin::control::FollowStatus;
 using eltanin::control::PathFollower;
+using eltanin::control::VelocityProfile;
+using eltanin::control::VelocityProfileParams;
 using eltanin::control::name_of;
 using eltanin::control::to_follower_type;
 using eltanin::control::to_string;
@@ -46,6 +50,16 @@ constexpr double kDt = 0.05;
 class RecordingFollower : public PathFollower
 {
 public:
+  RecordingFollower() = default;
+
+  explicit RecordingFollower(const VelocityProfileParams & profile)
+  : PathFollower(VelocityProfile::create(profile))
+  {
+  }
+
+  using PathFollower::limit_at_arc;
+  using PathFollower::limit_at_index;
+
   std::size_t follow_calls{0};
   std::size_t reset_calls{0};
   Twist2D seen_twist{};
@@ -210,4 +224,36 @@ TEST(PathFollower, EveryStatusHasAName)
     EXPECT_FALSE(std::string(to_string(status)).empty());
     EXPECT_NE(std::string(to_string(status)), "unknown");
   }
+}
+
+TEST(PathFollower, TheProfileIsBuiltOnceAndRebuiltAfterReset)
+{
+  RecordingFollower follower{VelocityProfileParams{}};
+  const Path path = make_path(40);
+
+  EXPECT_FALSE(follower.velocity_limit_at(0.0).has_value());
+  EXPECT_EQ(follower.limit_at_index(0), kInf);
+
+  static_cast<void>(follower.follow(FollowerState{}, path, kDt));
+  const std::optional<double> built = follower.velocity_limit_at(0.0);
+  ASSERT_TRUE(built.has_value());
+  EXPECT_DOUBLE_EQ(*built, VelocityProfileParams{}.max_linear_vel);
+  EXPECT_DOUBLE_EQ(follower.limit_at_index(0), *built);
+
+  static_cast<void>(follower.follow(FollowerState{}, path, kDt));
+  EXPECT_DOUBLE_EQ(*follower.velocity_limit_at(0.0), *built);
+
+  follower.reset();
+  EXPECT_FALSE(follower.velocity_limit_at(0.0).has_value());
+  static_cast<void>(follower.follow(FollowerState{}, path, kDt));
+  EXPECT_TRUE(follower.velocity_limit_at(0.0).has_value());
+}
+
+TEST(PathFollower, WithoutAProfileEveryBoundIsInfinite)
+{
+  RecordingFollower follower;
+  static_cast<void>(follower.follow(FollowerState{}, make_path(40), kDt));
+  EXPECT_FALSE(follower.velocity_limit_at(0.0).has_value());
+  EXPECT_EQ(follower.limit_at_index(0), kInf);
+  EXPECT_EQ(follower.limit_at_arc(1.0), kInf);
 }

@@ -16,6 +16,7 @@
 #define ELTANIN__CONTROL__PURE_PURSUIT_HPP_
 
 #include <eltanin/control/path_follower.hpp>
+#include <eltanin/control/velocity_profile.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
@@ -23,6 +24,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <utility>
 
 namespace eltanin::control
 {
@@ -39,6 +41,8 @@ struct PurePursuitParams
   double lookahead_time{0.1};
   /// Constant part of the lookahead distance; also the curvature denominator floor [m].
   double min_lookahead_dist{0.3};
+  /// nullopt leaves the geometry alone; a value caps the command by the path curvature.
+  std::optional<VelocityProfileParams> velocity_profile{};
 };
 
 class PurePursuit : public PathFollower
@@ -66,7 +70,13 @@ protected:
   void reset_derived() noexcept override;
 
 private:
-  explicit PurePursuit(const PurePursuitParams & params) : params_(params) {}
+  PurePursuit(const PurePursuitParams & params, std::optional<VelocityProfile> profile)
+  : PathFollower(std::move(profile)), params_(params)
+  {
+  }
+
+  /// The geometry alone, before the profile bound is composed with its command.
+  [[nodiscard]] FollowResult pursue(const FollowerState & state, const Path & path, double dt);
 
   PurePursuitParams params_{};
   /// Search progress on the current path; reset() is required when the path changes.

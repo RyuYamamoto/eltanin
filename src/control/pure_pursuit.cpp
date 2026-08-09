@@ -14,6 +14,7 @@
 
 #include <eltanin/control/pure_pursuit.hpp>
 
+#include <eltanin/control/goal_approach.hpp>
 #include <eltanin/core/angle.hpp>
 
 #include <algorithm>
@@ -92,11 +93,30 @@ std::optional<PurePursuit> PurePursuit::create(const PurePursuitParams & params)
   if (params.lookahead_time < 0.0 || params.min_lookahead_dist <= 0.0) {
     return std::nullopt;
   }
-  return PurePursuit(params);
+
+  std::optional<VelocityProfile> profile;
+  if (params.velocity_profile.has_value()) {
+    profile = VelocityProfile::create(*params.velocity_profile);
+    if (!profile.has_value()) {
+      return std::nullopt;
+    }
+  }
+  return PurePursuit(params, std::move(profile));
 }
 
 FollowResult PurePursuit::follow_on_path(
   const FollowerState & state, const Path & path, double dt)
+{
+  const FollowResult result = pursue(state, path, dt);
+  if (result.status != FollowStatus::Tracking) {
+    return result;
+  }
+  // A disabled profile answers +inf, which makes the ratio scaling the identity (AC-1).
+  return FollowResult{
+    detail::apply_linear_limit(result.command, limit_at_index(nearest_index_)), result.status};
+}
+
+FollowResult PurePursuit::pursue(const FollowerState & state, const Path & path, double dt)
 {
   const Pose2D & robot = state.pose;
 

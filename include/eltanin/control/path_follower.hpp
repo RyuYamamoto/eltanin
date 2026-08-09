@@ -15,11 +15,14 @@
 #ifndef ELTANIN__CONTROL__PATH_FOLLOWER_HPP_
 #define ELTANIN__CONTROL__PATH_FOLLOWER_HPP_
 
+#include <eltanin/control/velocity_profile.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
+#include <cstddef>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace eltanin::control
 {
@@ -70,11 +73,18 @@ public:
   /// Throws std::invalid_argument when the pose, the twist, or dt is not finite and usable.
   [[nodiscard]] FollowResult follow(const FollowerState & state, const Path & path, double dt);
 
-  /// Clears path progress and the remembered command; call it for every new path.
+  /// Clears path progress, the remembered command, and the cached profile; call it per new path.
   void reset() noexcept;
+
+  /// nullopt when the profile is disabled or not built yet; the arc runs from the first pose.
+  [[nodiscard]] std::optional<double> velocity_limit_at(double arc_length) const noexcept;
 
 protected:
   PathFollower() = default;
+
+  /// A profile makes every derived follower obey the same curvature-derived speed bound.
+  explicit PathFollower(std::optional<VelocityProfile> profile) : profile_(std::move(profile)) {}
+
   PathFollower(const PathFollower &) = default;
   PathFollower & operator=(const PathFollower &) = default;
   PathFollower(PathFollower &&) = default;
@@ -94,8 +104,17 @@ protected:
     return state.twist.has_value() ? *state.twist : last_command_;
   }
 
+  /// +inf when the profile is disabled, so composing it with a command is the identity.
+  [[nodiscard]] double limit_at_index(std::size_t index) const noexcept;
+
+  /// Same bound read by arc length instead of by pose index.
+  [[nodiscard]] double limit_at_arc(double arc_length) const noexcept;
+
 private:
   Twist2D last_command_{};
+  std::optional<VelocityProfile> profile_{};
+  /// Pose count the profile was built from; a mismatch means reset() was skipped for a new path.
+  std::size_t profile_path_size_{0};
 };
 
 /// Which follower to build; the ROS side switches on the name exactly as it does for planners.
