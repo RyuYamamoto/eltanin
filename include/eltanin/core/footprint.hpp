@@ -57,6 +57,9 @@ public:
     return Traversability::Free;
   }
 
+  /// Occupancy for the exact footprint check; only a cell at zero distance is the obstacle itself.
+  bool is_obstacle(double distance) const noexcept { return !(distance > 0.0); }
+
 private:
   CollisionRadii(double inscribed, double circumscribed, double inflation)
   : inscribed_(inscribed), circumscribed_(circumscribed), inflation_(inflation)
@@ -69,6 +72,7 @@ private:
 };
 
 static_assert(TraversabilityModel<CollisionRadii, double>);
+static_assert(ObstacleModel<CollisionRadii, double>);
 
 }  // namespace eltanin
 

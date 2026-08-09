@@ -15,6 +15,8 @@
 #include <eltanin/planner/hybrid_astar_planner.hpp>
 
 #include <eltanin/core/angle.hpp>
+#include <eltanin/core/polygon.hpp>
+#include <eltanin/map/crop.hpp>
 #include <eltanin/planner/dubins_path.hpp>
 #include <eltanin/planner/reeds_shepp_path.hpp>
 
@@ -158,10 +160,47 @@ bool motion_step_is_usable(
   return motion_step / turning_radius >= bin_width || chord >= cell_diagonal;
 }
 
+/// True when the body outline at this pose covers the centre of a cell that is the obstacle itself.
+bool footprint_hits_obstacle(
+  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
+{
+  const map::MapGeometry & geometry = grid.geometry();
+  const Polygon2D outline = transform(footprint, pose);
+  const std::optional<map::CellRect> rect = map::bounding_cells(geometry, outline.vertices(), 0);
+  if (!rect.has_value()) {
+    return true;
+  }
+  for (int my = rect->min_y; my <= rect->max_y; ++my) {
+    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
+      if (grid.blocked(mx, my) && contains(outline, geometry.map_to_world(mx, my))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// Free needs no outline, the band needs one at this heading, and Inscribed always collides.
+bool pose_is_usable(
+  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
+{
+  if (grid.traversable(pose.position)) {
+    return true;
+  }
+  if (footprint.empty()) {
+    return false;
+  }
+  const std::optional<map::MapIndex> index = grid.geometry().world_to_map(pose.position);
+  if (!index.has_value() || grid.at(index->x, index->y) != Traversability::Circumscribed) {
+    return false;
+  }
+  return !footprint_hits_obstacle(grid, footprint, pose);
+}
+
 /// Only the interior of the primitive; the caller has already accepted the end pose.
 bool interior_is_free(
-  const TraversabilityView & grid, const Pose2D & from, double travel, double turn,
-  double collision_check_step)
+  const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & from, double travel,
+  double turn, double collision_check_step)
 {
   // Turning on the spot keeps the reference point where it already is, so nothing new to check.
   if (travel == 0.0) {
@@ -171,7 +210,7 @@ bool interior_is_free(
     std::max(1, static_cast<int>(std::ceil(std::abs(travel) / collision_check_step)));
   for (int sample = 1; sample < sample_count; ++sample) {
     const double fraction = static_cast<double>(sample) / static_cast<double>(sample_count);
-    if (!grid.traversable(propagate(from, travel * fraction, turn * fraction).position)) {
+    if (!pose_is_usable(grid, footprint, propagate(from, travel * fraction, turn * fraction))) {
       return false;
     }
   }
@@ -189,13 +228,15 @@ std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint
 }
 
 template <class Curve>
-bool curve_is_free(const TraversabilityView & grid, const Curve & curve, double check_step)
+bool curve_is_free(
+  const TraversabilityView & grid, const Polygon2D & footprint, const Curve & curve,
+  double check_step)
 {
   const double length = curve.length();
   const int checks = std::max(1, static_cast<int>(std::ceil(length / check_step)));
   for (int i = 1; i <= checks; ++i) {
     const double s = length * static_cast<double>(i) / static_cast<double>(checks);
-    if (!grid.traversable(curve.sample(s).position)) {
+    if (!pose_is_usable(grid, footprint, curve.sample(s))) {
       return false;
     }
   }
@@ -242,7 +283,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (dubins->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, *dubins, collision_check_step)) {
+    if (!curve_is_free(grid, params.footprint, *dubins, collision_check_step)) {
       return std::nullopt;
     }
     append_run(samples, *dubins, 0.0, dubins->length(), output_step);
@@ -261,7 +302,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (reeds_shepp->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, *reeds_shepp, collision_check_step)) {
+    if (!curve_is_free(grid, params.footprint, *reeds_shepp, collision_check_step)) {
       return std::nullopt;
     }
     // Each cusp ends a run, so a direction change always lands on a pose the follower can see.
@@ -590,7 +631,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       const Pose2D successor =
         propagate(current.pose, travel_of(motions[mode]), turn_of(motions[mode]));
       const auto successor_index = geometry.world_to_map(successor.position);
-      if (!successor_index.has_value() || !grid.traversable(successor.position)) {
+      if (!successor_index.has_value() || !pose_is_usable(grid, params.footprint, successor)) {
         continue;
       }
       // A cell the goal cannot be reached from is not worth a state, let alone an expansion.
@@ -609,8 +650,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
         continue;
       }
       if (!interior_is_free(
-            grid, current.pose, travel_of(motions[mode]), turn_of(motions[mode]),
-            collision_check_step)) {
+            grid, params.footprint, current.pose, travel_of(motions[mode]),
+            turn_of(motions[mode]), collision_check_step)) {
         continue;
       }
 

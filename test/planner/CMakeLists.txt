@@ -6,13 +6,14 @@ add_executable(eltanin_test_planner
   test_reeds_shepp_path.cpp
   test_hybrid_astar_planner.cpp
   test_obstacle_field.cpp
+  test_footprint_aware_search.cpp
   test_planner_errors.cpp
   test_path_smoother.cpp
   test_planner_seam.cpp
   test_planner_real_map.cpp)
 
 target_link_libraries(eltanin_test_planner PRIVATE
-  eltanin::planner eltanin::map_io GTest::gtest_main)
+  eltanin::planner eltanin::map_io eltanin::collision GTest::gtest_main)
 target_include_directories(eltanin_test_planner PRIVATE ${PROJECT_SOURCE_DIR}/test)
 target_compile_options(eltanin_test_planner PRIVATE ${ELTANIN_WARNING_FLAGS})
 target_compile_definitions(eltanin_test_planner PRIVATE

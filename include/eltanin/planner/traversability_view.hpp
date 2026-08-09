@@ -32,12 +32,16 @@ namespace eltanin::planner
 namespace detail
 {
 
-/// One classified cell per byte, holding the Traversability enumerator value.
+/// One cell per byte: the Traversability enumerator, plus a bit saying it is the obstacle itself.
 using TraversabilityGrid = std::vector<std::uint8_t>;
 
 static_assert(static_cast<int>(Traversability::Free) == 0);
 static_assert(static_cast<int>(Traversability::Circumscribed) == 1);
 static_assert(static_cast<int>(Traversability::Inscribed) == 2);
+
+/// Separates the inflation an Inscribed cell carries from the obstacle that cast it.
+inline constexpr std::uint8_t CLASSIFICATION_MASK = 0x03;
+inline constexpr std::uint8_t OBSTACLE_BIT = 0x04;
 
 /// The only place the cell type and traversability model are visible to a planner search core.
 template <map::CellMap Map, class Model>
@@ -48,7 +52,14 @@ TraversabilityGrid build_traversability_grid(const Map & map, const Model & mode
   TraversabilityGrid grid(geometry.cell_count(), 0);
   for (int my = 0; my < geometry.size_y(); ++my) {
     for (int mx = 0; mx < geometry.size_x(); ++mx) {
-      grid[geometry.index(mx, my)] = static_cast<std::uint8_t>(model.classify(map(mx, my)));
+      auto cell = static_cast<std::uint8_t>(model.classify(map(mx, my)));
+      // A footprint check needs to tell a real obstacle from the inflation around it.
+      if constexpr (ObstacleModel<Model, typename Map::value_type>) {
+        if (model.is_obstacle(map(mx, my))) {
+          cell |= OBSTACLE_BIT;
+        }
+      }
+      grid[geometry.index(mx, my)] = cell;
     }
   }
   return grid;
@@ -90,14 +101,23 @@ public:
   /// Cells outside the map are not traversable; in_bounds() is always evaluated before index().
   [[nodiscard]] bool traversable(int mx, int my) const noexcept
   {
-    return geometry_->in_bounds(mx, my) && grid_[geometry_->index(mx, my)] <= limit_;
+    return geometry_->in_bounds(mx, my) && classification(geometry_->index(mx, my)) <= limit_;
   }
 
   /// Points outside the map are not traversable.
   [[nodiscard]] bool traversable(const Eigen::Vector2d & world) const noexcept
   {
     const auto index = geometry_->world_to_map(world);
-    return index.has_value() && grid_[geometry_->index(index->x, index->y)] <= limit_;
+    return index.has_value() && classification(geometry_->index(index->x, index->y)) <= limit_;
+  }
+
+  /// The obstacle itself rather than the inflation around it; this is what a footprint may not touch.
+  [[nodiscard]] bool blocked(int mx, int my) const noexcept
+  {
+    if (!geometry_->in_bounds(mx, my)) {
+      return true;
+    }
+    return (grid_[geometry_->index(mx, my)] & detail::OBSTACLE_BIT) != 0;
   }
 
   /// Fraction to add to a step of travel ending here; 0 unless the cell is Circumscribed.
@@ -106,20 +126,26 @@ public:
     if (!geometry_->in_bounds(mx, my)) {
       return 0.0;
     }
-    return grid_[geometry_->index(mx, my)] == CIRCUMSCRIBED_CELL ? circumscribed_penalty_ : 0.0;
+    return classification(geometry_->index(mx, my)) == CIRCUMSCRIBED_CELL ? circumscribed_penalty_
+                                                                          : 0.0;
   }
 
   /// Precondition: geometry().in_bounds(mx, my).
   [[nodiscard]] Traversability at(int mx, int my) const noexcept
   {
     assert(geometry_->in_bounds(mx, my));
-    return static_cast<Traversability>(grid_[geometry_->index(mx, my)]);
+    return static_cast<Traversability>(classification(geometry_->index(mx, my)));
   }
 
 private:
   static constexpr std::uint8_t FREE_CELL = static_cast<std::uint8_t>(Traversability::Free);
   static constexpr std::uint8_t CIRCUMSCRIBED_CELL =
     static_cast<std::uint8_t>(Traversability::Circumscribed);
+
+  [[nodiscard]] std::uint8_t classification(std::size_t index) const noexcept
+  {
+    return grid_[index] & detail::CLASSIFICATION_MASK;
+  }
 
   const map::MapGeometry * geometry_;
   std::span<const std::uint8_t> grid_;
