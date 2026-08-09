@@ -332,3 +332,45 @@ TEST(NarrowPassage, ARelaxedPassPaysThePenaltyForCrossingTheBand)
   // Crossing costs the band penalty, so the reported length is still the plain geometric one.
   EXPECT_NEAR(eltanin::path_length(*path), 2.6, 1e-9);
 }
+
+TEST(NarrowPassage, BothPlannersGetThroughADoorwayInflationHasClosed)
+{
+  // A gap the inflation band fills completely: no Free cell links the two rooms.
+  Costmap map = open_map(60, 40);
+  for (int my = 0; my < 40; ++my) {
+    if (my >= 18 && my <= 21) {
+      continue;
+    }
+    for (int mx = 28; mx <= 31; ++mx) {
+      map(mx, my) = LETHAL_OBSTACLE;
+    }
+  }
+  for (int my = 18; my <= 21; ++my) {
+    for (int mx = 28; mx <= 31; ++mx) {
+      map(mx, my) = eltanin_test::CIRCUMSCRIBED_BAND_COST;
+    }
+  }
+  const Pose2D start = at_cell(map, 5, 20);
+  const Pose2D goal = at_cell(map, 55, 20);
+
+  const auto astar = plan_astar(map, make_cost_model(), start, goal);
+  const auto hybrid = plan_hybrid_astar(map, make_cost_model(), start, goal);
+
+  ASSERT_TRUE(astar.has_value());
+  ASSERT_TRUE(hybrid.has_value());
+  EXPECT_TRUE(astar.narrow_passage());
+  EXPECT_TRUE(hybrid.narrow_passage());
+
+  // Switching the fallback off restores the strict contract for both.
+  AStarParams strict_astar;
+  strict_astar.common.narrow_passage.enabled = false;
+  HybridAStarParams strict_hybrid;
+  strict_hybrid.common.narrow_passage.enabled = false;
+
+  EXPECT_EQ(
+    plan_astar(map, make_cost_model(), start, goal, strict_astar).error(),
+    PlannerError::Unreachable);
+  EXPECT_EQ(
+    plan_hybrid_astar(map, make_cost_model(), start, goal, strict_hybrid).error(),
+    PlannerError::Unreachable);
+}
