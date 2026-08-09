@@ -281,10 +281,7 @@ TEST(AStarPlanner, CircumscribedGoalIsRejectedByTheStrictPass)
 {
   Costmap map = open_map(5, 5);
   map(4, 4) = CIRCUMSCRIBED_BAND_COST;
-  auto params = eltanin_test::raw_astar_params();
-  params.common.narrow_passage.enabled = false;
-
-  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4), params);
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4));
 
   EXPECT_FALSE(path.has_value());
   EXPECT_EQ(path.error(), eltanin::planner::PlannerError::GoalBlocked);
@@ -295,8 +292,10 @@ TEST(AStarPlanner, CircumscribedGoalIsReachedByTheFallbackAndFlagged)
   Costmap map = open_map(5, 5);
   map(4, 4) = CIRCUMSCRIBED_BAND_COST;
 
-  // The fallback is on by default, so a goal inside the band is reached and reported as narrow.
-  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4));
+  auto params = eltanin_test::raw_astar_params();
+  params.common.narrow_passage.enabled = true;
+  const auto path =
+    plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4), params);
 
   ASSERT_TRUE(path.has_value());
   EXPECT_TRUE(path.narrow_passage());

@@ -1089,18 +1089,31 @@ corridor 上の Hybrid A*:
 
 **クリアランスを本気で要りたいなら探索側 (§14.4) の方が上である。** 探索側は p05 を 0.299 m まで伸ばしつつ曲率 p99 をむしろ改善する (2.194)。平滑化側は局所的な押し出しなので、押せば押すほど揺れる。
 
-### 14.6 Free で繋がらないときだけ Circumscribed を開ける (2 パス探索)
+### 14.6 Free で繋がらないときだけ Circumscribed を開ける (2 パス探索、既定は切)
 
-`docs/costmap-design.md` §7.2 の狭路緩和を基底 `Planner::plan()` に入れた。`NarrowPassageFallback{enabled = true, penalty = 4.0}`。
+`docs/costmap-design.md` §7.2 の狭路緩和を基底 `Planner::plan()` に入れた。`NarrowPassageFallback{enabled = false, penalty = 4.0}`。
 
-厳密パス (Free のみ) が `Unreachable` / `GoalBlocked` / `StartRescueFailed` のいずれかで失敗したときに限り、`Traversability::Circumscribed` まで開けてもう一度だけ走る。緩和パスで得た経路は `PlanResult::narrow_passage()` が真になる。**分類グリッドは 1 回しか作らないので、2 パス目の追加コストは探索だけである。**
+厳密パス (Free のみ) が `Unreachable` / `GoalBlocked` / `StartRescueFailed` のいずれかで失敗したときに限り、`Traversability::Circumscribed` まで開けてもう一度だけ走る。緩和パスで得た経路は `PlanResult::narrow_passage()` が真になる。分類グリッドは 1 回しか作らないので、2 パス目の追加コストは探索だけである。Circumscribed セルを通る 1 m には `penalty` の割増しが掛かる (`TraversabilityView::surcharge()`) ので、緩和パスの中でも**帯の薄いところを選んで渡る**。
 
-Circumscribed セルを通る 1 m には `penalty` の割増しが掛かる (`TraversabilityView::surcharge()`)。これにより、緩和パスの中でも**帯の薄いところを選んで渡る**。
+**既定を切にしている理由は、緩和パスの経路が実際に衝突しうるからである。** `Circumscribed` の定義は「基準点がそこにあるとき**向きによっては**衝突する」であり、通れることの保証ではない。両プランナの衝突判定は車体基準点だけを見る (C-4) ので、帯を開けた瞬間にフットプリントが壁へ食い込む経路が普通に返る。
 
-これは C-8 (goal 閉塞は救済しない) を意図的に緩めている。従来 `GoalBlocked` だった「goal が膨張帯の中にある」配置は、いまは経路を返して `narrow_passage()` で報せる。厳密な従来動作は `narrow_passage.enabled = false` で戻る。
+0.44 × 0.30 m のフットプリント (`inscribed_radius` 0.15 m) を `inflation_radius` 0.55 m で膨張した地図で、2 部屋を繋ぐ隙間の幅を振った実測:
+
+| 隙間 | 実際に通れるか | 厳密パス | 緩和パス (A\*) | 緩和パス (Hybrid A\*) |
+|---|---|---|---|---|
+| 0.10 / 0.20 m | 通れない | `Unreachable` | 経路なし | 経路なし |
+| **0.30 m** | 通れる (幅ちょうど) | `Unreachable` | **101 姿勢中 10 姿勢が衝突** | **72 姿勢中 9 姿勢が衝突** |
+| 0.40 / 0.50 m | 通れる | `Unreachable` | 衝突なし | 衝突なし |
+
+**一度これを既定 `true` で入れてしまい、実際に「フットプリントが壁を突き抜ける経路」が RViz に出た。** 隙間がロボット幅に近いほど危険で、しかも「通れる隙間」でこそ衝突経路が出る (通れない隙間では帯すら繋がらないので経路が出ない)。fail-safe でないので既定を切に戻した。
+
+**使うなら呼び出し側の責任がある。** `narrow_passage()` が真の経路は、追従前に `collision::check_footprint_exact()` で姿勢ごとに検証し、衝突するなら捨てる必要がある。この判定を基底へ持ち込まなかったのは、フットプリントと `ObstacleModel` を planner に要求することになり、C-4 の縫い目 (衝突判定は車体基準点、footprint clearance は呼び出し側が膨張済み地図で担保する) を壊すからである。
+
+これは C-8 (goal 閉塞は救済しない) を有効時に限って緩めている。`enabled = true` のとき、goal が膨張帯の中にある配置は経路を返して `narrow_passage()` で報せる。
 
 ### 14.7 申し送り
 
 - **A\* のクリアランス整形を既定で入れるには**、探索が触る範囲を先に絞る必要がある。ガイド経路の窓で 2 段階に走らせる案は 190 + 10 + 240 ≈ 440 ms でまだ既定より遅い。距離変換そのもの (16M セルで 461 ms) を速くする方が筋が良い
 - Reeds-Shepp は解析接続と制御集合には入ったが、**追従側 (`PurePursuit`) は後退区間を解釈しない**。`.plait/03-design-review.md` の D-9 はそのまま残っている
 - 障害物項は局所勾配なので、狭所では両側から押されて揺れる。Dolgov の共役勾配法のように全体最適で解けば揺れずに離せる
+- **狭路を安全に通るには、緩和パスの経路をフットプリントで検証する層が要る。** 現状は `narrow_passage()` を報せるだけで、検証は呼び出し側に委ねている。向き付きの Hybrid A\* なら探索中に姿勢ごとのフットプリント判定を掛けられるので、`Circumscribed` セルを「その向きなら通れる」と判定できる余地がある (§14.6)

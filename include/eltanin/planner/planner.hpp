@@ -34,8 +34,8 @@ namespace eltanin::planner
 /// Second pass for a start and goal the Free cells leave disconnected, such as across a narrow door.
 struct NarrowPassageFallback
 {
-  /// Retry with Traversability::Circumscribed opened up when the Free-only pass finds nothing.
-  bool enabled{true};
+  /// Off by default: the band only says a collision is possible, so the path may not be drivable.
+  bool enabled{false};
   /// What a metre of that band costs the retry, as a fraction of the distance travelled.
   double penalty{4.0};
 };

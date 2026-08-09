@@ -296,8 +296,9 @@ TEST(NarrowPassage, TheBandPenaltySendsTheRelaxedPassToTheThinnestCrossing)
   const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
 
   auto cheap = eltanin_test::raw_astar_params();
+  cheap.common.narrow_passage.enabled = true;
   cheap.common.narrow_passage.penalty = 0.0;
-  auto dear = eltanin_test::raw_astar_params();
+  auto dear = cheap;
   dear.common.narrow_passage.penalty = 20.0;
 
   const auto through = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, cheap);
@@ -324,8 +325,9 @@ TEST(NarrowPassage, ARelaxedPassPaysThePenaltyForCrossingTheBand)
   const Pose2D start{map.geometry().map_to_world(2, 5), 0.0};
   const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
 
-  const auto path = eltanin::planner::plan_astar(
-    map, make_cost_model(), start, goal, eltanin_test::raw_astar_params());
+  auto params = eltanin_test::raw_astar_params();
+  params.common.narrow_passage.enabled = true;
+  const auto path = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, params);
 
   ASSERT_TRUE(path.has_value());
   EXPECT_TRUE(path.narrow_passage());
@@ -353,24 +355,22 @@ TEST(NarrowPassage, BothPlannersGetThroughADoorwayInflationHasClosed)
   const Pose2D start = at_cell(map, 5, 20);
   const Pose2D goal = at_cell(map, 55, 20);
 
-  const auto astar = plan_astar(map, make_cost_model(), start, goal);
-  const auto hybrid = plan_hybrid_astar(map, make_cost_model(), start, goal);
+  AStarParams relaxed_astar;
+  relaxed_astar.common.narrow_passage.enabled = true;
+  HybridAStarParams relaxed_hybrid;
+  relaxed_hybrid.common.narrow_passage.enabled = true;
+
+  const auto astar = plan_astar(map, make_cost_model(), start, goal, relaxed_astar);
+  const auto hybrid = plan_hybrid_astar(map, make_cost_model(), start, goal, relaxed_hybrid);
 
   ASSERT_TRUE(astar.has_value());
   ASSERT_TRUE(hybrid.has_value());
   EXPECT_TRUE(astar.narrow_passage());
   EXPECT_TRUE(hybrid.narrow_passage());
 
-  // Switching the fallback off restores the strict contract for both.
-  AStarParams strict_astar;
-  strict_astar.common.narrow_passage.enabled = false;
-  HybridAStarParams strict_hybrid;
-  strict_hybrid.common.narrow_passage.enabled = false;
-
+  // The default is strict, so nothing gets through unless the caller asked for the fallback.
   EXPECT_EQ(
-    plan_astar(map, make_cost_model(), start, goal, strict_astar).error(),
-    PlannerError::Unreachable);
+    plan_astar(map, make_cost_model(), start, goal).error(), PlannerError::Unreachable);
   EXPECT_EQ(
-    plan_hybrid_astar(map, make_cost_model(), start, goal, strict_hybrid).error(),
-    PlannerError::Unreachable);
+    plan_hybrid_astar(map, make_cost_model(), start, goal).error(), PlannerError::Unreachable);
 }

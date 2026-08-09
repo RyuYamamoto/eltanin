@@ -207,10 +207,14 @@ carries the same idea locally: `weight_obstacle` / `obstacle_distance` push poin
 `docs/planner-design.md` §14.4 and §14.5 record what each weight buys and what it costs.
 
 When the `Free` cells leave start and goal disconnected — a doorway the robot barely fits through —
-the base planner retries once with `Traversability::Circumscribed` opened up, charging
-`NarrowPassageFallback::penalty` per metre of band used so it crosses where the band is thinnest. A
-path found that way reports `PlanResult::narrow_passage()`. Set `narrow_passage.enabled = false` to
-keep the strict single-pass behaviour.
+`NarrowPassageFallback` retries once with `Traversability::Circumscribed` opened up, charging its
+`penalty` per metre of band used so it crosses where the band is thinnest, and marks the result with
+`PlanResult::narrow_passage()`. **It is off by default and unsafe to switch on blindly:**
+`Circumscribed` means a collision is *possible depending on heading*, and both planners only check the
+vehicle reference point, so the returned path can put the footprint through a wall. Measured on a
+0.44 x 0.30 m robot, a 0.30 m gap yields a path where 10 of 101 poses (A*) or 9 of 72 (Hybrid A*)
+collide. If you enable it, verify every pose with `collision::check_footprint_exact()` before
+following. `docs/planner-design.md` §14.6 has the numbers.
 
 Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
 `heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
