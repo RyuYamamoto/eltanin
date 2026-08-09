@@ -14,7 +14,7 @@ that needs ROS 2, visualization or file I/O lives in a separate target.
 | `eltanin_map_io` | `eltanin::map_io` | `eltanin::map`, yaml-cpp | PGM + YAML map loading, PGM debug dump |
 | `eltanin_sensor` | `eltanin::sensor` | `eltanin::core` | Laser scan projection into planar points (`ScanData` / `ScanFilter` / `project_scan`) |
 | `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\*, Hybrid A\* over (x, y, yaw), Dubins and Reeds-Shepp paths, clearance map, nearest traversable cell search, iterative path smoother |
-| `eltanin_control` | `eltanin::control` | `eltanin::core` | Pure pursuit path tracking (`PurePursuit`), goal approach deceleration and final yaw alignment (`GoalApproach`) |
+| `eltanin_control` | `eltanin::control` | `eltanin::core` (+ OSQP with `ELTANIN_ENABLE_MPC=ON`) | Path following behind one `PathFollower` interface: `PurePursuit` and `MpcFollower`, the curvature-derived `VelocityProfile`, goal approach deceleration and final yaw alignment (`GoalApproach`) |
 | `eltanin_sim` | `eltanin::sim` | `eltanin::core` | Deterministic differential-drive plant (`SimpleSimulator`) |
 | `eltanin_collision` | `eltanin::collision` | `eltanin::core`, `eltanin::map` | Two-stage and exact footprint collision checking, braking-distance velocity limiting (`VelocityLimiter`) |
 
@@ -55,7 +55,22 @@ build; note that this disables those checks.
 | `ELTANIN_ENABLE_WERROR` | OFF | Add `-Werror` |
 | `ELTANIN_ENABLE_ASAN` | OFF | AddressSanitizer |
 | `ELTANIN_ENABLE_UBSAN` | OFF | UndefinedBehaviorSanitizer |
+| `ELTANIN_ENABLE_MPC` | OFF | Build the MPC path follower; adds an OSQP dependency to `eltanin_control` |
+| `ELTANIN_MPC_SOLVER_PROVIDER` | `fetch` | Where OSQP comes from when the MPC is on: `fetch` (FetchContent, needs network) or `package` (`find_package(osqp)`) |
 | `ELTANIN_TEST_MAP_DIR` | navyu map directory | Directory holding `map.pgm` / `map.yaml` used by the real-map tests and as the default map of `eltanin_navigate_on_real_map`; those tests are skipped when it is absent |
+
+### MPC build
+
+The MPC follower is off by default so that the default build stays on the standard library and Eigen.
+
+```bash
+cmake -B build-mpc -DELTANIN_ENABLE_MPC=ON
+cmake --build build-mpc -j
+ctest --test-dir build-mpc --output-on-failure
+```
+
+`ELTANIN_MPC_SOLVER_PROVIDER=package` uses an already installed OSQP instead of fetching one, which
+is what an offline CI or a ROS workspace with `osqp-vendor` wants.
 
 ### Sanitizer build
 
@@ -125,12 +140,16 @@ are not linked into `eltanin_planner` or any other library target.
 ```bash
 ./build/examples/eltanin_plan_on_real_map path/to/map.yaml out_dir
 ./build/examples/eltanin_track_on_real_map path/to/map.yaml out_dir
+./build/examples/eltanin_track_on_real_map --follower mpc --velocity-profile path/to/map.yaml out_dir
 ```
 
 Both inflate a real map and run the planner on it; the second one then tracks the resulting path with
-`PurePursuit`. They write a cropped `crop.pgm` plus CSV files and a `meta.txt` summary, so the path
-and the traced trajectory can be plotted over the costmap. The tracking measurements taken this way
-are recorded in [docs/control-design.md](docs/control-design.md) §5.
+the follower named by `--follower` (`pure_pursuit` by default, `mpc` with `ELTANIN_ENABLE_MPC=ON`).
+`--velocity-profile` caps the speed by the path curvature and `--curvature-window <m>` sweeps the
+estimator that bound is built from. They write a cropped `crop.pgm` plus CSV files and a `meta.txt`
+summary, so the path and the traced trajectory can be plotted over the costmap. The tracking
+measurements taken this way are recorded in [docs/control-design.md](docs/control-design.md) §5 and
+§13.8.
 
 ```bash
 ./build/examples/eltanin_limiter_profile out_dir
@@ -243,7 +262,7 @@ map_io::load_map
   -> LayeredCostmap (static + obstacle + inflation), global for planning and local for the limiter
   -> synthetic LiDAR -> sensor::project_scan -> ObstacleLayer
   -> selected global planner (A* + smoothing, or Hybrid A* in an A*-guided corridor)
-  -> control::PurePursuit + control::GoalApproach
+  -> control::PathFollower + control::GoalApproach
   -> collision::VelocityLimiter (footprint prediction, braking-distance law)
   -> sim::SimpleSimulator (differential-drive integration)
   -> repeat, replanning once the observations block the path ahead
@@ -260,6 +279,7 @@ cmake -B build -DELTANIN_BUILD_EXAMPLES=ON
 cmake --build build -j
 ./build/examples/eltanin_navigate_on_real_map out_dir
 ./build/examples/eltanin_navigate_on_real_map out_dir --planner hybrid-astar
+./build/examples/eltanin_navigate_on_real_map out_dir --follower mpc --velocity-profile
 ```
 
 The map defaults to `${ELTANIN_TEST_MAP_DIR}/map.yaml`, so the command above runs as it is; pass

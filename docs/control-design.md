@@ -477,6 +477,9 @@ p4 (1.20, -0.70)  距離 1.3892
 
 **`GoalApproach` は `PurePursuit` を知らない。** 速度上限と状態を返すだけで、合成は呼び出し側が行う。
 
+**T9 で `pursuit.compute()` は `follower->follow()` に変わった。現行の擬似コードは §13.13 にある。**
+以下は当時の形をそのまま残したものである。
+
 ```
 pp = pursuit.compute(robot, path, dt);
 ga = approach.compute(robot, path, dt);
@@ -731,3 +734,525 @@ bang-bang の破綻条件は `dt > yaw_goal_tolerance / max_angular_vel = 0.10 s
 終端 3 状態の上限を 0 にした (12.3) ため、`remaining_arc = 0.08` では
 「`Approaching` なら 0.28 / `Reached` なら 0」となり、`remaining_arc` だけの関数ではなくなる。
 テストも `Approaching` の範囲で掃いている。
+
+---
+
+## 13. T9: MPC 経路追従、曲率に応じた速度制御、共通 `PathFollower` I/F
+
+対象は `include/eltanin/control/{path_follower,velocity_profile,mpc_follower,follower_factory,qp_solver_params}.hpp`、
+`src/control/{path_follower,velocity_profile,mpc_follower,mpc_problem,qp_solver,qp_solver_osqp,follower_factory}.cpp`、
+`eltanin_core` の `path_curvature()`。
+
+§5.3 は「曲率に応じた減速が本命である」と書いてスコープ外にしていた。T9 はそれを実装し、**実マップで
+測ったところ本命ではなかった** (§13.8)。効いたのは MPC の定式化の方である。
+
+### 13.1 共通 `PathFollower` I/F (破壊的変更)
+
+`PurePursuit` と MPC を呼び出し側が知らずに差し替えられるよう、実行時多態の基底を新設した。
+`Planner` (`docs/planner-design.md` §12) と同じ template method 形で、公開 `follow()` は非仮想である。
+
+```
+follow(state, path, dt)                     非仮想。基底が持つ
+ ├─ dt / pose / twist の有限性検証         → std::invalid_argument
+ ├─ path.empty()     → reset(); NoPath + ゼロ指令
+ ├─ path.size() == 1 → reset(); GoalReached + ゼロ指令
+ ├─ 速度プロファイルの遅延構築 (reset() 後の初回のみ)
+ └─ follow_on_path(state, path, dt)         純粋仮想。派生が持つ
+      → last_command_ を更新して返す
+```
+
+破壊的変更の一覧:
+
+| 変更前 | 変更後 | 理由 |
+|---|---|---|
+| `PurePursuit::compute(robot, path, dt)` | `PathFollower::follow(state, path, dt)` | 入口が 2 本あると数値の正が決まらない。転送は残していない |
+| `PurePursuit::Status` | `control::FollowStatus` (`SolverFailed` を追加) | 追従器をまたいで同じ語彙で状態を読む |
+| `PurePursuit::Result::{command,status,target_index,lookahead_point}` | `FollowResult{command,status}` + `PurePursuit::lookahead()` | 「どちらの追従器か知らないと読めないフィールド」を共通型から外す (`docs/costmap-design.md` §9.2) |
+| `NavigateConfig::tracker` (`PurePursuitParams`) | `NavigateConfig::follower` (`FollowerFactoryParams`) | 追従器の選択と各パラメータを 1 箇所に集める |
+
+`eltanin_ros` に `PurePursuit` の利用箇所は無いので即時の破壊は無い。`eltanin_vendor` 経由でヘッダを
+公開しているため、下流が使い始める前に変えておく判断である。
+
+**`follow()` の入力は `FollowerState{pose, optional<twist>}` である。** MPC は入力変化率の制約に現在速度を
+要するため実測速度を受け取る。`twist` が `nullopt` のとき追従器は**前回自分が返した指令**を現在速度と
+みなすので、実測値を持たない呼び出し側はそのまま動く。`PurePursuit` は `twist` を読まない
+(`test_pure_pursuit.cpp: TheMeasuredTwistIsIgnored` が同一 `pose` / 異なる `twist` で出力のビット一致を固定する)。
+
+`state.twist` が非有限のときは `pose` / `dt` と同じく `std::invalid_argument` にした。`nullopt` に
+読み替えると「不正な計測値が黙って無視される」ことになり、実機で最も危ない挙動になる。
+
+### 13.2 曲率の定義を弧長窓つき外接円に変えた
+
+`path_curvature(path, window)` を `eltanin_core` に追加した (`cumulative_arc_length()` の隣、幾何であって
+機体限界を知らないため)。**点 `i` について弧長で `window` だけ前後に離れた 2 点を取り、その 3 点の外接円
+半径の逆数を符号つきで返す** (Menger 曲率)。`window <= 0` は隣接点にフォールバックする。
+
+`examples/hybrid_astar_demo.cpp` が持っていた `2·sin(Δyaw/2)/ds` は削除し、この関数に置き換えた。
+
+**なぜ点ごとの式を捨てたか。** 点ごとの式は分母が経路の標本間隔 (0.05 m) に固定されるので、経路の性質では
+なく標本化の性質を測る。実マップ経路 (A* + 反復平滑化、727 点 / 37.25 m) で両定義を測ると:
+
+| 定義 | p50 | p90 | p99 | 最大 [rad/m] | 非ゼロ点 |
+|---|---|---|---|---|---|
+| 点ごと `2·sin(Δyaw/2)/ds` | 0 | 0.064 | 2.627 | **28.284** | 153 / 727 |
+| 外接円 `window = 0` | 0 | 0.080 | 2.513 | 3.411 | 106 / 727 |
+| 外接円 `window = 0.10` | 0 | 0.070 | 2.577 | 2.795 | 118 / 727 |
+| 外接円 `window = 0.30` (既定) | 0 | 0.112 | 1.860 | **2.363** | 144 / 727 |
+| 外接円 `window = 0.50` | 0 | 0.129 | 1.678 | 1.924 | 155 / 727 |
+
+点ごと式の最大 28.284 rad/m は曲率半径 3.5 cm に相当する。**そんな経路は存在しない** — 1 個の折れ点と
+極端に短い区間の組み合わせが作る数字である。この値をそのまま速度上界に通すと `ω_max/|κ| = 0.035 m/s`
+まで落ち、ロボットはそこで実質停止する。Q-2 が本タスク最大のリスクとした現象そのものである。
+
+外接円曲率は**真円弧に対して厳密に `1/R` を返す** (3 点が同一円上にあれば外接円はその円そのもの)。
+`test/core/test_path.cpp` が R = 0.3 / 0.5 / 1.0 / 2.0 m の合成円弧で 1e-9 の許容で固定している。
+窓幅を変えても円弧では値が動かないことも同じテストで固定した。
+
+**§5.1 が記録した `κ` p99 = 2.491 / 最大 = 3.467 は上表のどの行とも一致しない。** あちらは当時の測定手順に
+よる値であり、本節の数字は同じ経路を `path_curvature()` と `2·sin(Δyaw/2)/ds` で測り直したものである。
+§5.1 の値は消さずに残し、**どちらの定義かを明記する**方針を取った。以後の記録は本節の定義に揃える。
+
+**トレードオフ**: 窓を広げると弧長の短い鋭いコーナーの曲率を過小評価する (= 速度上界を過大に出す =
+安全側ではない)。実マップでは最大が 3.411 → 2.363 rad/m と 31 % 緩む。§13.9 の掃引で影響を測った。
+
+### 13.3 速度プロファイル (`VelocityProfile`)
+
+経路と機体限界から弧長方向の速度上界を作る共通部品。`PurePursuit` と `MpcFollower` の双方が使う。
+3 段構成で、Autoware `velocity_smoother` の lateral accel filter + backward filter に対応する。
+
+| 段 | 式 |
+|---|---|
+| 1 | `κ_i = path_curvature(path, curvature_window)` |
+| 2 | `v_i = max(min_linear_vel, min(v_max, ω_max/\|κ_i\|, sqrt(a_lat/\|κ_i\|)))` |
+| 3 | 後ろ向きパス `v_i = min(v_i, sqrt(v_{i+1}² + 2·a_decel·Δs_i))`、末尾は `terminal_linear_vel` |
+
+段 2 は `κ = 0` で両項が `+inf` になり `min` が `v_max` を選ぶ。**0 除算を分岐で避けず `+inf` を通す**
+ことで分岐が 1 本減り、IEEE754 の意味で正しい。
+
+**クリープ下限 `min_linear_vel` は段 2 にだけ掛ける。** 段 3 の後に掛けると終端の 0 が潰れてゴール手前で
+止まれなくなる。`test_velocity_profile.cpp: TheCreepFloorAppliesToTheCurvatureBoundOnly` が固定している。
+
+**前向きパス (加速度制限) は入れない。** MPC は加速度制約を定式化に持ち、`PurePursuit` は 1 次遅れランプを
+持つ。二重に掛けると「なぜ加速が遅いか」の説明箇所が 2 つになる。
+
+| パラメータ | 既定 | 根拠 |
+|---|---|---|
+| `max_linear_vel` | 0.50 [m/s] | `PurePursuitParams::desired_linear_vel` と同値 |
+| `max_angular_vel` | 1.00 [rad/s] | `PurePursuitParams` / `GoalApproachParams` と同名同値。機体値 1.57 は ROS 側が渡す |
+| `max_lateral_accel` | 0.50 [m/s²] | **実機未計測。** 保守側に置いたことが根拠であって、測った値ではない |
+| `max_decel` | 0.50 [m/s²] | `GoalApproachParams::approach_decel` と同値 |
+| `curvature_window` | 0.30 [m] | 機体が全速で描ける最小半径 `v_max/ω_max = 0.32 m`。これより短い窓は標本化を測る |
+| `min_linear_vel` | 0.05 [m/s] | 折れ点 1 個で停止させないためのクリープ下限 |
+| `terminal_linear_vel` | 0.0 [m/s] | ゴールを「終端速度 0 の点」として後ろ向きパスに含める |
+
+**既定は無効 (`std::optional` が `nullopt`) である。** 有効化して初めて挙動が変わるので、§4.1 に固定した
+`PurePursuit` の閾値は 1 つも動かない。無効時の上界は `+inf` で、`apply_linear_limit()` が恒等写像になる
+(`GoalApproach` の `Inactive` と同じ機構)。
+
+**プロファイルは追従器が所有する。** 呼び出し側に持たせると「ロボットが経路上のどの弧長にいるか」を求める
+3 回目の最近傍探索が要る (1 周期あたりの経路全走査は既に `PurePursuit` と `GoalApproach` で 2 回ある、§12.8)。
+基底が保持し、`reset()` で破棄、`reset()` 後の初回 `follow()` で `build(path)` する。これで
+「経路が変わるたびに 1 回だけ再構築」と「定常状態の `follow()` はヒープ確保をしない」が同時に成立する。
+`reset()` 忘れは構築時の `path.size()` との不一致を `assert` で検出する (Release では検出しない)。
+
+**`GoalApproach` は消していない。** 後ろ向きパスの `sqrt(2·a·s)` は `GoalApproach` の減速則と式も既定値も
+同じなので両者の `min` は実質冪等だが、`GoalApproach` は到達ラッチと最終姿勢合わせという別の責務を持つ。
+
+**既知の相互作用**: `terminal_linear_vel = 0` はプロファイルを持つ追従器を最終姿勢の手前で止める。
+`PurePursuit` 単体 (`GoalApproach` なし) では終端許容 (`0.5 × 点間隔`) に届かず `GoalReached` を返せない
+場合がある。§12.1 の合成では `GoalApproach` が `xy_goal_tolerance = 0.10 m` で到達を宣言するので問題は出ない。
+
+### 13.4 MPC の定式化
+
+状態 `x = (px, py, θ)`、入力 `u = (v, ω)`。非線形モデルは `integrate_differential_drive()` をそのまま使う
+(予測・plant・`VelocityLimiter` が同じ運動学を通る)。参照軌道まわりの偏差を変数に取る。
+
+```
+δx_k = x_k ⊖ x_ref_k        (yaw は normalize_angle を通す)
+δx_{k+1} = A_k δx_k + B_k δu_k + c_k
+
+A_k = I + dt·[[0,0,−v_ref·sin θ_ref], [0,0,+v_ref·cos θ_ref], [0,0,0]]
+B_k = dt·[[cos θ_ref, 0], [sin θ_ref, 0], [0, 1]]
+c_k = f(x_ref_k, u_ref_k, dt) ⊖ x_ref_{k+1}      ← 残差は厳密積分で持つ
+```
+
+**ヤコビアンは前進オイラー、残差 `c_k` は厳密積分**である。`c_k` を陽に持つので、参照が動特性と厳密に
+整合していなくても定式化は正しいままになる。
+
+**誤差状態 (Frenet 形) を採らなかった理由**: あちらは `ω_ref = v_ref·κ` を要求する。κ は §13.2 のとおり
+離散折れ線では定義が微妙な量であり、運動モデルに持ち込むと κ の推定方式が追従の安定性に直結する。
+グローバル偏差形なら参照入力を参照状態列の差分から作れるので、κ はモデルに一切入らない。
+
+**QP は sparse 形** (状態と入力を両方変数に取り、動特性を等式制約で表す) にした。`N = 20` で変数
+`3(N+1) + 2N = 103`、制約行 `3 + 3N + 2N + 2N = 143`。
+
+| | condensed | **sparse (採用)** |
+|---|---|---|
+| 毎周期の組み立て | `B̄ᵀQ̄B̄` = `O(N²)` のブロック積 | `A_k` / `B_k` / `c_k` を所定の位置に書くだけ `O(N)` |
+| 検証しやすさ | 予測行列の誤りが全要素に散る | 1 ブロックずつ単体テストで確認できる |
+
+`AGENTS.md` が correctness / testability を performance の上に置いているため sparse を採った。実測でも
+求解時間は制御周期の 3 % に収まっている (§13.8)。
+
+コストは次の形で、**状態重みを参照方位で回転させる**。これにより `weight_lateral` が文字どおり横方向誤差の
+重みになり、調整すべきつまみと測る量が一致する。
+
+```
+J = Σ_{k=1}^{N−1} δx_kᵀ Q_k δx_k + δx_Nᵀ (scale·Q_N) δx_N
+  + Σ δu_kᵀ R δu_k + Σ (u_k − u_{k−1})ᵀ R_d (u_k − u_{k−1}),   u_{−1} = u_meas
+
+Q_k = blkdiag( R(θ_ref_k)·diag(w_long, w_lat)·R(θ_ref_k)ᵀ , w_yaw )
+```
+
+`δx_0` はコストに入れない (等式制約で固定されるので定数項にしかならない)。
+
+制約は**入力ボックスと入力変化率だけで、状態には 1 本も置かない**。障害物は見ない (C-11) ので置くものが
+ない。初段の変化率は実測速度 `u_meas` を基準に課す。
+
+#### 13.4.1 QP が非実行可能にならないこと
+
+`u_k ≡ u_meas` (全段一定) を取ると、入力ボックスは `u_meas` を先にボックスへクランプしてあれば満たし、
+変化率は差分が全段 0 で初段も `u_0 − u_meas = 0` なので満たす。状態に制約が無いので `δx` はこの入力列から
+一意に決まる。**したがって実行可能解が必ず存在する。** `P` は半正定、入力は有界、目的関数は下に有界なので
+双対非実行可能にもならない。
+
+**「実測速度をボックスへクランプしてから変化率の基準にする」はこの保証の前提条件である。** クランプを
+忘れると、`VelocityLimiter` が直前周期に指令を大きく削った直後などに実行可能領域が空になりうる。
+
+帰結として、**非実行可能な問題を `MpcFollower` 経由では作れない。** その系統の検査は `detail::QpSolver` に
+対して直接、矛盾する制約を与える単体テスト (`test_qp_solver.cpp`) で行っている。
+
+#### 13.4.2 計画から変えた点: 段別速度上限を制約にしない
+
+設計計画は入力ボックスの `v` 上限を速度プロファイルの段別値にする案だった。**採らなかった。**
+段別上限を入れると `u_k ≡ u_meas` が実行可能でなくなる場合があり (`v_meas` が先の段の上界を超える)、
+§13.4.1 の保証が崩れるためである。プロファイルは
+
+- 参照速度として使う (`v_ref_k = min(v_max, profile.at_arc(s_k))`)、および
+- 出力指令に `apply_linear_limit()` を掛ける (`PurePursuit` と同じ比率スケール)
+
+の 2 経路で効かせている。ボックスは定数 `[v_min, v_max]` のままである。
+
+### 13.5 参照軌道の作り方
+
+```
+1. 進捗 index を単調に更新する (C-5 と同じ規則)
+2. 最近傍「線分」への射影で連続な弧長 s0 を得る    ← 頂点スナップにしない
+3. s_{k+1} = s_k + v_ref_k · prediction_dt,  v_ref_k = min(v_max, profile.at_arc(s_k))
+4. x_ref_k = 経路折れ線上の弧長 s_k の姿勢 (位置は線形補間、yaw は interpolate_angle)
+5. ω_ref_k = normalize_angle(θ_{k+1} − θ_k) / prediction_dt
+6. 経路末尾を越えたら x_ref を最終姿勢で埋め、v_ref = ω_ref = 0
+```
+
+頂点スナップにしないのは、参照が点間隔 0.05 m の階段状に飛ぶと予測が毎周期揺れるためである。
+
+**参照方位は経路点の `yaw` を補間して使う** (C-4 からの意図的な逸脱)。A* の yaw は `assign_tangent_yaw()` に
+よる接線、Hybrid A* は車体姿勢で、いずれも意味のある値である。
+
+#### 13.5.1 終端姿勢の yaw だけは接線に置き換える
+
+`assign_tangent_yaw()` は**最後の 1 点だけ要求されたゴール方位を残す** (`path_smoother.cpp:33-46` は
+`i + 1 < n` までしか書き換えない)。実マップの経路では最終区間が `+y` 方向に進むのに最終点の yaw が 0 で、
+**0.05 m の区間に 90° の参照方位の跳びが入る。**
+
+これをそのまま追うと MPC は最後にその方位へ回り込み、ゴールを 0.156 m 行き過ぎたうえ、前進しかできない
+ため戻れずに停止した (実測: `outcome = step_limit`、最終位置誤差 0.156 m)。
+
+**最終姿勢の向きは `GoalApproach` の担当であって、走行中に狙う方位ではない。** `MpcFollower` は経路の私的な
+複製を持ち、最終点の yaw を最終区間の接線に置き換えてから参照を作る。呼び出し側の `Path` は触らない。
+`PurePursuit` は yaw を一切読まない (C-4) のでこの問題を持たない。
+
+### 13.6 初期方位合わせと大偏差の退避
+
+参照まわりの線形化は方位偏差が大きいと成立しない。`follow_on_path()` の先頭で
+`|normalize_angle(θ_robot − θ_ref_0)|` を見る。
+
+- ラッチ前は `yaw_tolerance` (0.07 rad) に入るまでその場旋回する
+- ラッチ後でも `max_heading_error` (0.785 rad = 45°) を超えたらラッチを外してその場旋回に戻る
+
+旋回則は `GoalApproach` の比例則 (`w = clamp(−k·error, ±ω_max)`, `k = 2.0`) と同形にした。
+`PurePursuit` の bang-bang は `dt` に対して脆いことが §12.4 で実測済みだからである。
+
+この分岐がないと閉ループが立ち上がらない。`navigation_loop` は障害物を見つけると走行中に再計画し、
+新しい経路の始端方位はロボット方位と一致しない。`PurePursuit` が `yaw_aligned_` を持っているのと同じ理由である。
+
+### 13.7 QP ソルバ抽象と OSQP 依存
+
+**`AGENTS.md` の依存規則 (コアは stdlib + Eigen) からの意図的な逸脱である。** 自前 QP をフルスクラッチで
+書く前に、まず動く MPC を得て評価することを優先した。切り戻せる形にしてある。
+
+```
+ELTANIN_ENABLE_MPC = OFF (既定) | ON
+ELTANIN_MPC_SOLVER_PROVIDER = fetch (既定) | package
+```
+
+- `OFF` では OSQP を一切取得せず、`eltanin_control` の依存は `eltanin_core` のみ。MPC のソースとテストは
+  ビルド対象から外れる。通常のビルドと CI はネットワーク不要のまま保たれる。
+- `ON` + `fetch` は OSQP **v1.0.0** を `FetchContent` で取得する。ライセンスは Apache-2.0 で eltanin と整合する
+  ことを実際にタグを取得して確認した。
+- `ON` + `package` は `find_package(osqp REQUIRED)` に切り替える。ROS 側は `ros-jazzy-osqp-vendor` を使い、
+  `eltanin_vendor` の `ExternalProject_Add` に 2 行足すだけで有効化できる。オフライン CI もこちらを選べる。
+
+`MpcFollower` は OSQP の型を 1 つも持たない。差し替え時に置き換わるのは `src/control/qp_solver_osqp.cpp`
+1 ファイルである。抽象 (`detail::QpSolver` / `QpStructure` / `QpStats`) は公開ヘッダにせず `src/control/` に
+閉じた (§9.2「利用者が現に存在しないものを public にしない」)。テストは `src/control` を include path に
+足して届かせている。
+
+OSQP のビルド設定は `OSQP_BUILD_SHARED_LIB=OFF` / `OSQP_BUILD_DEMO_EXE=OFF` / `OSQP_BUILD_UNITTESTS=OFF` /
+`OSQP_ALGEBRA_BACKEND=builtin` / `OSQP_ENABLE_INTERRUPT=OFF` / `OSQP_ENABLE_PRINTING=OFF` /
+`OSQP_ENABLE_PROFILING=ON` (求解時間の計測のみに使い、アルゴリズムの分岐には使わない)。
+eltanin の `-Werror` はターゲットごとの PRIVATE 適用なので `add_subdirectory` された OSQP には届かない。
+
+install / export では `eltanin_control` が OSQP を PRIVATE リンクしても `$<LINK_ONLY:...>` が
+`eltaninTargets.cmake` に残る (`yaml-cpp` とまったく同じ問題、`docs/costmap-design.md` §12.3)。
+`eltaninConfig.cmake.in` に条件つき `find_dependency(osqp)` を足し、`test/package_test` を `ON` / `OFF` の
+両方で通して確認した。
+
+#### 13.7.1 決定性のために明示した設定
+
+| 設定 | 値 | 理由 |
+|---|---|---|
+| `adaptive_rho` | `OSQP_ADAPTIVE_RHO_UPDATE_ITERATIONS` | v1.0.0 の既定と同じだが、時間ベースという選択肢が存在する。既定に頼ると将来の版更新で非決定になりうる |
+| `adaptive_rho_interval` | 50 | 同上 |
+| `time_limit` | 1e10 | **v1.0.0 は `time_limit <= 0` を検証で弾く**ので「無効」を 0 では書けない。到達不能な大きさで表す |
+| `max_iter` | 500 | §13.9 の掃引で決めた。既定 4000 は制御周期に対して長すぎ、200 では冷スタートが落ちることがあった |
+| `eps_abs` / `eps_rel` | 1e-4 | 既定 1e-3 は指令 [m/s] の精度として粗い。1e-3 / 1e-5 との差は実測で出なかった |
+| `verbose` | 0 | ライブラリが標準出力に書くことを許さない |
+
+**求解時間はログにしか使わない。** 「時間が掛かったら打ち切る」を入れた瞬間に決定性が壊れる。
+
+**`reset()` は `osqp_cold_start()` ではなく再 setup にした。** `osqp_cold_start()` は前の求解で適応した
+`rho` を残すため、リセット後の解が新規インスタンスとビット一致しない (実測: 0.69981027191326606 と
+...539 の差)。`reset()` は経路更新時にしか呼ばれないので、確保をやり直す代償を払って
+「`reset()` 後の追従器は新品と同じ」という契約を取った。`test_qp_solver.cpp` と
+`test_mpc_follower.cpp: ResetMakesItBehaveLikeANewInstance` が固定している。
+
+#### 13.7.2 定常状態の `follow()` はヒープ確保をしない
+
+`create()` で OSQP のワークスペース、CSC の値・添字、`q` / `l` / `u`、参照軌道バッファ、解ベクトルを
+すべて確保する。大きさは `prediction_horizon` だけで決まり、経路長に依存しない。毎周期は
+`osqp_update_data_mat()` (値のみ) と `osqp_update_data_vec()` を呼ぶ。疎パターンは数値が 0 になる周期の
+要素も含めて構造的に固定してある。
+
+`operator new` と `malloc` / `calloc` / `realloc` を同時に数えて実測した結果、**定常状態の 50 周期で
+確保は 0 回**である (Release、既定パラメータ)。経路更新時 (弧長・経路複製・プロファイル再構築) は確保する
+が、NF-3 は「定常状態の `follow()`」に対する要件なので範囲内である。
+
+### 13.8 実測: 実マップでの 3 構成比較
+
+`examples/eltanin_track_on_real_map`、参照マップ `navyu_navigation/map`、自動選択の start / goal
+(727 点 / 37.2512 m、§5.1 と同じ経路)、`v_max = 0.5 m/s`、`dt = 0.01 s`、Release ビルド。
+
+| # | 構成 | 最大横方向誤差 | `circ` 侵入 | 走破時間 | ゴール残距離 | 求解時間 p99 |
+|---|---|---|---|---|---|---|
+| ① | Pure Pursuit 既定 (ベースライン) | **5.011 cm** | 79 / 7532 (1.05 %) | 75.32 s | 2.19 cm | — |
+| ② | Pure Pursuit + 速度プロファイル | 5.023 cm | 86 / 7561 (1.14 %) | 75.61 s | 2.45 cm | — |
+| ③ | **MPC + 速度プロファイル** | **2.218 cm** | **54 / 7494 (0.72 %)** | 74.94 s | 2.42 cm | **1.33 ms** |
+| ④ | MPC 単体 (プロファイル無効) | 2.611 cm | 50 / 7463 (0.67 %) | 74.63 s | 2.45 cm | 1.34 ms |
+
+`Inscribed` 帯 (必ず衝突) への侵入は全構成で 0、経路自身の非 `Free` 点も 0 である。
+
+**結論は §5.3 の予想と逆だった。**
+
+- **② ≒ ①**: 速度プロファイルは Pure Pursuit の誤差をまったく改善しない (5.011 → 5.023 cm)。`circ` は
+  むしろ増える (79 → 86)。理由は §13.10 に書いた — Pure Pursuit が指令する曲率は速度にほぼ依存しないため、
+  速度を落としても幾何が変わらない。§5.3 の選択肢 4「曲率に応じた減速が本命」は**この経路では成立しない**。
+- **③ < ①**: MPC は最大誤差を 5.011 → 2.218 cm (−56 %) にし、`circ` を 79 → 54 (−32 %) にした。
+  **走破時間は増えていない** (75.32 → 74.94 s)。§6 の必達条件を満たす。
+- **③ と ④ の差 (2.218 vs 2.611 cm) が速度プロファイルの寄与である。** MPC の定式化が支配項で、
+  プロファイルはその上に 15 % 乗せる部品という位置づけになる。
+
+**§5.1 が記録した ① の値 (4.93 cm / 82 / 7531 / 2.34 cm) は再現しなかった。** 基点コミット `7ff8f75` を
+worktree に出してビルドし直して同じ条件で測ると 5.011 cm / 79 / 7532 / 2.19 cm となり、本節の ① と
+1 ビットも違わない。**T9 の変更は `PurePursuit` の数値を動かしていない**ことがこれで確認できる。
+§5.1 の値はそれ以前のどこかの変更でずれたものであり、本節の ① を以後のベースラインとする。
+
+**AC-12 (求解時間)**: 制御周期 0.05 s に対し p99 = 1.33 ms (2.7 %)、最大 1.64 ms、反復数の最大 100。
+④ では最大 5.22 ms が 1 回出るが、これは冷スタートの初回求解であり p99 は 1.34 ms である。
+
+### 13.9 掃引した表 (重み・窓幅・反復上限)
+
+「振ったら良くなった」で終わらせないため、掃引の結果を残す。
+
+**状態重みの掃引** (合成経路、`test/control/tracking_fixture.hpp` と同一の閉ループ、
+`1.0 m 走行以降の最大横方向誤差 [m]`。Pure Pursuit の実測は §4.1 の閾値)
+
+| `w_lat` | `w_yaw` | `w_rate` | 直線 (経路上) | 直線 (横 0.2 m) | 直線 (yaw 0.5) | 円弧 R=2 |
+|---|---|---|---|---|---|---|
+| Pure Pursuit 実測 | — | — | 1.4e-17 | 0.01350 | 0.00052 | 0.00351 |
+| 10 | 5 | 10 | 0 | 0.08701 | 0.00981 | 0.00126 |
+| 10 | 200 | 1 | 0 | 0.18800 (未到達) | 0.00464 | 0.00251 |
+| 50 | 5 | 1 | 0 | 0.02433 | 0.00242 | 0.00124 |
+| 100 | 1 | 1 | 0 | 0.00400 | 0.00088 | 0.00100 |
+| **200** | **5** | **1** | **0** | **0.00282** | **0.00044** | **0.00101** |
+| 500 | 5 | 1 | 0 | 0.00195 | 0.00006 | 0.00088 |
+| 1000 | 20 | 1 | 0 | 0.00129 | 0.00004 | 0.00088 |
+
+`w_yaw` を上げると横方向が悪化する (方位を優先して経路から離れる)。`w_lat` は上げるほど誤差が下がるが、
+QP の条件数が悪化して反復数が伸びる:
+
+| `w_lat` | 反復 p99 | 反復 最大 | 求解時間 p99 | 打ち切り失敗 |
+|---|---|---|---|---|
+| 200 | 75 | 225 | 0.17 ms | 0 |
+| 500 | 175 | 525 | 0.30 ms | `max_iter = 200` で 1 回 |
+
+**`w_lat = 200` を既定にした。** 500 でも合成経路の誤差は良いが、反復数が 2 倍以上に伸びて
+`max_iter` の設定に敏感になる。200 なら `max_iter = 500` に対して余裕が 2 倍以上ある。
+
+**ホライズン・刻み・許容の掃引** (`w_lat = 500` 時点の測定、単位は上表と同じ)
+
+| 掃引 | 直線 (横 0.2 m) | 直線 (yaw 0.5) | 円弧 R=2 |
+|---|---|---|---|
+| `terminal_weight_scale` 1 / 10 / 50 | 0.00195 / 0.00195 / 0.00195 | 0.00006 / 0.00006 / 0.00005 | 0.00079 / 0.00088 / 0.00098 |
+| `prediction_horizon` 5 / 10 / 20 / 30 | 0 / 0.00165 / 0.00195 / 0.00195 | 0.00006 / 0.00005 / 0.00006 / 0.00005 | 0.00036 / 0.00073 / 0.00088 / 0.00092 |
+| `prediction_dt` 0.05 / 0.10 / 0.20 | 0.00241 / 0.00195 / 0.00390 | 0.00006 / 0.00006 / 0.00044 | 0.00066 / 0.00088 / 0.00148 |
+| `eps_abs = eps_rel` 1e-3 / 1e-4 / 1e-5 | 0.00195 (3 条件で同値) | 0.00006 | 0.00088 |
+
+合成経路では `N = 5` でも十分だが、実マップのコーナー弧長 (0.3〜1.0 m) を丸ごと視野に入れるには
+`N × dt × v_max = 1.0 m` が要るので既定は 20 × 0.1 s のままにした。`eps` は 2 桁振っても差が出ない。
+
+**曲率窓の掃引** (実マップ、`v_max = 0.5`、プロファイル有効)
+
+| `curvature_window` | PP 最大誤差 | PP `circ` | PP 走破 | MPC 最大誤差 | MPC `circ` | MPC 走破 |
+|---|---|---|---|---|---|---|
+| 0.05 m | 0.05018 | 100 | 76.08 s | **0.01763** | 59 | 75.42 s |
+| 0.10 m | 0.05006 | 93 | 75.87 s | 0.01967 | 56 | 75.20 s |
+| 0.20 m | 0.05033 | 89 | 75.65 s | 0.02025 | 56 | 74.98 s |
+| **0.30 m (既定)** | 0.05023 | 86 | 75.61 s | 0.02218 | **54** | 74.94 s |
+| 0.50 m | 0.05011 | 79 | 75.54 s | 0.02611 | 50 | 74.85 s |
+
+窓を狭めると最大誤差は下がるが `circ` 侵入と走破時間が増える。**単調に交換されるだけで最適点が無い。**
+既定は誤差ではなく物理から決めた 0.30 m (`v_max/ω_max = 0.32 m`) のままにした。地図に合わせて選ぶと
+別の地図で外れる。
+
+### 13.10 なぜ速度プロファイルは Pure Pursuit を助けないのか
+
+Pure Pursuit が指令する角速度は `w = 2·v·sin α / max(d, min_lookahead_dist)` である。指令曲率
+`w / v = 2·sin α / max(d, L)` は **`v` を含まない**。したがって `apply_linear_limit()` で Twist 全体を
+比率スケールしても軌跡の形は変わらず、同じ道をゆっくり通るだけになる。`v` が効くのは先行距離
+`L = lookahead_time·v + min_lookahead_dist` を通じた分だけで、既定 `lookahead_time = 0.1 s` では
+`v` を 0.5 → 0.3 に落としても `L` は 0.35 → 0.33 m しか動かない。
+
+合成円弧では話が変わる。`w` が `max_angular_vel` で飽和する速度域 (R = 0.4 / 0.5 m を 0.8 m/s) では、
+プロファイル無効の Pure Pursuit は経路を離れて周回に入り (走行距離が経路長の 25 倍、最大横方向誤差
+1.13 m)、有効にすると 0.35〜0.46 m に収まる。**プロファイルが効くのは「幾何的に追従不可能な速度」を
+切り落とすときであって、追従可能な速度域での精度改善ではない。**
+`test/control/test_velocity_profile_tracking.cpp` がこの 2 面を両方固定している。
+
+R = 0.3 m の円弧ではプロファイルを入れても誤差が改善しない (0.092 → 0.128 m)。`min_lookahead_dist = 0.3 m`
+が曲率半径以上になり、狙う点が円弧を横切ってしまうためである。**速度上界では直せない**ので、
+既知の制限としてテストに記録した。
+
+### 13.11 失敗系とフォールバック
+
+§13.4.1 により非実行可能は起きないので、扱うべき失敗は 3 種に縮む。
+
+| ソルバの返り | 扱い | `FollowStatus` |
+|---|---|---|
+| `Solved` / `SolvedInaccurate` | 解を採用。**必ず入力ボックスへクランプしてから返す** | `Tracking` |
+| `MaxIterations` | 解を棄却してフォールバック | `SolverFailed` |
+| 解に非有限値 | 同上。駆動器へ NaN を流さないための最後の網 | `SolverFailed` |
+
+反復上限の打ち切り解を使わないのは、「収束していない解が指令になった周期」を後から識別できなくなる
+ためである。
+
+フォールバックは**比率スケールの減速**で、曲率 `w/v` を保ったまま止まる。
+
+```
+v_next = max(0, |v_now| − max_linear_accel · dt)
+ratio  = (|v_now| > 1e-9) ? v_next / |v_now| : 0
+cmd    = { copysign(v_next, v_now), 0, w_now · ratio }
+```
+
+連続失敗が `max_consecutive_failures` (既定 3) を超えたら**厳密にゼロ**を返す。ゼロ指令が続けば
+`examples/navigation_loop.hpp` の `stop_cycles_to_replan` (既定 5) が再計画を起こす。
+**新しい機構を足さずに既存の統合機構へ接続する**のが狙いである。
+
+### 13.12 追従器の実行時選択
+
+`eltanin_planner` の `to_planner_type()` と同じ形にしてある。
+
+```cpp
+FollowerFactoryParams params;
+params.type = *control::to_follower_type("mpc");   // "pure_pursuit" | "mpc"
+control::FollowerResult built = control::make_path_follower(params);
+if (!built) { /* to_string(built.error()) */ }
+std::unique_ptr<control::PathFollower> follower = built.take();
+```
+
+`FollowerError::MpcNotBuilt` を独立した理由にした。`ELTANIN_ENABLE_MPC=OFF` のビルドで `"mpc"` を
+要求されたとき「パラメータが悪い」と区別できなければ、ROS 側の診断メッセージが嘘になる。
+
+`MpcFollowerParams` はヘッダで `#ifdef ELTANIN_WITH_MPC` により消える。マクロは
+`target_compile_definitions(eltanin_control PUBLIC ELTANIN_WITH_MPC)` で与えるので下流のビルドでも同じ値が見える。
+
+### 13.13 §12.1 の合成擬似コードの更新
+
+追従器の呼び出しが 1 行変わるだけで、`GoalApproach` との合成順序は変わらない。
+
+```
+ga  = approach.compute(robot.pose, path, dt);
+st  = FollowerState{robot.pose, measured_twist_or_nullopt};
+fw  = follower->follow(st, path, dt);              // PurePursuit または MpcFollower
+
+switch (ga.state) {
+  Aligning:                    cmd = ga.command;
+  Reached / AlignmentTimeout:  cmd = {};
+  Inactive / Approaching:      cmd = detail::apply_linear_limit(fw.command, ga.linear_vel_limit);
+}
+// fw.status が Tracking 以外ならゼロ指令
+out = limiter.limit(costmap, model, robot.pose, cmd);
+```
+
+**速度プロファイルはこの擬似コードに現れない。** 追従器の内側で効いた後の指令に `GoalApproach` の上限が
+さらに掛かる順序になり、比率スケールを 2 回掛けることは (`v` については) より小さい上界を 1 回掛けることと
+同値なので、F-13 が要求した「2 つの上限の `min`」は自動的に成立する。
+
+### 13.14 制約と前提 (M-*)
+
+`C-*` (PurePursuit) / `G-*` (GoalApproach) とは混ぜない。
+
+| # | 制約・前提 |
+|---|---|
+| M-1 | 車両モデルは差動二輪のみ。`Twist2D::linear.y()` は常に 0 |
+| M-2 | 前進のみ (`min_linear_vel` 既定 0)。後退・カスプは実行しない |
+| M-3 | 障害物を見ない。安全は後段の `VelocityLimiter` に依存する |
+| M-4 | 経路点の `yaw` を参照として使う。ただし最終点の yaw は接線に置き換える (§13.5.1) |
+| M-5 | 実機の加減速限界は未計測。`max_angular_accel = 3.0 rad/s²` は測った値ではなく仮値である |
+| M-6 | `max_lateral_accel = 0.5 m/s²` も未計測。保守側に置いたことが根拠である |
+| M-7 | `prediction_dt` は制御周期とは別のパラメータで、両者が一致する前提を置かない |
+| M-8 | 新しい経路を渡す前に呼び出し側が `reset()` を呼ぶ (基底の契約) |
+| M-9 | むだ時間 (通信・アクチュエータ遅延) 補償は入れていない。`FollowerState::twist` を持つので後続が足せる |
+| M-10 | 速度プロファイルは経路の幾何のみから決まる。障害物由来の減速は `VelocityLimiter` の担当 |
+| M-11 | ソルバ由来の例外は境界で捕捉して `Status` に変換する。`control` は `std::invalid_argument` 以外を投げない |
+
+### 13.15 退化ケースの扱い
+
+| # | 状況 | 挙動 | 実装場所 |
+|---|---|---|---|
+| 1 | `path` が空 | `NoPath` + ゼロ指令 + `reset()` | 基底 |
+| 2 | `path` が 1 点 | `GoalReached` + ゼロ指令 + `reset()` | 基底 |
+| 3 | `dt <= 0` / 非有限、`pose` / `twist` が非有限 | `std::invalid_argument` | 基底 |
+| 4 | ホライズンが経路の残りより長い | 参照を最終姿勢で埋め `v_ref = ω_ref = 0` | 参照生成 |
+| 5 | 経路から方位が大きく外れている | `max_heading_error` 超過でその場旋回へ退避 | `MpcFollower` |
+| 6 | QP が非実行可能 | 起きない (§13.4.1)。検査はするが到達しない | — |
+| 7 | 反復上限で打ち切り | 準最適解を棄却してフォールバック | `MpcFollower` |
+| 8 | 解に非有限値 | フォールバックの減速へ落とす | `MpcFollower` |
+| 9 | 曲率が極端に大きい点 | 窓つき外接円で発散しない。加えて段 2 に `min_linear_vel` の下限 | `VelocityProfile` |
+| 10 | 重複点 (`Δs → 0`) | 外接円の分母が 0 → 曲率 0 | `path_curvature` |
+| 11 | 経路が 2 点 | 窓が取れないので全点 0 → `max_linear_vel` | `path_curvature` |
+| 12 | プロファイル無効 | 上界 `+inf` → `apply_linear_limit()` が恒等写像 | 基底 |
+| 13 | `OFF` ビルドで `"mpc"` | `FollowerError::MpcNotBuilt` | ファクトリ |
+| 14 | 同一位置の連続姿勢 (その場旋回経路) | 参照弧長が進まず yaw だけ飛ぶ。NaN を出さず後退もしないことだけを固定した | 参照生成 |
+
+### 13.16 検証しなかったこと / 既知の制限
+
+| # | 内容 |
+|---|---|
+| 1 | **実機検証。** 環境がない。`SimpleSimulator` と合成経路・実マップに限る |
+| 2 | **その場旋回の明示的な実行。** Hybrid A* の `allow_turn_in_place` が作る同一位置の連続姿勢を MPC が能動的に回るモードは持たない。NaN を出さないことと後退しないことだけをテストで固定した |
+| 3 | **後退走行・カスプ。** `min_linear_vel` はパラメータだが既定 0 で、負値での検証はしていない |
+| 4 | **むだ時間補償。** 実測値がない |
+| 5 | **MPC のコスト関数への障害物項。** C-11 を踏襲した。③ と ④ の差が小さいこと (§13.8) は、次に効くのが速度制御ではなく障害物項である可能性を示している |
+| 6 | **`max_iter` を超えたときの実挙動。** 意図的に `max_iterations = 1` にした単体テストでしか観測していない。既定パラメータの実マップ全周では 1 度も起きていない |
+| 7 | **`R = 0.3 m` 級の円弧に対する Pure Pursuit + プロファイル。** 改善しないことを記録しただけで直していない (§13.10) |
