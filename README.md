@@ -188,22 +188,37 @@ tightens as the goal gets closer, so on an open map the returned path *is* the o
 rather than a heading-quantized weave. `analytic_expansion_ratio` controls the throttle; raising it
 above the default tries more often, which measurably degrades detours around obstacles.
 `motion_model` declares what the vehicle can do, and the returned path contains nothing else:
-`Dubins` is forward arcs at or above the turning radius, and `Differential` adds turning on the spot,
-which is what a differential drive actually does. The difference is not cosmetic — on the reference
-map a requested goal heading is reachable in 3 of 8 directions under `Dubins` and in 8 of 8 under
-`Differential`, both with the same `1 / minimum_turning_radius` bound on every travelling segment.
-A turn on the spot appears as its own pose, so two consecutive poses can share a position; that is
-the one place the spacing contract below does not apply. Its motion
-primitives are straight plus a full and a half turn in each direction, so a heading can be nudged by a
-single bin instead of overshooting by two — that is what keeps detours from weaving.
+`Dubins` is forward arcs at or above the turning radius, `Differential` adds turning on the spot,
+which is what a differential drive actually does, and `ReedsShepp` adds driving in reverse. The
+difference is not cosmetic — on the reference map a requested goal heading is reachable in 3 of 8
+directions under `Dubins` and in 8 of 8 under `Differential`, both with the same
+`1 / minimum_turning_radius` bound on every travelling segment. A turn on the spot appears as its own
+pose, so two consecutive poses can share a position; that is the one place the spacing contract below
+does not apply. Under `ReedsShepp` every cusp is a pose of its own, so a follower can see where the
+gear changes; `reverse_penalty` multiplies the cost of reversing and `direction_change_penalty` charges
+each gear change, and both apply to the analytic tail as well as to the search.
+
+Both planners charge for travelling close to a wall through `ClearanceCost{penalty, distance}`, which
+adds `penalty * max(0, 1 - clearance / distance)` per metre travelled. It is **on for Hybrid A***
+(`{0.3, 0.2}`, which runs on a corridor where the distance field is cheap) and **off for A***, because
+A* runs on the full map and the distance field there costs more than the search. The path smoother
+carries the same idea locally: `weight_obstacle` / `obstacle_distance` push points off walls and
+`weight_curvature` penalises bending, using a distance field built only over a window around the path.
+`docs/planner-design.md` §14.4 and §14.5 record what each weight buys and what it costs.
+
+When the `Free` cells leave start and goal disconnected — a doorway the robot barely fits through —
+the base planner retries once with `Traversability::Circumscribed` opened up, charging
+`NarrowPassageFallback::penalty` per metre of band used so it crosses where the band is thinnest. A
+path found that way reports `PlanResult::narrow_passage()`. Set `narrow_passage.enabled = false` to
+keep the strict single-pass behaviour.
 
 Hybrid A* holds `(cell, heading_bin)` search state, so its memory grows with cells times
 `heading_bins`: about 8.125 bytes per state, or 25 MB for a 10 m square map at 0.05 m and 72 bins.
 `max_state_memory_bytes` (256 MiB by default) rejects anything larger with `StateSpaceTooLarge` rather
 than throwing, which means **a full 4000 x 4000 map does not fit** — crop a corridor around a raw A*
 guide first with `map::crop_around()`, as `eltanin_hybrid_astar_demo` and the navigation loop do. On the
-4000 x 4000 reference map that turns 1.15e9 states into 5.8e6 and plans in about 380 ms. `docs/planner-design.md` §13 records
-the measurements behind these numbers.
+4000 x 4000 reference map that turns 1.15e9 states into 5.8e6 and plans in about 380 ms.
+`docs/planner-design.md` §13 and §14 record the measurements behind these numbers.
 
 `eltanin_navigate_on_real_map` closes the loop over every module in a single process. No ROS node, no
 tf, no topic, no simulator process:
