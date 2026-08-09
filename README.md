@@ -13,7 +13,7 @@ that needs ROS 2, visualization or file I/O lives in a separate target.
 | `eltanin_map` | `eltanin::map` | `eltanin::core` | `MapGeometry` (the only world/map conversion), `GridMap<T>`, nav2-scale cost constants, cost model |
 | `eltanin_map_io` | `eltanin::map_io` | `eltanin::map`, yaml-cpp | PGM + YAML map loading, PGM debug dump |
 | `eltanin_sensor` | `eltanin::sensor` | `eltanin::core` | Laser scan projection into planar points (`ScanData` / `ScanFilter` / `project_scan`) |
-| `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\*, forward-only Hybrid A\*, Dubins path, nearest traversable cell search, iterative path smoother |
+| `eltanin_planner` | `eltanin::planner` | `eltanin::core`, `eltanin::map` | 8-connected A\*, Hybrid A\* over (x, y, yaw), Dubins and Reeds-Shepp paths, clearance map, nearest traversable cell search, iterative path smoother |
 | `eltanin_control` | `eltanin::control` | `eltanin::core` | Pure pursuit path tracking (`PurePursuit`), goal approach deceleration and final yaw alignment (`GoalApproach`) |
 | `eltanin_sim` | `eltanin::sim` | `eltanin::core` | Deterministic differential-drive plant (`SimpleSimulator`) |
 | `eltanin_collision` | `eltanin::collision` | `eltanin::core`, `eltanin::map` | Two-stage and exact footprint collision checking, braking-distance velocity limiting (`VelocityLimiter`) |
@@ -111,7 +111,7 @@ goal include yaw in radians:
 ```bash
 ./build/examples/eltanin_hybrid_astar_demo \
   path/to/map.yaml /tmp/eltanin-hybrid \
-  36.175 -15.925 1.5708 34.675 -9.025 1.5708
+  36.175 -15.925 1.5708 34.675 -9.025 1.5708 [allow_reverse 0|1] [allow_turn_in_place 0|1]
 python3 examples/plot_hybrid_astar.py /tmp/eltanin-hybrid \
   --out /tmp/eltanin-hybrid/hybrid_astar.png --animate
 ```
@@ -207,9 +207,9 @@ carries the same idea locally: `weight_obstacle` / `obstacle_distance` push poin
 `docs/planner-design.md` §14.4 and §14.5 record what each weight buys and what it costs.
 
 When the `Free` cells leave start and goal disconnected — a doorway the robot barely fits through —
-`NarrowPassageFallback` retries once with `Traversability::Circumscribed` opened up, charging its
+`TraversabilityFallback` retries once with `Traversability::Circumscribed` opened up, charging its
 `penalty` per metre of band used so it crosses where the band is thinnest, and marks the result with
-`PlanResult::narrow_passage()`. **It is off by default and unsafe to switch on blindly:**
+`PlanResult::relaxed()`. **It is off by default and unsafe to switch on blindly:**
 `Circumscribed` means a collision is *possible depending on heading*, and A* only checks the vehicle
 reference point, so the returned path can put the footprint through a wall. **Hybrid A* has a better
 answer: give it `HybridAStarParams::footprint` and it enters the band only at headings where the

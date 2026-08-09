@@ -110,8 +110,12 @@ return (2 * M_PI - std::fabs(sum_angle)) < std::numeric_limits<double>::epsilon(
 したがってこの基準は「膨張値ではなく実障害物セル」を正しく選ぶ。
 未知セルの扱いは既存の `unknown_is_free` フラグ 1 つに従わせ、第 1 段と第 2 段で解釈が食い違わないようにした。
 
-`CollisionRadii` (距離場側) には `is_obstacle` を**足していない**。距離場の producer がまだなく、
-距離から占有を決めるには実質 `distance < resolution / 2` という別のしきい値を発明することになる。
+`CollisionRadii` (距離場側) には当初 `is_obstacle` を**足していなかった**。距離場の producer がまだなく、
+距離から占有を決めるには実質 `distance < resolution / 2` という別のしきい値を発明することになるためである。
+
+**T9 で足した** (`docs/planner-design.md` §14.7)。Hybrid A\* の姿勢ごとのフットプリント判定が、膨張値と
+実障害物の区別を距離場側でも要求したためである。しきい値は `distance <= 0`、すなわち障害物セルそのもの
+だけを占有とする。同じタスクでこの型は `DistanceTraversabilityModel` に改名した (§14.13)。
 
 ### 2.3 座標変換は `MapGeometry` の中だけ
 
