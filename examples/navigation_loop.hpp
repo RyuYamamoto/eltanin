@@ -651,7 +651,7 @@ inline NavigateResult navigate(
   const std::size_t max_steps = static_cast<std::size_t>(config.max_sim_time / config.control_dt);
   const std::size_t full_prediction =
     static_cast<std::size_t>(limiter->params().prediction_steps) + 1;
-  const double clearance_reach = robot.radii.circumscribed_radius() + CLEARANCE_SEARCH_MARGIN;
+  const double clearance_reach = robot.distance_model.circumscribed_radius() + CLEARANCE_SEARCH_MARGIN;
   std::size_t leg = 0;
   int zero_cycles = 0;
   double progress_since_replan = 0.0;
@@ -680,7 +680,7 @@ inline NavigateResult navigate(
       }
       if (config.replan_on_blocked_path) {
         path_blocked = detail::path_blocked_ahead(
-          *path, plant.pose().position, observed_points, robot.radii.circumscribed_radius(),
+          *path, plant.pose().position, observed_points, robot.distance_model.circumscribed_radius(),
           config.path_check_distance);
       }
       // The origin and the cells have to move together: set_origin() alone relabels stale cells.
@@ -950,7 +950,7 @@ inline bool write_output_files(
     std::cerr << "failed to write meta.txt into " << directory << '\n';
     return false;
   }
-  write_meta(meta, crop, lower_left, robot.inflation, robot.radii);
+  write_meta(meta, crop, lower_left, robot.inflation, robot.distance_model);
   const eltanin::collision::VelocityLimiterParams & limits = config.limiter;
   meta << "planner " << planner_name(config.planner) << '\n'
        << "control_dt " << config.control_dt << '\n'

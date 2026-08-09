@@ -35,7 +35,7 @@
 namespace
 {
 
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Polygon2D;
 using eltanin::Pose2D;
 using eltanin::Traversability;
@@ -79,11 +79,11 @@ Polygon2D default_footprint() { return VelocityLimiterParams{}.footprint; }
 
 std::optional<InflationCostModel> inflation_model(const Polygon2D & footprint)
 {
-  const auto radii = CollisionRadii::from_footprint(footprint, INFLATION_RADIUS);
-  if (!radii.has_value()) {
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(footprint, INFLATION_RADIUS);
+  if (!distance_model.has_value()) {
     return std::nullopt;
   }
-  return InflationCostModel::create(*radii, COST_SCALING_FACTOR);
+  return InflationCostModel::create(*distance_model, COST_SCALING_FACTOR);
 }
 
 Scenario inflate(Costmap map, const InflationCostModel & inflation)
@@ -252,7 +252,7 @@ int usage(const char * program)
             << "  closed_loop_*.csv     the stopping run driven through SimpleSimulator.\n"
             << "  heading_sweep_*.csv   collision verdict over a full turn at one pose.\n"
             << "  bands.pgm             per-cell Free / Circumscribed / Inscribed classification.\n"
-            << "  meta.txt              parameters and the derived radii.\n";
+            << "  meta.txt              parameters and the derived distance_model.\n";
   return EXIT_FAILURE;
 }
 
@@ -278,7 +278,7 @@ int main(int argc, char ** argv)
   }
 
   const Scenario wall = wall_scenario(*inflation);
-  // (5, 5) cells away is 0.354 m, which falls between the inscribed and circumscribed radii.
+  // (5, 5) cells away is 0.354 m, which falls between the inscribed and circumscribed distance_model.
   const Scenario diagonal = single_obstacle_scenario(*inflation, 5, 5);
   const Scenario head_on = single_obstacle_scenario(*inflation, 5, 0);
 
@@ -295,7 +295,7 @@ int main(int argc, char ** argv)
     return EXIT_FAILURE;
   }
 
-  const CollisionRadii & radii = inflation->radii();
+  const DistanceTraversabilityModel & distance_model = inflation->distance_model();
   std::ofstream meta(output_dir / "meta.txt");
   if (!meta) {
     std::cerr << "failed to write meta.txt\n";
@@ -304,9 +304,9 @@ int main(int argc, char ** argv)
   meta << "resolution " << RESOLUTION << '\n'
        << "size_x " << MAP_CELLS << '\n'
        << "size_y " << MAP_CELLS << '\n'
-       << "inscribed_radius " << radii.inscribed_radius() << '\n'
-       << "circumscribed_radius " << radii.circumscribed_radius() << '\n'
-       << "inflation_radius " << radii.inflation_radius() << '\n'
+       << "inscribed_radius " << distance_model.inscribed_radius() << '\n'
+       << "circumscribed_radius " << distance_model.circumscribed_radius() << '\n'
+       << "inflation_radius " << distance_model.inflation_radius() << '\n'
        << "circumscribed_cost " << static_cast<int>(inflation->circumscribed_cost()) << '\n'
        << "cost_scaling_factor " << COST_SCALING_FACTOR << '\n'
        << "requested_speed " << REQUESTED_SPEED << '\n'
@@ -317,8 +317,8 @@ int main(int argc, char ** argv)
        << "collision_margin " << limiter->params().collision_margin << '\n'
        << "max_deceleration " << limiter->params().max_deceleration << '\n';
 
-  std::cout << "inscribed " << radii.inscribed_radius() << " m, circumscribed "
-            << radii.circumscribed_radius() << " m, circumscribed_cost "
+  std::cout << "inscribed " << distance_model.inscribed_radius() << " m, circumscribed "
+            << distance_model.circumscribed_radius() << " m, circumscribed_cost "
             << static_cast<int>(inflation->circumscribed_cost()) << '\n'
             << "wrote velocity_profile.csv, closed_loop_forward.csv, heading_sweep_diagonal.csv,"
             << " heading_sweep_head_on.csv, bands.pgm, meta.txt into " << output_dir << '\n';

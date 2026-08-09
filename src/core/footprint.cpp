@@ -68,7 +68,7 @@ std::optional<double> circumscribed_radius(const Polygon2D & footprint)
   return maximum;
 }
 
-std::optional<CollisionRadii> CollisionRadii::from_footprint(
+std::optional<DistanceTraversabilityModel> DistanceTraversabilityModel::from_footprint(
   const Polygon2D & footprint, double inflation_radius)
 {
   const std::optional<double> inscribed = eltanin::inscribed_radius(footprint);
@@ -79,7 +79,7 @@ std::optional<CollisionRadii> CollisionRadii::from_footprint(
   return from_radii(*inscribed, *circumscribed, inflation_radius);
 }
 
-std::optional<CollisionRadii> CollisionRadii::from_radii(
+std::optional<DistanceTraversabilityModel> DistanceTraversabilityModel::from_radii(
   double inscribed, double circumscribed, double inflation)
 {
   if (!std::isfinite(inscribed) || !std::isfinite(circumscribed) || !std::isfinite(inflation)) {
@@ -88,7 +88,7 @@ std::optional<CollisionRadii> CollisionRadii::from_radii(
   if (inscribed < 0.0 || inscribed > circumscribed || circumscribed > inflation) {
     return std::nullopt;
   }
-  return CollisionRadii(inscribed, circumscribed, inflation);
+  return DistanceTraversabilityModel(inscribed, circumscribed, inflation);
 }
 
 }  // namespace eltanin

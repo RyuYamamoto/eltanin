@@ -23,7 +23,7 @@
 namespace
 {
 
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Traversability;
 using eltanin::map::CostTraversabilityModel;
 using eltanin::map::FREE_SPACE;
@@ -33,13 +33,13 @@ using eltanin::map::LETHAL_OBSTACLE;
 using eltanin::map::MAX_NON_OBSTACLE;
 using eltanin::map::NO_INFORMATION;
 
-CollisionRadii radii(double inscribed = 0.3, double circumscribed = 0.5, double inflation = 1.0)
+DistanceTraversabilityModel distance_model(double inscribed = 0.3, double circumscribed = 0.5, double inflation = 1.0)
 {
-  const auto value = CollisionRadii::from_radii(inscribed, circumscribed, inflation);
+  const auto value = DistanceTraversabilityModel::from_radii(inscribed, circumscribed, inflation);
   return *value;
 }
 
-InflationCostModel model(double cost_scaling_factor = 3.0, const CollisionRadii & r = radii())
+InflationCostModel model(double cost_scaling_factor = 3.0, const DistanceTraversabilityModel & r = distance_model())
 {
   const auto value = InflationCostModel::create(r, cost_scaling_factor);
   return *value;
@@ -49,13 +49,13 @@ InflationCostModel model(double cost_scaling_factor = 3.0, const CollisionRadii 
 
 TEST(CostModel, CreateRejectsInvalidScalingFactor)
 {
-  EXPECT_TRUE(InflationCostModel::create(radii(), 0.0).has_value());
-  EXPECT_TRUE(InflationCostModel::create(radii(), 3.0).has_value());
-  EXPECT_FALSE(InflationCostModel::create(radii(), -1.0).has_value());
+  EXPECT_TRUE(InflationCostModel::create(distance_model(), 0.0).has_value());
+  EXPECT_TRUE(InflationCostModel::create(distance_model(), 3.0).has_value());
+  EXPECT_FALSE(InflationCostModel::create(distance_model(), -1.0).has_value());
   EXPECT_FALSE(
-    InflationCostModel::create(radii(), std::numeric_limits<double>::quiet_NaN()).has_value());
+    InflationCostModel::create(distance_model(), std::numeric_limits<double>::quiet_NaN()).has_value());
   EXPECT_FALSE(
-    InflationCostModel::create(radii(), std::numeric_limits<double>::infinity()).has_value());
+    InflationCostModel::create(distance_model(), std::numeric_limits<double>::infinity()).has_value());
 }
 
 TEST(CostModel, CostAtKeyDistances)
@@ -121,15 +121,15 @@ TEST(CostModel, CircumscribedThresholdIsClampedAboveZero)
 
 TEST(CostModel, CircumscribedThresholdIsIndependentOfInflationRadius)
 {
-  const std::uint8_t near = model(3.0, radii(0.3, 0.5, 0.6)).circumscribed_cost();
-  const std::uint8_t far = model(3.0, radii(0.3, 0.5, 4.0)).circumscribed_cost();
+  const std::uint8_t near = model(3.0, distance_model(0.3, 0.5, 0.6)).circumscribed_cost();
+  const std::uint8_t far = model(3.0, distance_model(0.3, 0.5, 4.0)).circumscribed_cost();
   EXPECT_EQ(near, far);
 }
 
 TEST(CostModel, CostThresholdShiftsWithInscribedRadius)
 {
-  const std::uint8_t small_robot = model(3.0, radii(0.1, 0.5, 1.0)).circumscribed_cost();
-  const std::uint8_t large_robot = model(3.0, radii(0.4, 0.5, 1.0)).circumscribed_cost();
+  const std::uint8_t small_robot = model(3.0, distance_model(0.1, 0.5, 1.0)).circumscribed_cost();
+  const std::uint8_t large_robot = model(3.0, distance_model(0.4, 0.5, 1.0)).circumscribed_cost();
   EXPECT_LT(small_robot, large_robot);
 }
 

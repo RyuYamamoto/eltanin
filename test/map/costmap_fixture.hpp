@@ -81,9 +81,9 @@ inline std::vector<std::uint8_t> cells_top_down(const eltanin::map::Costmap & ma
 inline eltanin::map::InflationCostModel make_inflation_model(
   double inscribed, double circumscribed, double inflation, double cost_scaling_factor)
 {
-  const auto radii = eltanin::CollisionRadii::from_radii(inscribed, circumscribed, inflation);
-  assert(radii.has_value());
-  const auto model = eltanin::map::InflationCostModel::create(*radii, cost_scaling_factor);
+  const auto distance_model = eltanin::DistanceTraversabilityModel::from_radii(inscribed, circumscribed, inflation);
+  assert(distance_model.has_value());
+  const auto model = eltanin::map::InflationCostModel::create(*distance_model, cost_scaling_factor);
   assert(model.has_value());
   return *model;
 }

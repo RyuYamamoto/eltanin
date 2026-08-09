@@ -34,7 +34,7 @@ namespace
 {
 
 using Eigen::Vector2d;
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Path;
 using eltanin::Pose2D;
 using eltanin::Traversability;
@@ -51,13 +51,13 @@ using eltanin_test::distance_map_from_costmap;
 using eltanin_test::expect_same_path;
 using eltanin_test::make_cost_model;
 using eltanin_test::make_distance_map;
-using eltanin_test::make_radii;
+using eltanin_test::make_distance_model;
 
 constexpr double RESOLUTION = 0.1;
 constexpr double TOLERANCE = 1e-9;
 
 static_assert(eltanin::TraversabilityModel<CostTraversabilityModel, Costmap::value_type>);
-static_assert(eltanin::TraversabilityModel<CollisionRadii, DistanceMap::value_type>);
+static_assert(eltanin::TraversabilityModel<DistanceTraversabilityModel, DistanceMap::value_type>);
 static_assert(CellMap<Costmap>);
 static_assert(CellMap<DistanceMap>);
 
@@ -99,7 +99,7 @@ TEST(PlannerSeam, AStarConstructorRejectsNegativeStartSearchRadius)
 
 TEST(PlannerSeam, PlansOnAHandBuiltDistanceField)
 {
-  const CollisionRadii radii = make_radii();
+  const DistanceTraversabilityModel distance_model = make_distance_model();
   const DistanceMap map = make_distance_map(
     {
       ".....",
@@ -108,9 +108,9 @@ TEST(PlannerSeam, PlansOnAHandBuiltDistanceField)
       "..#..",
       ".....",
     },
-    RESOLUTION, radii);
+    RESOLUTION, distance_model);
   const auto path = plan_raw(
-    map, radii, Pose2D{map.geometry().map_to_world(0, 2), 0.0},
+    map, distance_model, Pose2D{map.geometry().map_to_world(0, 2), 0.0},
     Pose2D{map.geometry().map_to_world(4, 2), 0.0});
   ASSERT_TRUE(path.has_value());
   EXPECT_NEAR(path_length(*path), (4.0 + 2.0 * std::numbers::sqrt2) * RESOLUTION, TOLERANCE);
@@ -130,14 +130,14 @@ TEST(PlannerSeam, BothModelsProduceTheSamePath)
       "........",
     },
     RESOLUTION);
-  const CollisionRadii radii = make_radii();
-  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), radii);
+  const DistanceTraversabilityModel distance_model = make_distance_model();
+  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), distance_model);
 
   const Pose2D start{costmap.geometry().map_to_world(0, 0), 0.4};
   const Pose2D goal{costmap.geometry().map_to_world(7, 5), -1.1};
 
   const auto from_cost = plan_raw(costmap, make_cost_model(), start, goal);
-  const auto from_distance = plan_raw(distance_map, radii, start, goal);
+  const auto from_distance = plan_raw(distance_map, distance_model, start, goal);
   ASSERT_TRUE(from_cost.has_value());
   ASSERT_TRUE(from_distance.has_value());
   expect_same_path(*from_cost, *from_distance);
@@ -145,7 +145,7 @@ TEST(PlannerSeam, BothModelsProduceTheSamePath)
   const SmootherParams params{0.5, 0.3, 0.0, 100};
   expect_same_path(
     smooth(*from_cost, costmap, make_cost_model(), params),
-    smooth(*from_distance, distance_map, radii, params));
+    smooth(*from_distance, distance_map, distance_model, params));
 }
 
 TEST(PlannerSeam, FindsTheNearestTraversableCellWithBothModels)
@@ -159,11 +159,11 @@ TEST(PlannerSeam, FindsTheNearestTraversableCellWithBothModels)
       ".....",
     },
     RESOLUTION);
-  const CollisionRadii radii = make_radii();
-  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), radii);
+  const DistanceTraversabilityModel distance_model = make_distance_model();
+  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), distance_model);
 
   const auto from_cost = find_nearest_traversable(costmap, make_cost_model(), MapIndex{2, 2}, 4);
-  const auto from_distance = find_nearest_traversable(distance_map, radii, MapIndex{2, 2}, 4);
+  const auto from_distance = find_nearest_traversable(distance_map, distance_model, MapIndex{2, 2}, 4);
   ASSERT_TRUE(from_cost.has_value());
   ASSERT_TRUE(from_distance.has_value());
   EXPECT_EQ(from_cost->x, from_distance->x);
@@ -172,7 +172,7 @@ TEST(PlannerSeam, FindsTheNearestTraversableCellWithBothModels)
 
 TEST(PlannerSeam, CircumscribedBandOfTheDistanceFieldBlocksTheSearch)
 {
-  const CollisionRadii radii = make_radii();
+  const DistanceTraversabilityModel distance_model = make_distance_model();
   const DistanceMap map = make_distance_map(
     {
       "..c..",
@@ -181,18 +181,18 @@ TEST(PlannerSeam, CircumscribedBandOfTheDistanceFieldBlocksTheSearch)
       "..c..",
       "..c..",
     },
-    RESOLUTION, radii);
+    RESOLUTION, distance_model);
   for (int my = 0; my < map.size_y(); ++my) {
-    EXPECT_EQ(radii.classify(map(2, my)), Traversability::Circumscribed);
+    EXPECT_EQ(distance_model.classify(map(2, my)), Traversability::Circumscribed);
   }
   auto params = eltanin_test::raw_astar_params();
   params.common.traversability_fallback.enabled = true;
   const Pose2D start{map.geometry().map_to_world(0, 0), 0.0};
   const Pose2D goal{map.geometry().map_to_world(4, 4), 0.0};
 
-  EXPECT_FALSE(plan_raw(map, radii, start, goal).has_value());
+  EXPECT_FALSE(plan_raw(map, distance_model, start, goal).has_value());
   // Asked for explicitly, the same band is a narrow passage rather than a wall.
-  const auto relaxed = plan_raw(map, radii, start, goal, params);
+  const auto relaxed = plan_raw(map, distance_model, start, goal, params);
   ASSERT_TRUE(relaxed.has_value());
   EXPECT_TRUE(relaxed.relaxed());
 }
@@ -208,8 +208,8 @@ TEST(PlannerSeam, SmoothsOnBothModels)
       ".....",
     },
     RESOLUTION);
-  const CollisionRadii radii = make_radii();
-  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), radii);
+  const DistanceTraversabilityModel distance_model = make_distance_model();
+  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), distance_model);
 
   Path input;
   input.push_back(Pose2D{Vector2d{0.05, 0.25}, 0.0});
@@ -219,7 +219,7 @@ TEST(PlannerSeam, SmoothsOnBothModels)
   input.push_back(Pose2D{Vector2d{0.45, 0.25}, 0.7});
 
   expect_same_path(
-    smooth(input, costmap, make_cost_model()), smooth(input, distance_map, radii));
+    smooth(input, costmap, make_cost_model()), smooth(input, distance_map, distance_model));
 }
 
 TEST(PlannerSeam, HybridAStarProducesTheSamePathOnBothModels)
@@ -238,14 +238,14 @@ TEST(PlannerSeam, HybridAStarProducesTheSamePathOnBothModels)
       "....................",
     },
     RESOLUTION);
-  const CollisionRadii radii = make_radii();
-  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), radii);
+  const DistanceTraversabilityModel distance_model = make_distance_model();
+  const DistanceMap distance_map = distance_map_from_costmap(costmap, make_cost_model(), distance_model);
 
   const Pose2D start{costmap.geometry().map_to_world(2, 7), 0.0};
   const Pose2D goal{costmap.geometry().map_to_world(17, 7), 0.3};
 
   const auto from_cost = eltanin::planner::plan_hybrid_astar(costmap, make_cost_model(), start, goal);
-  const auto from_distance = eltanin::planner::plan_hybrid_astar(distance_map, radii, start, goal);
+  const auto from_distance = eltanin::planner::plan_hybrid_astar(distance_map, distance_model, start, goal);
 
   ASSERT_TRUE(from_cost.has_value()) << eltanin::planner::to_string(from_cost.error());
   ASSERT_TRUE(from_distance.has_value());

@@ -64,7 +64,7 @@ void InflationLayer::rebuild_cost_lut(double resolution)
 {
   constexpr double max_radius_in_cells =
     static_cast<double>(std::numeric_limits<int>::max());
-  const double inflation_radius = model_.radii().inflation_radius();
+  const double inflation_radius = model_.distance_model().inflation_radius();
   const double radius_in_cells = std::ceil(inflation_radius / resolution);
   if (radius_in_cells > max_radius_in_cells) {
     throw std::length_error("inflation radius exceeds the supported cell count");

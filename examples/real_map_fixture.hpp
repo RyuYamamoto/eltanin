@@ -62,7 +62,7 @@ inline eltanin::Polygon2D robot_footprint()
 struct RobotModel
 {
   eltanin::map::InflationCostModel inflation;
-  eltanin::CollisionRadii radii;
+  eltanin::DistanceTraversabilityModel distance_model;
   eltanin::map::CostTraversabilityModel model;
 };
 
@@ -71,23 +71,23 @@ struct InflatedMap
 {
   eltanin::map::Costmap map;
   eltanin::map::InflationCostModel inflation;
-  eltanin::CollisionRadii radii;
+  eltanin::DistanceTraversabilityModel distance_model;
   eltanin::map::CostTraversabilityModel model;
 };
 
 /// Radii and cost models for robot_footprint(); prints the reason and returns nullopt on failure.
 inline std::optional<RobotModel> make_robot_model()
 {
-  const auto radii = eltanin::CollisionRadii::from_footprint(robot_footprint(), INFLATION_RADIUS);
-  const auto inflation = radii.has_value()
-                           ? eltanin::map::InflationCostModel::create(*radii, COST_SCALING_FACTOR)
+  const auto distance_model = eltanin::DistanceTraversabilityModel::from_footprint(robot_footprint(), INFLATION_RADIUS);
+  const auto inflation = distance_model.has_value()
+                           ? eltanin::map::InflationCostModel::create(*distance_model, COST_SCALING_FACTOR)
                            : std::nullopt;
   if (!inflation.has_value()) {
     std::cerr << "failed to build the inflation model\n";
     return std::nullopt;
   }
   return RobotModel{
-    *inflation, *radii,
+    *inflation, *distance_model,
     eltanin::map::CostTraversabilityModel(inflation->circumscribed_cost(), false)};
 }
 
@@ -114,7 +114,7 @@ inline std::optional<InflatedMap> load_and_inflate(const std::filesystem::path &
     return std::nullopt;
   }
   eltanin::map::InflationLayer(robot->inflation, false).update_costs(*costmap);
-  return InflatedMap{std::move(*costmap), robot->inflation, robot->radii, robot->model};
+  return InflatedMap{std::move(*costmap), robot->inflation, robot->distance_model, robot->model};
 }
 
 inline std::optional<eltanin::map::MapIndex> first_free_cell(
@@ -228,11 +228,11 @@ inline bool write_path_csv(const std::filesystem::path & file, const eltanin::Pa
   return static_cast<bool>(out);
 }
 
-/// Geometry of the cropped image plus the radii, which every plotting script needs.
+/// Geometry of the cropped image plus the distance_model, which every plotting script needs.
 inline void write_meta(
   std::ostream & meta, const eltanin::map::Costmap & crop,
   const eltanin::map::MapIndex & lower_left,
-  const eltanin::map::InflationCostModel & inflation, const eltanin::CollisionRadii & radii)
+  const eltanin::map::InflationCostModel & inflation, const eltanin::DistanceTraversabilityModel & distance_model)
 {
   const eltanin::map::MapGeometry & geometry = crop.geometry();
   meta << "resolution " << geometry.resolution() << '\n'
@@ -243,16 +243,16 @@ inline void write_meta(
        << "crop_offset_x " << lower_left.x << '\n'
        << "crop_offset_y " << lower_left.y << '\n'
        << "circumscribed_cost " << static_cast<int>(inflation.circumscribed_cost()) << '\n'
-       << "inscribed_radius " << radii.inscribed_radius() << '\n'
-       << "circumscribed_radius " << radii.circumscribed_radius() << '\n'
-       << "inflation_radius " << radii.inflation_radius() << '\n';
+       << "inscribed_radius " << distance_model.inscribed_radius() << '\n'
+       << "circumscribed_radius " << distance_model.circumscribed_radius() << '\n'
+       << "inflation_radius " << distance_model.inflation_radius() << '\n';
 }
 
 inline void write_meta(
   std::ostream & meta, const eltanin::map::Costmap & crop,
   const eltanin::map::MapIndex & lower_left, const InflatedMap & inflated)
 {
-  write_meta(meta, crop, lower_left, inflated.inflation, inflated.radii);
+  write_meta(meta, crop, lower_left, inflated.inflation, inflated.distance_model);
 }
 
 /// Poses whose cell is not Free; the planner must produce none, a tracker may.

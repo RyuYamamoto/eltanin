@@ -26,7 +26,7 @@ namespace
 {
 
 using eltanin::circumscribed_radius;
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::inscribed_radius;
 using eltanin::Polygon2D;
 using eltanin::Traversability;
@@ -50,7 +50,7 @@ Polygon2D notched_footprint()
 
 }  // namespace
 
-static_assert(eltanin::TraversabilityModel<CollisionRadii, double>);
+static_assert(eltanin::TraversabilityModel<DistanceTraversabilityModel, double>);
 
 TEST(Footprint, RadiiOfCenteredSquare)
 {
@@ -134,43 +134,43 @@ TEST(Footprint, DegeneratePolygonHasNoRadii)
   EXPECT_TRUE(circumscribed_radius(zero_area).has_value());
 }
 
-TEST(Footprint, CollisionRadiiFromFootprint)
+TEST(Footprint, DistanceModelFromFootprint)
 {
-  const auto radii = CollisionRadii::from_footprint(centered_square(1.0), 3.0);
-  ASSERT_TRUE(radii.has_value());
-  EXPECT_NEAR(radii->inscribed_radius(), 1.0, kTol);
-  EXPECT_NEAR(radii->circumscribed_radius(), std::sqrt(2.0), kTol);
-  EXPECT_NEAR(radii->inflation_radius(), 3.0, kTol);
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(centered_square(1.0), 3.0);
+  ASSERT_TRUE(distance_model.has_value());
+  EXPECT_NEAR(distance_model->inscribed_radius(), 1.0, kTol);
+  EXPECT_NEAR(distance_model->circumscribed_radius(), std::sqrt(2.0), kTol);
+  EXPECT_NEAR(distance_model->inflation_radius(), 3.0, kTol);
 }
 
-TEST(Footprint, CollisionRadiiFromFootprintRejectsTooSmallInflation)
+TEST(Footprint, DistanceModelFromFootprintRejectsTooSmallInflation)
 {
-  EXPECT_FALSE(CollisionRadii::from_footprint(centered_square(1.0), 1.2).has_value());
-  EXPECT_FALSE(CollisionRadii::from_footprint(Polygon2D{}, 3.0).has_value());
+  EXPECT_FALSE(DistanceTraversabilityModel::from_footprint(centered_square(1.0), 1.2).has_value());
+  EXPECT_FALSE(DistanceTraversabilityModel::from_footprint(Polygon2D{}, 3.0).has_value());
 }
 
-TEST(Footprint, CollisionRadiiRejectsInconsistentOrdering)
+TEST(Footprint, DistanceModelRejectsInconsistentOrdering)
 {
-  EXPECT_TRUE(CollisionRadii::from_radii(0.3, 0.5, 1.0).has_value());
-  EXPECT_TRUE(CollisionRadii::from_radii(0.5, 0.5, 0.5).has_value());
-  EXPECT_FALSE(CollisionRadii::from_radii(0.6, 0.5, 1.0).has_value());
-  EXPECT_FALSE(CollisionRadii::from_radii(0.3, 1.2, 1.0).has_value());
-  EXPECT_FALSE(CollisionRadii::from_radii(-0.1, 0.5, 1.0).has_value());
+  EXPECT_TRUE(DistanceTraversabilityModel::from_radii(0.3, 0.5, 1.0).has_value());
+  EXPECT_TRUE(DistanceTraversabilityModel::from_radii(0.5, 0.5, 0.5).has_value());
+  EXPECT_FALSE(DistanceTraversabilityModel::from_radii(0.6, 0.5, 1.0).has_value());
+  EXPECT_FALSE(DistanceTraversabilityModel::from_radii(0.3, 1.2, 1.0).has_value());
+  EXPECT_FALSE(DistanceTraversabilityModel::from_radii(-0.1, 0.5, 1.0).has_value());
   EXPECT_FALSE(
-    CollisionRadii::from_radii(0.3, 0.5, std::numeric_limits<double>::quiet_NaN()).has_value());
+    DistanceTraversabilityModel::from_radii(0.3, 0.5, std::numeric_limits<double>::quiet_NaN()).has_value());
   EXPECT_FALSE(
-    CollisionRadii::from_radii(0.3, 0.5, std::numeric_limits<double>::infinity()).has_value());
+    DistanceTraversabilityModel::from_radii(0.3, 0.5, std::numeric_limits<double>::infinity()).has_value());
 }
 
 TEST(Footprint, DistanceModelBoundaries)
 {
-  const auto radii = CollisionRadii::from_radii(0.3, 0.5, 1.0);
-  ASSERT_TRUE(radii.has_value());
+  const auto distance_model = DistanceTraversabilityModel::from_radii(0.3, 0.5, 1.0);
+  ASSERT_TRUE(distance_model.has_value());
 
-  EXPECT_EQ(radii->classify(0.0), Traversability::Inscribed);
-  EXPECT_EQ(radii->classify(0.29), Traversability::Inscribed);
-  EXPECT_EQ(radii->classify(0.3), Traversability::Circumscribed);
-  EXPECT_EQ(radii->classify(0.49), Traversability::Circumscribed);
-  EXPECT_EQ(radii->classify(0.5), Traversability::Free);
-  EXPECT_EQ(radii->classify(10.0), Traversability::Free);
+  EXPECT_EQ(distance_model->classify(0.0), Traversability::Inscribed);
+  EXPECT_EQ(distance_model->classify(0.29), Traversability::Inscribed);
+  EXPECT_EQ(distance_model->classify(0.3), Traversability::Circumscribed);
+  EXPECT_EQ(distance_model->classify(0.49), Traversability::Circumscribed);
+  EXPECT_EQ(distance_model->classify(0.5), Traversability::Free);
+  EXPECT_EQ(distance_model->classify(10.0), Traversability::Free);
 }

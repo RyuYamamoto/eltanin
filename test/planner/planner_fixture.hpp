@@ -48,17 +48,17 @@ inline eltanin::map::CostTraversabilityModel make_cost_model(bool unknown_is_fre
 }
 
 /// Radii used by every distance-map fixture; 0 < inscribed < circumscribed keeps all three bands.
-inline eltanin::CollisionRadii make_radii()
+inline eltanin::DistanceTraversabilityModel make_distance_model()
 {
-  const auto radii = eltanin::CollisionRadii::from_radii(0.20, 0.40, 0.60);
-  assert(radii.has_value());
-  return *radii;
+  const auto distance_model = eltanin::DistanceTraversabilityModel::from_radii(0.20, 0.40, 0.60);
+  assert(distance_model.has_value());
+  return *distance_model;
 }
 
 /// Rows are given top-down like make_costmap; '#' is Inscribed, 'c' Circumscribed, '.' Free.
 inline eltanin::map::DistanceMap make_distance_map(
   std::initializer_list<std::string_view> rows, double resolution,
-  const eltanin::CollisionRadii & radii,
+  const eltanin::DistanceTraversabilityModel & distance_model,
   const Eigen::Vector2d & origin = Eigen::Vector2d::Zero())
 {
   assert(rows.size() > 0);
@@ -67,9 +67,9 @@ inline eltanin::map::DistanceMap make_distance_map(
   eltanin::map::DistanceMap map(
     eltanin::map::MapGeometry(size_x, size_y, resolution, origin), 0.0F);
 
-  const auto free_distance = static_cast<float>(radii.inflation_radius());
+  const auto free_distance = static_cast<float>(distance_model.inflation_radius());
   const auto band_distance =
-    static_cast<float>(0.5 * (radii.inscribed_radius() + radii.circumscribed_radius()));
+    static_cast<float>(0.5 * (distance_model.inscribed_radius() + distance_model.circumscribed_radius()));
 
   int row_from_top = 0;
   for (const std::string_view row : rows) {
@@ -96,15 +96,15 @@ inline eltanin::map::DistanceMap make_distance_map(
   return map;
 }
 
-/// Distance field whose CollisionRadii classification matches the costmap's cost classification.
+/// Distance field whose DistanceTraversabilityModel classification matches the costmap's cost classification.
 inline eltanin::map::DistanceMap distance_map_from_costmap(
   const eltanin::map::Costmap & costmap, const eltanin::map::CostTraversabilityModel & model,
-  const eltanin::CollisionRadii & radii)
+  const eltanin::DistanceTraversabilityModel & distance_model)
 {
   eltanin::map::DistanceMap map(costmap.geometry(), 0.0F);
-  const auto free_distance = static_cast<float>(radii.inflation_radius());
+  const auto free_distance = static_cast<float>(distance_model.inflation_radius());
   const auto band_distance =
-    static_cast<float>(0.5 * (radii.inscribed_radius() + radii.circumscribed_radius()));
+    static_cast<float>(0.5 * (distance_model.inscribed_radius() + distance_model.circumscribed_radius()));
   for (std::size_t i = 0; i < costmap.cell_count(); ++i) {
     switch (model.classify(costmap[i])) {
       case eltanin::Traversability::Free:

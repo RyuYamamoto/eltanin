@@ -30,19 +30,22 @@ class InflationCostModel
 {
 public:
   static std::optional<InflationCostModel> create(
-    const CollisionRadii & radii, double cost_scaling_factor);
+    const DistanceTraversabilityModel & distance_model, double cost_scaling_factor);
 
   std::uint8_t cost_at_distance(double distance) const noexcept;
 
   /// Threshold for the circumscribed radius; never below 1 so FREE_SPACE stays traversable.
   std::uint8_t circumscribed_cost() const noexcept { return circumscribed_cost_; }
 
-  const CollisionRadii & radii() const noexcept { return radii_; }
+  const DistanceTraversabilityModel & distance_model() const noexcept
+  {
+    return distance_model_;
+  }
 
 private:
-  InflationCostModel(const CollisionRadii & radii, double cost_scaling_factor);
+  InflationCostModel(const DistanceTraversabilityModel & distance_model, double cost_scaling_factor);
 
-  CollisionRadii radii_;
+  DistanceTraversabilityModel distance_model_;
   double cost_scaling_factor_{0.0};
   std::uint8_t circumscribed_cost_{1};
 };

@@ -20,20 +20,20 @@
 namespace eltanin::map
 {
 
-InflationCostModel::InflationCostModel(const CollisionRadii & radii, double cost_scaling_factor)
-: radii_(radii), cost_scaling_factor_(cost_scaling_factor)
+InflationCostModel::InflationCostModel(const DistanceTraversabilityModel & distance_model, double cost_scaling_factor)
+: distance_model_(distance_model), cost_scaling_factor_(cost_scaling_factor)
 {
   circumscribed_cost_ =
-    std::max<std::uint8_t>(1, cost_at_distance(radii_.circumscribed_radius()));
+    std::max<std::uint8_t>(1, cost_at_distance(distance_model_.circumscribed_radius()));
 }
 
 std::optional<InflationCostModel> InflationCostModel::create(
-  const CollisionRadii & radii, double cost_scaling_factor)
+  const DistanceTraversabilityModel & distance_model, double cost_scaling_factor)
 {
   if (!std::isfinite(cost_scaling_factor) || cost_scaling_factor < 0.0) {
     return std::nullopt;
   }
-  return InflationCostModel(radii, cost_scaling_factor);
+  return InflationCostModel(distance_model, cost_scaling_factor);
 }
 
 std::uint8_t InflationCostModel::cost_at_distance(double distance) const noexcept
@@ -41,14 +41,14 @@ std::uint8_t InflationCostModel::cost_at_distance(double distance) const noexcep
   if (std::isnan(distance)) {
     return LETHAL_OBSTACLE;
   }
-  if (distance < radii_.inscribed_radius()) {
+  if (distance < distance_model_.inscribed_radius()) {
     return INSCRIBED_INFLATED_OBSTACLE;
   }
-  if (distance > radii_.inflation_radius()) {
+  if (distance > distance_model_.inflation_radius()) {
     return FREE_SPACE;
   }
   const double decay =
-    std::exp(-cost_scaling_factor_ * (distance - radii_.inscribed_radius()));
+    std::exp(-cost_scaling_factor_ * (distance - distance_model_.inscribed_radius()));
   const double cost = static_cast<double>(MAX_NON_OBSTACLE) * decay;
   return static_cast<std::uint8_t>(std::clamp(cost, 0.0, static_cast<double>(MAX_NON_OBSTACLE)));
 }

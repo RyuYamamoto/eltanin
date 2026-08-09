@@ -29,14 +29,14 @@ std::optional<double> inscribed_radius(const Polygon2D & footprint);
 /// Maximum distance [m] from the robot origin to any vertex; nullopt for a degenerate polygon.
 std::optional<double> circumscribed_radius(const Polygon2D & footprint);
 
-/// Radii in [m]. A constructed value always satisfies 0 <= inscribed <= circumscribed <= inflation.
-class CollisionRadii
+/// Distance-input traversability model; its thresholds are the footprint distance_model in [m].
+class DistanceTraversabilityModel
 {
 public:
-  static std::optional<CollisionRadii> from_footprint(
+  static std::optional<DistanceTraversabilityModel> from_footprint(
     const Polygon2D & footprint, double inflation_radius);
 
-  static std::optional<CollisionRadii> from_radii(
+  static std::optional<DistanceTraversabilityModel> from_radii(
     double inscribed, double circumscribed, double inflation);
 
   double inscribed_radius() const noexcept { return inscribed_; }
@@ -61,7 +61,7 @@ public:
   bool is_obstacle(double distance) const noexcept { return !(distance > 0.0); }
 
 private:
-  CollisionRadii(double inscribed, double circumscribed, double inflation)
+  DistanceTraversabilityModel(double inscribed, double circumscribed, double inflation)
   : inscribed_(inscribed), circumscribed_(circumscribed), inflation_(inflation)
   {
   }
@@ -71,8 +71,8 @@ private:
   double inflation_{0.0};
 };
 
-static_assert(TraversabilityModel<CollisionRadii, double>);
-static_assert(ObstacleModel<CollisionRadii, double>);
+static_assert(TraversabilityModel<DistanceTraversabilityModel, double>);
+static_assert(ObstacleModel<DistanceTraversabilityModel, double>);
 
 }  // namespace eltanin
 

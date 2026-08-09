@@ -31,7 +31,7 @@ namespace
 {
 
 using Eigen::Vector2d;
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Path;
 using eltanin::Polygon2D;
 using eltanin::Pose2D;
@@ -62,8 +62,8 @@ struct Scene
 /// A wall pierced by a corridor `cells` wide, both before and after inflation.
 Scene corridor(int cells)
 {
-  const auto radii = CollisionRadii::from_footprint(body(), 0.55);
-  const auto inflation = InflationCostModel::create(*radii, 10.0);
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(body(), 0.55);
+  const auto inflation = InflationCostModel::create(*distance_model, 10.0);
   Costmap raw(MapGeometry(200, 80, RESOLUTION, Vector2d::Zero()), FREE_SPACE);
   const int low = 40 - cells / 2;
   for (int mx = 60; mx <= 140; ++mx) {
@@ -174,8 +174,8 @@ namespace
 /// An L-shaped corridor `cells` wide: no straight analytic shot exists, so the search must work.
 Scene bent_corridor(int cells)
 {
-  const auto radii = CollisionRadii::from_footprint(body(), 0.55);
-  const auto inflation = InflationCostModel::create(*radii, 10.0);
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(body(), 0.55);
+  const auto inflation = InflationCostModel::create(*distance_model, 10.0);
   Costmap raw(MapGeometry(160, 160, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
   for (int mx = 10; mx < 80 + cells; ++mx) {
     for (int my = 80; my < 80 + cells; ++my) {

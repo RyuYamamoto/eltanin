@@ -67,7 +67,7 @@ std::vector<std::uint8_t> expected_by_direct_computation(
         for (int x = 0; x < input.size_x(); ++x) {
           const double distance =
             std::hypot(static_cast<double>(x - mx), static_cast<double>(y - my)) * resolution;
-          if (distance > model.radii().inflation_radius()) {
+          if (distance > model.distance_model().inflation_radius()) {
             continue;
           }
           const std::uint8_t cost = model.cost_at_distance(distance);

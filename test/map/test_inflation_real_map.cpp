@@ -31,7 +31,7 @@ namespace
 {
 
 using Eigen::Vector2d;
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Polygon2D;
 using eltanin::Traversability;
 using eltanin::map::Costmap;
@@ -58,12 +58,12 @@ TEST(InflationRealMap, ProducesAllThreeTraversabilityClasses)
 
   const Polygon2D footprint = {
     Vector2d{0.22, 0.15}, Vector2d{-0.22, 0.15}, Vector2d{-0.22, -0.15}, Vector2d{0.22, -0.15}};
-  const auto radii = CollisionRadii::from_footprint(footprint, 0.55);
-  ASSERT_TRUE(radii.has_value());
-  EXPECT_NEAR(radii->inscribed_radius(), 0.15, TOLERANCE);
-  EXPECT_NEAR(radii->circumscribed_radius(), std::hypot(0.22, 0.15), TOLERANCE);
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(footprint, 0.55);
+  ASSERT_TRUE(distance_model.has_value());
+  EXPECT_NEAR(distance_model->inscribed_radius(), 0.15, TOLERANCE);
+  EXPECT_NEAR(distance_model->circumscribed_radius(), std::hypot(0.22, 0.15), TOLERANCE);
 
-  const auto model = InflationCostModel::create(*radii, 10.0);
+  const auto model = InflationCostModel::create(*distance_model, 10.0);
   ASSERT_TRUE(model.has_value());
   EXPECT_EQ(model->circumscribed_cost(), 78);
 

@@ -38,7 +38,7 @@ namespace
 {
 
 using Eigen::Vector2d;
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::Path;
 using eltanin::Polygon2D;
 using eltanin::Pose2D;
@@ -118,9 +118,9 @@ TEST(PlannerRealMap, PlansAndSmoothsOnTheInflatedReferenceMap)
   Costmap costmap = eltanin::map_io::load_map(yaml);
   const Polygon2D footprint = {
     Vector2d{0.22, 0.15}, Vector2d{-0.22, 0.15}, Vector2d{-0.22, -0.15}, Vector2d{0.22, -0.15}};
-  const auto radii = CollisionRadii::from_footprint(footprint, 0.55);
-  ASSERT_TRUE(radii.has_value());
-  const auto inflation = InflationCostModel::create(*radii, 10.0);
+  const auto distance_model = DistanceTraversabilityModel::from_footprint(footprint, 0.55);
+  ASSERT_TRUE(distance_model.has_value());
+  const auto inflation = InflationCostModel::create(*distance_model, 10.0);
   ASSERT_TRUE(inflation.has_value());
   InflationLayer(*inflation, false).update_costs(costmap);
 

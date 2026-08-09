@@ -43,8 +43,8 @@ int main()
   }
   const Eigen::Vector2d center = geometry.map_to_world(index->x, index->y);
 
-  const auto radii = eltanin::CollisionRadii::from_radii(0.3, 0.5, 1.0);
-  const auto model = eltanin::map::InflationCostModel::create(*radii, 3.0);
+  const auto distance_model = eltanin::DistanceTraversabilityModel::from_radii(0.3, 0.5, 1.0);
+  const auto model = eltanin::map::InflationCostModel::create(*distance_model, 3.0);
   const eltanin::map::CostTraversabilityModel traversability(model->circumscribed_cost());
 
   const eltanin::sensor::ScanData scan{0.0, 1.0, 0.1, 10.0, {1.0F, 2.0F, 3.0F}};

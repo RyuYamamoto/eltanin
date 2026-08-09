@@ -114,7 +114,7 @@ CollisionCheck resolve_footprint_check(
 
 }  // namespace detail
 
-/// Two-stage check whose Free short-circuit assumes the map is inflated by this footprint's radii.
+/// Two-stage check whose Free short-circuit assumes the map is inflated by this footprint's distance_model.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type> &&
            ObstacleModel<Model, typename Map::value_type>

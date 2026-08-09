@@ -31,7 +31,7 @@
 namespace eltanin_test
 {
 
-/// Map plus the traversability model derived from the same radii the limiter uses.
+/// Map plus the traversability model derived from the same distance_model the limiter uses.
 struct CollisionScenario
 {
   eltanin::map::Costmap map;
@@ -67,10 +67,10 @@ inline eltanin::collision::VelocityLimiter make_limiter(
 inline eltanin::map::InflationCostModel footprint_inflation_model(
   const eltanin::Polygon2D & footprint, double inflation_radius)
 {
-  const auto radii = eltanin::CollisionRadii::from_footprint(footprint, inflation_radius);
-  assert(radii.has_value());
+  const auto distance_model = eltanin::DistanceTraversabilityModel::from_footprint(footprint, inflation_radius);
+  assert(distance_model.has_value());
   const auto model =
-    eltanin::map::InflationCostModel::create(*radii, COST_SCALING_FACTOR);
+    eltanin::map::InflationCostModel::create(*distance_model, COST_SCALING_FACTOR);
   assert(model.has_value());
   return *model;
 }
