@@ -104,9 +104,16 @@ public:
   /// For callers that hold the outcome as a std::optional<Path>.
   [[nodiscard]] const std::optional<Path> & path() const noexcept { return path_; }
 
+  /// True when only the relaxed pass found this path, so it may cross the circumscribed band.
+  [[nodiscard]] bool narrow_passage() const noexcept { return narrow_passage_; }
+
+  /// Planner::plan() is the only caller, and only for a path its relaxed pass produced.
+  void mark_narrow_passage() noexcept { narrow_passage_ = true; }
+
 private:
   std::optional<Path> path_;
   PlannerError error_{PlannerError::None};
+  bool narrow_passage_{false};
 };
 
 }  // namespace eltanin::planner

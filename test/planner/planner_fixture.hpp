@@ -146,12 +146,27 @@ inline double smoother_energy(
   return energy;
 }
 
-/// Smoothing off; the octile length and grid-connectivity expectations describe the raw path.
+/// The data-plus-smoothing sweep these expectations describe; the newer terms stay switched off.
+inline eltanin::planner::SmootherParams basic_smoother_params(
+  double weight_data, double weight_smooth, double tolerance, int max_iterations)
+{
+  eltanin::planner::SmootherParams params;
+  params.weight_data = weight_data;
+  params.weight_smooth = weight_smooth;
+  params.weight_curvature = 0.0;
+  params.weight_obstacle = 0.0;
+  params.tolerance = tolerance;
+  params.max_iterations = max_iterations;
+  return params;
+}
+
+/// Smoothing and clearance shaping off; the octile length expectations describe the raw path.
 inline eltanin::planner::AStarParams raw_astar_params(int start_search_radius_cells = 8)
 {
   eltanin::planner::AStarParams params;
   params.common.start_search_radius_cells = start_search_radius_cells;
   params.smoother.reset();
+  params.clearance.penalty = 0.0;
   return params;
 }
 

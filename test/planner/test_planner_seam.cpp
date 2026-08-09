@@ -185,10 +185,16 @@ TEST(PlannerSeam, CircumscribedBandOfTheDistanceFieldBlocksTheSearch)
   for (int my = 0; my < map.size_y(); ++my) {
     EXPECT_EQ(radii.classify(map(2, my)), Traversability::Circumscribed);
   }
-  EXPECT_FALSE(plan_raw(
-                 map, radii, Pose2D{map.geometry().map_to_world(0, 0), 0.0},
-                 Pose2D{map.geometry().map_to_world(4, 4), 0.0})
-                 .has_value());
+  auto params = eltanin_test::raw_astar_params();
+  params.common.narrow_passage.enabled = false;
+  const Pose2D start{map.geometry().map_to_world(0, 0), 0.0};
+  const Pose2D goal{map.geometry().map_to_world(4, 4), 0.0};
+
+  EXPECT_FALSE(plan_raw(map, radii, start, goal, params).has_value());
+  // With the fallback on, the same band is a narrow passage rather than a wall.
+  const auto relaxed = plan_raw(map, radii, start, goal);
+  ASSERT_TRUE(relaxed.has_value());
+  EXPECT_TRUE(relaxed.narrow_passage());
 }
 
 TEST(PlannerSeam, SmoothsOnBothModels)

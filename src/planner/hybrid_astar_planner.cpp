@@ -171,7 +171,7 @@ bool interior_is_free(
     std::max(1, static_cast<int>(std::ceil(std::abs(travel) / collision_check_step)));
   for (int sample = 1; sample < sample_count; ++sample) {
     const double fraction = static_cast<double>(sample) / static_cast<double>(sample_count);
-    if (!grid.free(propagate(from, travel * fraction, turn * fraction).position)) {
+    if (!grid.traversable(propagate(from, travel * fraction, turn * fraction).position)) {
       return false;
     }
   }
@@ -195,7 +195,7 @@ bool curve_is_free(const TraversabilityView & grid, const Curve & curve, double 
   const int checks = std::max(1, static_cast<int>(std::ceil(length / check_step)));
   for (int i = 1; i <= checks; ++i) {
     const double s = length * static_cast<double>(i) / static_cast<double>(checks);
-    if (!grid.free(curve.sample(s).position)) {
+    if (!grid.traversable(curve.sample(s).position)) {
       return false;
     }
   }
@@ -323,14 +323,14 @@ std::vector<float> distance_to_goal(const TraversabilityView & grid, const map::
     for (std::size_t k = 0; k < NEIGHBOR_DX.size(); ++k) {
       const int nx = mx + NEIGHBOR_DX[k];
       const int ny = my + NEIGHBOR_DY[k];
-      if (!grid.free(nx, ny)) {
+      if (!grid.traversable(nx, ny)) {
         continue;
       }
       const bool is_diagonal = NEIGHBOR_DX[k] != 0 && NEIGHBOR_DY[k] != 0;
       // Corner cutting is forbidden here too, so the two searches agree on what is connected.
       if (
         is_diagonal &&
-        (!grid.free(mx + NEIGHBOR_DX[k], my) || !grid.free(mx, my + NEIGHBOR_DY[k]))) {
+        (!grid.traversable(mx + NEIGHBOR_DX[k], my) || !grid.traversable(mx, my + NEIGHBOR_DY[k]))) {
         continue;
       }
       const auto neighbor = static_cast<std::uint32_t>(geometry.index(nx, ny));
@@ -417,8 +417,8 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
   const map::MapGeometry & geometry = grid.geometry();
   const std::size_t cells = grid.cell_count();
   assert(cells > 0);
-  assert(grid.free(query.start_index.x, query.start_index.y));
-  assert(grid.free(query.goal_index.x, query.goal_index.y));
+  assert(grid.traversable(query.start_index.x, query.start_index.y));
+  assert(grid.traversable(query.goal_index.x, query.goal_index.y));
 
   const double resolution = geometry.resolution();
   const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
@@ -444,8 +444,11 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
+  const std::size_t clearance_bytes =
+    params.clearance.penalty > 0.0 ? cells * sizeof(float) : 0;
   const std::size_t state_bytes = state_count * BYTES_PER_STATE +
-                                  closed_words * sizeof(std::uint64_t) + cells * sizeof(float);
+                                  closed_words * sizeof(std::uint64_t) + cells * sizeof(float) +
+                                  clearance_bytes;
   if (state_bytes > params.max_state_memory_bytes) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
@@ -474,6 +477,17 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
     }
     const double cells_to_goal = remaining / resolution;
     return static_cast<std::size_t>(cells_to_goal / params.analytic_expansion_ratio);
+  };
+  // Only paid for when something asks for it; the field is one float per cell.
+  std::vector<float> clearance;
+  if (params.clearance.penalty > 0.0) {
+    clearance = detail::build_obstacle_distance(grid);
+  }
+  const ObstacleField field{geometry, clearance};
+  // Distance to the walls, plus whatever the relaxed pass charges for using the band at all.
+  const auto surcharge = [&](const map::MapIndex & index) {
+    return clearance_penalty(params.clearance, field.at(index.x, index.y)) +
+           grid.surcharge(index.x, index.y);
   };
   const std::span<const Motion> motions = control_set(params.motion_model);
   const auto travel_of = [&](const Motion & motion) { return motion.travel_scale * motion_step; };
@@ -576,7 +590,7 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       const Pose2D successor =
         propagate(current.pose, travel_of(motions[mode]), turn_of(motions[mode]));
       const auto successor_index = geometry.world_to_map(successor.position);
-      if (!successor_index.has_value() || !grid.free(successor.position)) {
+      if (!successor_index.has_value() || !grid.traversable(successor.position)) {
         continue;
       }
       // A cell the goal cannot be reached from is not worth a state, let alone an expansion.
@@ -587,7 +601,10 @@ PlanResult search(const PlanQuery & query, const HybridAStarParams & params)
       if (is_closed(closed, successor_state)) {
         continue;
       }
-      const auto tentative = static_cast<float>(current.g + transition_cost(current.mode, mode));
+      // Charged per metre travelled, so the distance heuristic stays a lower bound on the cost.
+      const auto tentative = static_cast<float>(
+        current.g + transition_cost(current.mode, mode) +
+        surcharge(*successor_index) * std::abs(travel_of(motions[mode])));
       if (tentative >= g_score[successor_state]) {
         continue;
       }
@@ -627,6 +644,7 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
   if (!valid) {
     throw std::invalid_argument("invalid HybridAStarParams");
   }
+  detail::validate_clearance_cost(params_.clearance);
 }
 
 PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const

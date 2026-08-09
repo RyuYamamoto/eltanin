@@ -40,11 +40,12 @@ inline int saturate_to_int(std::int64_t value) noexcept
 
 }  // namespace detail
 
-/// Euclidean-nearest Traversability::Free cell within a Chebyshev radius of `from`.
+/// Euclidean-nearest cell classified no worse than `limit` within a Chebyshev radius of `from`.
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 std::optional<map::MapIndex> find_nearest_traversable(
-  const Map & map, const Model & model, const map::MapIndex & from, int max_radius_cells)
+  const Map & map, const Model & model, const map::MapIndex & from, int max_radius_cells,
+  Traversability limit = Traversability::Free)
 {
   if (max_radius_cells < 0) {
     return std::nullopt;
@@ -69,7 +70,7 @@ std::optional<map::MapIndex> find_nearest_traversable(
         if (!geometry.in_bounds(mx, my)) {
           continue;
         }
-        if (model.classify(map(mx, my)) != Traversability::Free) {
+        if (model.classify(map(mx, my)) > limit) {
           continue;
         }
         const std::int64_t distance_squared = dx * dx + dy * dy;

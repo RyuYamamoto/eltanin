@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
+#include <eltanin/core/path.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/planner/astar_planner.hpp>
@@ -258,4 +259,76 @@ TEST(PlannerErrors, ASuccessfulResultCarriesNoError)
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.error(), PlannerError::None);
   EXPECT_EQ(result.path()->size(), result->size());
+}
+
+namespace
+{
+
+/// Poses whose cell sits in the circumscribed band; how much of the band a route actually uses.
+int band_crossings(const eltanin::Path & path, const eltanin::map::Costmap & map)
+{
+  int count = 0;
+  for (const Pose2D & pose : path) {
+    const auto index = map.geometry().world_to_map(pose.position);
+    if (index.has_value() && map(index->x, index->y) == eltanin_test::CIRCUMSCRIBED_BAND_COST) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+}  // namespace
+
+TEST(NarrowPassage, TheBandPenaltySendsTheRelaxedPassToTheThinnestCrossing)
+{
+  // The band cuts the map in two, so every route is a relaxed one; only its thickness varies.
+  eltanin::map::Costmap map(
+    MapGeometry(31, 21, 0.1, Eigen::Vector2d::Zero()), eltanin::map::FREE_SPACE);
+  for (int my = 0; my <= 10; ++my) {
+    for (int mx = 12; mx <= 18; ++mx) {
+      map(mx, my) = eltanin_test::CIRCUMSCRIBED_BAND_COST;
+    }
+  }
+  for (int my = 11; my < 21; ++my) {
+    map(15, my) = eltanin_test::CIRCUMSCRIBED_BAND_COST;
+  }
+  const Pose2D start{map.geometry().map_to_world(2, 5), 0.0};
+  const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
+
+  auto cheap = eltanin_test::raw_astar_params();
+  cheap.common.narrow_passage.penalty = 0.0;
+  auto dear = eltanin_test::raw_astar_params();
+  dear.common.narrow_passage.penalty = 20.0;
+
+  const auto through = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, cheap);
+  const auto around = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, dear);
+
+  ASSERT_TRUE(through.has_value());
+  ASSERT_TRUE(around.has_value());
+  EXPECT_TRUE(through.narrow_passage());
+  EXPECT_TRUE(around.narrow_passage());
+  // Charging for the band buys a detour to where it is one cell thick instead of seven.
+  EXPECT_NEAR(eltanin::path_length(*through), 2.6, 1e-9);
+  EXPECT_GT(eltanin::path_length(*around), eltanin::path_length(*through) + 0.3);
+  EXPECT_LT(band_crossings(*around, map), band_crossings(*through, map));
+}
+
+TEST(NarrowPassage, ARelaxedPassPaysThePenaltyForCrossingTheBand)
+{
+  // The band walls the map off completely, so only the relaxed pass can get across it.
+  eltanin::map::Costmap map(
+    MapGeometry(31, 11, 0.1, Eigen::Vector2d::Zero()), eltanin::map::FREE_SPACE);
+  for (int my = 0; my < 11; ++my) {
+    map(15, my) = eltanin_test::CIRCUMSCRIBED_BAND_COST;
+  }
+  const Pose2D start{map.geometry().map_to_world(2, 5), 0.0};
+  const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
+
+  const auto path = eltanin::planner::plan_astar(
+    map, make_cost_model(), start, goal, eltanin_test::raw_astar_params());
+
+  ASSERT_TRUE(path.has_value());
+  EXPECT_TRUE(path.narrow_passage());
+  // Crossing costs the band penalty, so the reported length is still the plain geometric one.
+  EXPECT_NEAR(eltanin::path_length(*path), 2.6, 1e-9);
 }

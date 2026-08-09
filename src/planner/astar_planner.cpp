@@ -24,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <queue>
 #include <utility>
 #include <vector>
@@ -49,6 +50,7 @@ AStarPlanner::AStarPlanner(const AStarParams & params) : Planner(params.common),
   if (params_.smoother.has_value()) {
     detail::validate_smoother_params(*params_.smoother);
   }
+  detail::validate_clearance_cost(params_.clearance);
 }
 
 PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
@@ -60,8 +62,8 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
   if (cells > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
-  assert(grid.free(query.start_index.x, query.start_index.y));
-  assert(grid.free(query.goal_index.x, query.goal_index.y));
+  assert(grid.traversable(query.start_index.x, query.start_index.y));
+  assert(grid.traversable(query.goal_index.x, query.goal_index.y));
 
   const std::size_t size_x = static_cast<std::size_t>(geometry.size_x());
   const double resolution = geometry.resolution();
@@ -74,6 +76,16 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
     const double dy = std::abs(static_cast<double>(my - query.goal_index.y));
     return static_cast<float>(
       (dx + dy + (std::numbers::sqrt2 - 2.0) * std::min(dx, dy)) * resolution);
+  };
+
+  // Only paid for when something asks for it; the field is one float per cell.
+  std::vector<float> clearance;
+  if (params_.clearance.penalty > 0.0) {
+    clearance = detail::build_obstacle_distance(grid);
+  }
+  const ObstacleField field{geometry, clearance};
+  const auto surcharge = [&](int mx, int my) {
+    return static_cast<float>(clearance_penalty(params_.clearance, field.at(mx, my)));
   };
 
   std::vector<float> g_score(cells, std::numeric_limits<float>::infinity());
@@ -106,7 +118,7 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
       const int dy = NEIGHBOR_DY[k];
       const int nx = mx + dx;
       const int ny = my + dy;
-      if (!grid.free(nx, ny)) {
+      if (!grid.traversable(nx, ny)) {
         continue;
       }
       const std::size_t neighbor = geometry.index(nx, ny);
@@ -115,10 +127,14 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
       }
       const bool diagonal = dx != 0 && dy != 0;
       // Corner cutting is forbidden: a diagonal step needs both orthogonal cells free.
-      if (diagonal && (!grid.free(mx + dx, my) || !grid.free(mx, my + dy))) {
+      if (diagonal && (!grid.traversable(mx + dx, my) || !grid.traversable(mx, my + dy))) {
         continue;
       }
-      const float tentative = g_score[current] + (diagonal ? diagonal_step : orthogonal_step);
+      // Charging clearance per metre travelled keeps the octile heuristic a lower bound.
+      const float step = diagonal ? diagonal_step : orthogonal_step;
+      const float tentative =
+        g_score[current] +
+        step * (1.0F + surcharge(nx, ny) + static_cast<float>(grid.surcharge(nx, ny)));
       if (tentative < g_score[neighbor]) {
         g_score[neighbor] = tentative;
         parent[neighbor] = static_cast<std::int32_t>(current);
@@ -145,10 +161,24 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
   }
   path[path.size() - 1].yaw = query.goal.yaw;
   detail::assign_tangent_yaw(path);
-  if (params_.smoother.has_value()) {
-    return PlanResult{detail::smooth_on_grid(path, grid, *params_.smoother)};
+  if (!params_.smoother.has_value()) {
+    return PlanResult{std::move(path)};
   }
-  return PlanResult{std::move(path)};
+
+  // A window around the raw path, so the obstacle term does not pay for the whole map.
+  const double reach = detail::smoother_reach(*params_.smoother);
+  std::optional<ObstacleWindow> window;
+  if (reach > 0.0) {
+    std::vector<Eigen::Vector2d> positions;
+    positions.reserve(path.size());
+    for (const Pose2D & pose : path) {
+      positions.push_back(pose.position);
+    }
+    window = detail::build_obstacle_window(grid, positions, reach);
+  }
+  const ObstacleField smoothing_field =
+    window.has_value() ? ObstacleField{*window} : ObstacleField{};
+  return PlanResult{detail::smooth_on_grid(path, grid, smoothing_field, *params_.smoother)};
 }
 
 }  // namespace eltanin::planner

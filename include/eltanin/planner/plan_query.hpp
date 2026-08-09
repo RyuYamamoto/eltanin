@@ -26,9 +26,9 @@ namespace eltanin::planner
 struct PlanQuery
 {
   TraversabilityView grid;
-  /// Rescued start cell; grid.free() holds for it.
+  /// Rescued start cell; grid.traversable() holds for it.
   map::MapIndex start_index;
-  /// Requested goal cell; grid.free() holds for it.
+  /// Requested goal cell; grid.traversable() holds for it.
   map::MapIndex goal_index;
   /// Rescued start pose; the position moves to the cell center only when the rescue fired.
   Pose2D start;

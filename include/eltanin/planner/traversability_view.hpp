@@ -56,13 +56,26 @@ TraversabilityGrid build_traversability_grid(const Map & map, const Model & mode
 
 }  // namespace detail
 
+/// What one search pass may enter, and what it is charged for entering it.
+struct TraversabilityPolicy
+{
+  /// The worst class the pass may enter; Free is the strict pass every plan starts with.
+  Traversability limit{Traversability::Free};
+  /// Extra cost of travelling through a Circumscribed cell, as a fraction of the distance.
+  double circumscribed_penalty{0.0};
+};
+
 /// Non-owning view over a classified grid; the only traversability test a search core may use.
 class TraversabilityView
 {
 public:
   TraversabilityView(
-    const map::MapGeometry & geometry, std::span<const std::uint8_t> grid) noexcept
-  : geometry_(&geometry), grid_(grid)
+    const map::MapGeometry & geometry, std::span<const std::uint8_t> grid,
+    const TraversabilityPolicy & policy = {}) noexcept
+  : geometry_(&geometry),
+    grid_(grid),
+    limit_(static_cast<std::uint8_t>(policy.limit)),
+    circumscribed_penalty_(policy.circumscribed_penalty)
   {
     assert(grid_.size() == geometry.cell_count());
   }
@@ -71,17 +84,29 @@ public:
 
   [[nodiscard]] std::size_t cell_count() const noexcept { return grid_.size(); }
 
+  /// True when this pass accepts more than Traversability::Free.
+  [[nodiscard]] bool relaxed() const noexcept { return limit_ > FREE_CELL; }
+
   /// Cells outside the map are not traversable; in_bounds() is always evaluated before index().
-  [[nodiscard]] bool free(int mx, int my) const noexcept
+  [[nodiscard]] bool traversable(int mx, int my) const noexcept
   {
-    return geometry_->in_bounds(mx, my) && grid_[geometry_->index(mx, my)] == FREE_CELL;
+    return geometry_->in_bounds(mx, my) && grid_[geometry_->index(mx, my)] <= limit_;
   }
 
   /// Points outside the map are not traversable.
-  [[nodiscard]] bool free(const Eigen::Vector2d & world) const noexcept
+  [[nodiscard]] bool traversable(const Eigen::Vector2d & world) const noexcept
   {
     const auto index = geometry_->world_to_map(world);
-    return index.has_value() && grid_[geometry_->index(index->x, index->y)] == FREE_CELL;
+    return index.has_value() && grid_[geometry_->index(index->x, index->y)] <= limit_;
+  }
+
+  /// Fraction to add to a step of travel ending here; 0 unless the cell is Circumscribed.
+  [[nodiscard]] double surcharge(int mx, int my) const noexcept
+  {
+    if (!geometry_->in_bounds(mx, my)) {
+      return 0.0;
+    }
+    return grid_[geometry_->index(mx, my)] == CIRCUMSCRIBED_CELL ? circumscribed_penalty_ : 0.0;
   }
 
   /// Precondition: geometry().in_bounds(mx, my).
@@ -93,9 +118,13 @@ public:
 
 private:
   static constexpr std::uint8_t FREE_CELL = static_cast<std::uint8_t>(Traversability::Free);
+  static constexpr std::uint8_t CIRCUMSCRIBED_CELL =
+    static_cast<std::uint8_t>(Traversability::Circumscribed);
 
   const map::MapGeometry * geometry_;
   std::span<const std::uint8_t> grid_;
+  std::uint8_t limit_{FREE_CELL};
+  double circumscribed_penalty_{0.0};
 };
 
 }  // namespace eltanin::planner

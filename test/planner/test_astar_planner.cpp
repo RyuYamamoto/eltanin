@@ -277,11 +277,29 @@ TEST(AStarPlanner, InscribedGoalIsRejected)
   EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
 }
 
-TEST(AStarPlanner, CircumscribedGoalIsRejected)
+TEST(AStarPlanner, CircumscribedGoalIsRejectedByTheStrictPass)
 {
   Costmap map = open_map(5, 5);
   map(4, 4) = CIRCUMSCRIBED_BAND_COST;
-  EXPECT_FALSE(plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4)).has_value());
+  auto params = eltanin_test::raw_astar_params();
+  params.common.narrow_passage.enabled = false;
+
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4), params);
+
+  EXPECT_FALSE(path.has_value());
+  EXPECT_EQ(path.error(), eltanin::planner::PlannerError::GoalBlocked);
+}
+
+TEST(AStarPlanner, CircumscribedGoalIsReachedByTheFallbackAndFlagged)
+{
+  Costmap map = open_map(5, 5);
+  map(4, 4) = CIRCUMSCRIBED_BAND_COST;
+
+  // The fallback is on by default, so a goal inside the band is reached and reported as narrow.
+  const auto path = plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4));
+
+  ASSERT_TRUE(path.has_value());
+  EXPECT_TRUE(path.narrow_passage());
 }
 
 TEST(AStarPlanner, UnknownGoalFollowsTheModelSetting)
@@ -368,7 +386,10 @@ TEST(AStarPlanner, DefaultOutputEqualsTheRawPathSmoothedSeparately)
   const Pose2D start = at_cell(map, 0, 0);
   const Pose2D goal = at_cell(map, 4, 0, 0.3);
 
-  const auto raw = plan_raw(map, make_cost_model(), start, goal);
+  // Everything but the smoothing stays at the default, so only the smoothing step is under test.
+  eltanin::planner::AStarParams unsmoothed;
+  unsmoothed.smoother.reset();
+  const auto raw = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, unsmoothed);
   ASSERT_TRUE(raw.has_value());
   const auto planned = eltanin::planner::plan_astar(map, make_cost_model(), start, goal);
   ASSERT_TRUE(planned.has_value());

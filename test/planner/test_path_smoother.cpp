@@ -99,7 +99,7 @@ TEST(PathSmoother, KeepsBothEndPointsBitIdentical)
 {
   const Costmap map = open_map(40, 40);
   const Path input = zigzag_path(15, 1.0, 2.0, 0.2);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 10000});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 10000));
 
   ASSERT_EQ(output.size(), input.size());
   EXPECT_EQ(output[0].position.x(), input[0].position.x());
@@ -150,7 +150,7 @@ TEST(PathSmoother, LeavesAnEvenlySpacedCollinearPathInPlace)
     positions.push_back(Vector2d{1.0 + 0.1 * i, 2.0});
   }
   const Path input = make_path(positions);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 500});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 500));
 
   ASSERT_EQ(output.size(), input.size());
   for (std::size_t i = 0; i < input.size(); ++i) {
@@ -165,7 +165,7 @@ TEST(PathSmoother, KeepsAnUnevenlySpacedCollinearPathCollinear)
   const Path input = make_path(
     {Vector2d{1.0, 2.0}, Vector2d{1.2, 2.0}, Vector2d{1.3, 2.0}, Vector2d{1.7, 2.0},
      Vector2d{1.8, 2.0}, Vector2d{2.4, 2.0}});
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 500});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 500));
 
   for (std::size_t i = 0; i < output.size(); ++i) {
     EXPECT_NEAR(output[i].position.y(), 2.0, 1e-12) << "pose " << i;
@@ -188,7 +188,7 @@ TEST(PathSmoother, SmoothnessCostStaysBelowTheInputAtEveryIterationCount)
 
   for (int iterations = 1; iterations <= 40; ++iterations) {
     const Path output =
-      smooth(input, map, make_cost_model(), SmootherParams{0.3, 0.3, 0.0, iterations});
+      smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.3, 0.3, 0.0, iterations));
     EXPECT_LT(smoothness_cost(output), reference) << "iterations " << iterations;
   }
 }
@@ -199,10 +199,10 @@ TEST(PathSmoother, SmoothnessCostConvergesAsIterationsGrow)
   const Path input = zigzag_path(21, 1.0, 2.0, 0.2);
 
   double previous = smoothness_cost(
-    smooth(input, map, make_cost_model(), SmootherParams{0.3, 0.3, 0.0, 9}));
+    smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.3, 0.3, 0.0, 9)));
   for (int iterations = 10; iterations <= 40; ++iterations) {
     const Path output =
-      smooth(input, map, make_cost_model(), SmootherParams{0.3, 0.3, 0.0, iterations});
+      smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.3, 0.3, 0.0, iterations));
     const double cost = smoothness_cost(output);
     EXPECT_LT(std::abs(cost - previous), 1e-6) << "iterations " << iterations;
     previous = cost;
@@ -214,8 +214,8 @@ TEST(PathSmoother, EnergyIsMonotonicallyNonIncreasing)
   const Costmap map = open_map(40, 40);
   const Path input = zigzag_path(21, 1.0, 2.0, 0.2);
   const std::vector<SmootherParams> settings{
-    SmootherParams{0.3, 0.3, 0.0, 0}, SmootherParams{0.5, 0.3, 0.0, 0},
-    SmootherParams{0.0, 0.45, 0.0, 0}};
+    eltanin_test::basic_smoother_params(0.3, 0.3, 0.0, 0), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 0),
+    eltanin_test::basic_smoother_params(0.0, 0.45, 0.0, 0)};
 
   for (const SmootherParams & setting : settings) {
     double previous = smoother_energy(input, input, setting);
@@ -240,7 +240,7 @@ TEST(PathSmoother, NeverEntersAnObstacleOrItsCircumscribedBand)
   ASSERT_TRUE(raw.has_value());
   ASSERT_GT(raw->size(), 30u);
 
-  const Path output = smooth(*raw, map, make_cost_model(), SmootherParams{0.0, 0.45, 0.0, 1000});
+  const Path output = smooth(*raw, map, make_cost_model(), eltanin_test::basic_smoother_params(0.0, 0.45, 0.0, 1000));
   EXPECT_EQ(output.size(), raw->size());
   expect_all_free(output, map, make_cost_model());
 }
@@ -251,7 +251,7 @@ TEST(PathSmoother, KeepsEveryPoseInsideTheMap)
   const Path input = make_path(
     {Vector2d{0.05, 0.05}, Vector2d{0.15, 0.55}, Vector2d{0.25, 0.05}, Vector2d{0.35, 0.55},
      Vector2d{0.45, 0.05}, Vector2d{0.55, 0.55}, Vector2d{0.65, 0.05}, Vector2d{0.75, 0.05}});
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 5000});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 5000));
 
   for (std::size_t i = 0; i < output.size(); ++i) {
     EXPECT_TRUE(map.geometry().world_to_map(output[i].position).has_value()) << "pose " << i;
@@ -262,7 +262,7 @@ TEST(PathSmoother, StaysFiniteOnALongPath)
 {
   const Costmap map = open_map(400, 400, 0.05);
   const Path input = zigzag_path(500, 1.0, 5.0, 0.1);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 200});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 200));
 
   ASSERT_EQ(output.size(), 500u);
   for (std::size_t i = 0; i < output.size(); ++i) {
@@ -312,7 +312,7 @@ TEST(PathSmoother, FreezesPosesThatAreNotTraversable)
   }
 
   const Path input = zigzag_path(21, 1.0, 2.0, 0.1);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 500});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 500));
 
   ASSERT_EQ(output.size(), input.size());
   std::size_t frozen = 0;
@@ -336,7 +336,7 @@ TEST(PathSmoother, ZeroIterationsKeepsEveryPosition)
 {
   const Costmap map = open_map(40, 40);
   const Path input = zigzag_path(15, 1.0, 2.0, 0.2);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 1e-4, 0});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 1e-4, 0));
 
   ASSERT_EQ(output.size(), input.size());
   for (std::size_t i = 0; i < input.size(); ++i) {
@@ -367,10 +367,123 @@ TEST(PathSmoother, RecomputesYawFromTheSmoothedPositions)
 {
   const Costmap map = open_map(40, 40);
   const Path input = zigzag_path(15, 1.0, 2.0, 0.2);
-  const Path output = smooth(input, map, make_cost_model(), SmootherParams{0.5, 0.3, 0.0, 50});
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 50));
 
   for (std::size_t i = 0; i + 1 < output.size(); ++i) {
     const Vector2d delta = output[i + 1].position - output[i].position;
     EXPECT_NEAR(output[i].yaw, std::atan2(delta.y(), delta.x()), 1e-12) << "pose " << i;
   }
+}
+
+namespace
+{
+
+/// Half the squared second difference at every point that has a neighbour on each side.
+double bending_energy(const Path & path)
+{
+  double energy = 0.0;
+  for (std::size_t i = 1; i + 1 < path.size(); ++i) {
+    const Vector2d bend =
+      path[i + 1].position - 2.0 * path[i].position + path[i - 1].position;
+    energy += 0.5 * bend.squaredNorm();
+  }
+  return energy;
+}
+
+/// Smallest distance to a lethal cell over the poses that may move; the two ends are pinned.
+double minimum_interior_clearance(const Path & path, const Costmap & map)
+{
+  double smallest = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 1; i + 1 < path.size(); ++i) {
+    for (int my = 0; my < map.size_y(); ++my) {
+      for (int mx = 0; mx < map.size_x(); ++mx) {
+        if (map(mx, my) != LETHAL_OBSTACLE) {
+          continue;
+        }
+        smallest =
+          std::min(smallest, (path[i].position - map.geometry().map_to_world(mx, my)).norm());
+      }
+    }
+  }
+  return smallest;
+}
+
+}  // namespace
+
+TEST(PathSmoother, TheBendingStencilIsTheGradientOfTheEnergyItDescends)
+{
+  const Path path = zigzag_path(11, 1.0, 2.0, 0.2);
+  constexpr double h = 1e-5;
+
+  // The sweep applies this five-point stencil; it has to equal the bending energy's gradient.
+  for (std::size_t i = 2; i + 2 < path.size(); ++i) {
+    const Vector2d analytic = 6.0 * path[i].position - 4.0 * path[i - 1].position -
+                              4.0 * path[i + 1].position + path[i - 2].position +
+                              path[i + 2].position;
+    for (int axis = 0; axis < 2; ++axis) {
+      Path forward = path;
+      Path backward = path;
+      forward[i].position[axis] += h;
+      backward[i].position[axis] -= h;
+      const double numeric = (bending_energy(forward) - bending_energy(backward)) / (2.0 * h);
+      EXPECT_NEAR(numeric, analytic[axis], 1e-6) << "point " << i << " axis " << axis;
+    }
+  }
+}
+
+TEST(PathSmoother, TheCurvatureTermRemovesBendingTheSmoothingTermLeaves)
+{
+  const Costmap map = open_map(40, 40);
+  const Path input = zigzag_path(21, 1.0, 2.0, 0.2);
+
+  SmootherParams without = eltanin_test::basic_smoother_params(0.1, 0.4, 0.0, 200);
+  SmootherParams with = without;
+  with.weight_curvature = 0.01;
+
+  const Path plain = smooth(input, map, make_cost_model(), without);
+  const Path bent = smooth(input, map, make_cost_model(), with);
+
+  EXPECT_LT(bending_energy(bent), bending_energy(plain));
+  expect_all_free(bent, map, make_cost_model());
+}
+
+TEST(PathSmoother, TheObstacleTermPushesThePathOffTheWall)
+{
+  Costmap map = open_map(40, 40);
+  for (int my = 0; my < 40; ++my) {
+    map(10, my) = LETHAL_OBSTACLE;
+  }
+  // A straight run one cell clear of the wall, which the data and smoothing terms would leave put.
+  std::vector<Vector2d> positions;
+  for (int my = 5; my <= 30; ++my) {
+    positions.push_back(map.geometry().map_to_world(11, my));
+  }
+  const Path input = make_path(positions);
+
+  SmootherParams off = eltanin_test::basic_smoother_params(0.1, 0.4, 0.0, 300);
+  SmootherParams on = off;
+  on.weight_obstacle = 0.1;
+  on.obstacle_distance = 0.5;
+
+  const Path stayed = smooth(input, map, make_cost_model(), off);
+  const Path pushed = smooth(input, map, make_cost_model(), on);
+
+  // The two end poses are pinned, so only the interior can be pushed off the wall.
+  EXPECT_GT(
+    minimum_interior_clearance(pushed, map), minimum_interior_clearance(stayed, map) + 0.05);
+  expect_all_free(pushed, map, make_cost_model());
+}
+
+TEST(PathSmoother, RejectsCurvatureWeightsThatWouldNotConverge)
+{
+  const Costmap map = open_map(10, 10);
+  const Path input = zigzag_path(5, 0.2, 0.2, 0.1);
+
+  SmootherParams unstable;
+  unstable.weight_data = 0.1;
+  unstable.weight_smooth = 0.4;
+  // 0.1 + 4 * 0.4 + 16 * 0.02 is above 2, so the sweep would grow instead of settle.
+  unstable.weight_curvature = 0.02;
+
+  EXPECT_THROW(smooth(input, map, make_cost_model(), unstable), std::invalid_argument);
 }

@@ -57,8 +57,14 @@ void assign_tangent_yaw(Path & path)
   }
 }
 
+double smoother_reach(const SmootherParams & params) noexcept
+{
+  return params.weight_obstacle > 0.0 ? params.obstacle_distance : 0.0;
+}
+
 Path smooth_on_grid(
-  const Path & path, const TraversabilityView & grid, const SmootherParams & params)
+  const Path & path, const TraversabilityView & grid, const ObstacleField & obstacle,
+  const SmootherParams & params)
 {
   if (path.size() <= 1) {
     return path;
@@ -66,19 +72,36 @@ Path smooth_on_grid(
 
   Path smoothed = path;
   const std::size_t n = smoothed.size();
+  const bool push_off_walls = params.weight_obstacle > 0.0 && !obstacle.empty();
   if (n >= 3) {
     for (int iteration = 0; iteration < params.max_iterations; ++iteration) {
       double displacement = 0.0;
       for (std::size_t i = 1; i + 1 < n; ++i) {
-        const Eigen::Vector2d candidate =
-          smoothed[i].position + params.weight_data * (path[i].position - smoothed[i].position) +
-          params.weight_smooth * (smoothed[i - 1].position + smoothed[i + 1].position -
-                                  2.0 * smoothed[i].position);
+        const Eigen::Vector2d & here = smoothed[i].position;
+        Eigen::Vector2d step =
+          params.weight_data * (path[i].position - here) +
+          params.weight_smooth * (smoothed[i - 1].position + smoothed[i + 1].position - 2.0 * here);
+        // Bending needs two neighbours each side, so the points next to the ends keep their shape.
+        if (params.weight_curvature > 0.0 && i >= 2 && i + 2 < n) {
+          step -= params.weight_curvature *
+                  (6.0 * here - 4.0 * smoothed[i - 1].position - 4.0 * smoothed[i + 1].position +
+                   smoothed[i - 2].position + smoothed[i + 2].position);
+        }
+        if (push_off_walls) {
+          const double clearance = obstacle.at(here);
+          if (clearance < params.obstacle_distance) {
+            // The gradient of the distance field points away from the wall that is closest.
+            step += params.weight_obstacle * (params.obstacle_distance - clearance) *
+                    obstacle.gradient(here);
+          }
+        }
+
+        const Eigen::Vector2d candidate = here + step;
         // Rejected for this sweep only; a neighbour moving later may make the point movable.
-        if (!grid.free(candidate)) {
+        if (!grid.traversable(candidate)) {
           continue;
         }
-        displacement += (candidate - smoothed[i].position).norm();
+        displacement += step.norm();
         smoothed[i].position = candidate;
       }
       if (displacement < params.tolerance) {
@@ -92,11 +115,15 @@ Path smooth_on_grid(
 
 void validate_smoother_params(const SmootherParams & params)
 {
-  const bool valid = std::isfinite(params.weight_data) && params.weight_data >= 0.0 &&
-                     std::isfinite(params.weight_smooth) && params.weight_smooth >= 0.0 &&
-                     params.weight_data + 4.0 * params.weight_smooth < 2.0 &&
-                     std::isfinite(params.tolerance) && params.tolerance >= 0.0 &&
-                     params.max_iterations >= 0;
+  // The sweep applies the gradient directly, so the stencil's largest eigenvalue has to stay under 2.
+  const bool valid =
+    std::isfinite(params.weight_data) && params.weight_data >= 0.0 &&
+    std::isfinite(params.weight_smooth) && params.weight_smooth >= 0.0 &&
+    std::isfinite(params.weight_curvature) && params.weight_curvature >= 0.0 &&
+    std::isfinite(params.weight_obstacle) && params.weight_obstacle >= 0.0 &&
+    std::isfinite(params.obstacle_distance) && params.obstacle_distance > 0.0 &&
+    params.weight_data + 4.0 * params.weight_smooth + 16.0 * params.weight_curvature < 2.0 &&
+    std::isfinite(params.tolerance) && params.tolerance >= 0.0 && params.max_iterations >= 0;
   if (!valid) {
     throw std::invalid_argument("invalid SmootherParams");
   }

@@ -15,6 +15,7 @@
 #ifndef ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 #define ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 
+#include <eltanin/planner/obstacle_field.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/planner/planner.hpp>
 
@@ -28,6 +29,8 @@ struct AStarParams
   PlannerParams common{};
   /// nullopt returns the raw cell-center A* path; a value smooths it before returning.
   std::optional<SmootherParams> smoother{SmootherParams{}};
+  /// Off by default: shaping the search costs a full-map distance field (docs §13.20).
+  ClearanceCost clearance{0.0, 0.5};
 };
 
 /// Eight-connected A* over the cells classified Traversability::Free.

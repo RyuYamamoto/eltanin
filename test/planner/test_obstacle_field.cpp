@@ -48,7 +48,7 @@ double nearest_blocked(const TraversabilityView & view, int mx, int my, double r
                 resolution;
   for (int qy = 0; qy < geometry.size_y(); ++qy) {
     for (int qx = 0; qx < geometry.size_x(); ++qx) {
-      if (view.free(qx, qy)) {
+      if (view.traversable(qx, qy)) {
         continue;
       }
       best = std::min(best, std::hypot(mx - qx, my - qy) * resolution);
