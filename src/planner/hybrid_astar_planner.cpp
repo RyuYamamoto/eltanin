@@ -48,6 +48,9 @@ constexpr std::size_t BITS_PER_WORD = 64;
 /// Below this the analytic tail already points where the caller asked, so no turn is emitted.
 constexpr double SAME_HEADING = 1e-9;
 
+/// Angular step the outline is swept at while turning on the spot [rad].
+constexpr double SPIN_CHECK_STEP = 0.05;
+
 /// Nodes are appended as they are discovered, so no reservation proportional to the map is needed.
 constexpr std::size_t INITIAL_NODE_RESERVE = 4096;
 
@@ -171,8 +174,18 @@ bool interior_is_free(
   const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & from, double travel,
   double turn, double collision_check_step)
 {
-  // Turning on the spot keeps the reference point where it already is, so nothing new to check.
+  // The reference point stays put, but the body sweeps, so the outline has to be swept with it.
   if (travel == 0.0) {
+    if (footprint.empty()) {
+      return true;
+    }
+    const int sweeps = std::max(1, static_cast<int>(std::ceil(std::abs(turn) / SPIN_CHECK_STEP)));
+    for (int sweep = 1; sweep < sweeps; ++sweep) {
+      const double fraction = static_cast<double>(sweep) / static_cast<double>(sweeps);
+      if (!pose_is_usable(grid, footprint, propagate(from, 0.0, turn * fraction))) {
+        return false;
+      }
+    }
     return true;
   }
   const int sample_count =
@@ -623,6 +636,16 @@ PlanResult search(
         if (!connection.has_value()) {
           continue;
         }
+        // attach_tail() finishes off-heading arrivals with a turn on the spot; sweep it too.
+        const double closing_turn =
+          shortest_angular_distance(targets[i].yaw, query.goal.yaw);
+        if (
+          std::abs(closing_turn) > SAME_HEADING &&
+          !interior_is_free(
+            grid, params.common.footprint, Pose2D{query.goal.position, targets[i].yaw}, 0.0,
+            closing_turn, collision_check_step)) {
+          continue;
+        }
         // Scored rather than taken: a tail that hugs a wall must lose to a search that does not.
         const double cost =
           current.g + tail_cost(*connection, current.pose, field, params.clearance);
@@ -712,21 +735,43 @@ PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const
 {
   // The state arrays are sized before allocating, but a tight rlimit can still fail the request.
   try {
+    // Sweeping the outline is what makes a narrow corridor usable, and it is not free. Free cells
+    // alone answer almost every plan, so the outline only comes out when they are not enough.
+    const bool endpoints_are_free = query.grid.traversable(query.start.position) &&
+                                    query.grid.traversable(query.goal.position);
+    if (!params_.common.footprint.empty() && endpoints_are_free) {
+      HybridAStarParams without_outline = params_;
+      without_outline.common.footprint = {};
+      PlanResult wide = plan_with_clearance(query, without_outline);
+      if (wide.has_value()) {
+        return wide;
+      }
+    }
+    return plan_with_clearance(query, params_);
+  } catch (const std::bad_alloc &) {
+    return PlanResult{PlannerError::StateSpaceTooLarge};
+  }
+}
+
+PlanResult HybridAStarPlanner::plan_with_clearance(
+  const PlanQuery & query, const HybridAStarParams & params)
+{
+  {
     double shortest = 0.0;
-    PlanResult roomy = search(query, params_, &shortest);
-    if (!params_.clearance_fallback.enabled) {
+    PlanResult roomy = search(query, params, &shortest);
+    if (!params.clearance_fallback.enabled) {
       return roomy;
     }
 
-    HybridAStarParams tight = params_;
-    tight.clearance = params_.clearance_fallback.clearance;
+    HybridAStarParams tight = params;
+    tight.clearance = params.clearance_fallback.clearance;
     tight.clearance_fallback.enabled = false;
     if (!roomy.has_value()) {
       return search(query, tight);
     }
     // Demanding room is worth a detour, but not a walk around the building.
     const double travelled = path_length(*roomy);
-    const double allowed = shortest * (1.0 + params_.clearance_fallback.detour_tolerance);
+    const double allowed = shortest * (1.0 + params.clearance_fallback.detour_tolerance);
     if (!std::isfinite(shortest) || shortest <= 0.0 || travelled <= allowed) {
       return roomy;
     }
@@ -735,8 +780,6 @@ PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const
       return roomy;
     }
     return direct;
-  } catch (const std::bad_alloc &) {
-    return PlanResult{PlannerError::StateSpaceTooLarge};
   }
 }
 

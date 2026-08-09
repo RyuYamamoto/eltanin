@@ -36,7 +36,7 @@ int usage(const char * program)
 {
   std::cerr << "usage: " << program
             << " <map.yaml> <output_dir> <start_x> <start_y> <start_yaw>"
-               " <goal_x> <goal_y> <goal_yaw> [dubins|differential|reeds-shepp]\n";
+               " <goal_x> <goal_y> <goal_yaw> [allow_reverse 0|1] [allow_turn_in_place 0|1]\n";
   return EXIT_FAILURE;
 }
 
@@ -79,7 +79,7 @@ bool write_footprint(const std::filesystem::path & file, const eltanin::Polygon2
 
 int main(int argc, char ** argv)
 {
-  if (argc < 9 || argc > 10) {
+  if (argc < 9 || argc > 11) {
     return usage(argv[0]);
   }
 
@@ -122,14 +122,10 @@ int main(int argc, char ** argv)
   params.motion_model.minimum_turning_radius = TURNING_RADIUS;
   params.common.footprint = eltanin_examples::robot_footprint();
   if (argc >= 10) {
-    const std::string name = argv[9];
-    if (name == "differential") {
-      params.motion_model.turn_in_place = true;
-    } else if (name == "reeds-shepp") {
-      params.motion_model.reverse = true;
-    } else if (name != "dubins") {
-      return usage(argv[0]);
-    }
+    params.motion_model.reverse = std::string(argv[9]) == "1";
+  }
+  if (argc >= 11) {
+    params.motion_model.turn_in_place = std::string(argv[10]) == "1";
   }
 
   const auto path =

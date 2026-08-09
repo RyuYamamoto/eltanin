@@ -33,7 +33,8 @@ inline constexpr std::size_t DEFAULT_MAX_STATE_MEMORY_BYTES = 256UL * 1024UL * 1
 /// Second attempt with less room demanded, for gaps the roomy pass would rather walk around.
 struct ClearanceFallback
 {
-  bool enabled{true};
+  /// Off by default: a second search costs more than the room it buys (docs 14.9).
+  bool enabled{false};
   ClearanceCost clearance{0.5, 0.4};
   /// Retry once the roomy path is longer than the shortest route by more than this fraction.
   double detour_tolerance{0.25};
@@ -75,7 +76,7 @@ struct HybridAStarParams
   /// Charged once per switch between forward and reverse, as a multiple of one motion step.
   double direction_change_penalty{2.0};
   /// On by default: this search already runs on a corridor, so the distance field is cheap.
-  ClearanceCost clearance{1.0, 0.6};
+  ClearanceCost clearance{0.5, 0.4};
   ClearanceFallback clearance_fallback{};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
@@ -92,6 +93,10 @@ public:
 
 private:
   [[nodiscard]] PlanResult plan_on_grid(const PlanQuery & query) const override;
+
+  /// One outline setting, with the clearance fallback applied on top of it.
+  [[nodiscard]] static PlanResult plan_with_clearance(
+    const PlanQuery & query, const HybridAStarParams & params);
 
   HybridAStarParams params_;
 };
