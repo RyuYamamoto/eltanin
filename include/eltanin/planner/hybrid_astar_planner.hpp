@@ -48,6 +48,8 @@ struct MotionModel
   bool reverse{false};
   /// The body can rotate without translating, as a differential drive does.
   bool turn_in_place{false};
+
+  bool operator==(const MotionModel &) const = default;
 };
 
 struct HybridAStarParams
