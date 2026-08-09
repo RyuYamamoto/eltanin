@@ -14,6 +14,9 @@
 
 #include <eltanin/core/path.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 namespace eltanin
 {
 
@@ -39,6 +42,43 @@ std::vector<double> cumulative_arc_length(const Path & path)
     lengths.push_back(length);
   }
   return lengths;
+}
+
+std::vector<double> path_curvature(const Path & path, double window)
+{
+  std::vector<double> curvature(path.size(), 0.0);
+  if (path.size() < 3) {
+    return curvature;
+  }
+
+  const std::vector<double> arc = cumulative_arc_length(path);
+  const double span = (std::isfinite(window) && window > 0.0) ? window : 0.0;
+
+  std::size_t back = 0;
+  std::size_t forward = 1;
+  for (std::size_t i = 1; i + 1 < path.size(); ++i) {
+    while (back + 1 < i && arc[i] - arc[back + 1] >= span) {
+      ++back;
+    }
+    forward = std::max(forward, i + 1);
+    while (forward + 1 < path.size() && arc[forward] - arc[i] < span) {
+      ++forward;
+    }
+    // Endpoints the window does not reach measure the sampling instead of the path, so drop them.
+    if (arc[i] - arc[back] < span || arc[forward] - arc[i] < span) {
+      continue;
+    }
+
+    const Eigen::Vector2d incoming = path[i].position - path[back].position;
+    const Eigen::Vector2d outgoing = path[forward].position - path[i].position;
+    const Eigen::Vector2d chord = path[forward].position - path[back].position;
+    const double denominator = incoming.norm() * outgoing.norm() * chord.norm();
+    if (denominator > 0.0) {
+      const double twice_area = incoming.x() * outgoing.y() - incoming.y() * outgoing.x();
+      curvature[i] = 2.0 * twice_area / denominator;
+    }
+  }
+  return curvature;
 }
 
 }  // namespace eltanin

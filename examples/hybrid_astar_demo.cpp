@@ -14,7 +14,7 @@
 
 #include <real_map_fixture.hpp>
 
-#include <eltanin/core/angle.hpp>
+#include <eltanin/core/path.hpp>
 #include <eltanin/map_io/pgm.hpp>
 #include <eltanin/planner/astar_planner.hpp>
 #include <eltanin/planner/hybrid_astar_planner.hpp>
@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <iostream>
 
 namespace
@@ -47,17 +48,12 @@ bool write_path(const std::filesystem::path & file, const eltanin::Path & path)
     return false;
   }
   out << "index,x,y,yaw,s,curvature\n";
-  double s = 0.0;
-  out << "0," << path[0].position.x() << ',' << path[0].position.y() << ',' << path[0].yaw
-      << ",0,0\n";
-  for (std::size_t i = 1; i < path.size(); ++i) {
-    const double ds = (path[i].position - path[i - 1].position).norm();
-    s += ds;
-    const double delta_yaw =
-      eltanin::shortest_angular_distance(path[i - 1].yaw, path[i].yaw);
-    const double curvature = ds > 0.0 ? 2.0 * std::sin(0.5 * delta_yaw) / ds : 0.0;
+  const std::vector<double> arc = eltanin::cumulative_arc_length(path);
+  // Window 0 keeps one estimate per pose, which is what the per-primitive plot reads.
+  const std::vector<double> curvature = eltanin::path_curvature(path, 0.0);
+  for (std::size_t i = 0; i < path.size(); ++i) {
     out << i << ',' << path[i].position.x() << ',' << path[i].position.y() << ',' << path[i].yaw
-        << ',' << s << ',' << curvature << '\n';
+        << ',' << arc[i] << ',' << curvature[i] << '\n';
   }
   return static_cast<bool>(out);
 }

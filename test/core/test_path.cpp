@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 #include <utility>
 #include <vector>
 
@@ -186,4 +187,137 @@ TEST(Path, ConstructionFromVector)
   EXPECT_EQ(path.size(), 2u);
   EXPECT_NEAR(path_length(path), 2.0, kTol);
   EXPECT_EQ(path.poses().size(), 2u);
+}
+
+namespace
+{
+
+Path make_arc(double radius, double sweep, double spacing, bool counter_clockwise)
+{
+  const double sign = counter_clockwise ? 1.0 : -1.0;
+  const auto count = static_cast<std::size_t>(std::round(radius * sweep / spacing)) + 1;
+  Path path;
+  for (std::size_t i = 0; i < count; ++i) {
+    const double angle = sign * static_cast<double>(i) * spacing / radius;
+    path.push_back(
+      Pose2D{Vector2d{radius * std::sin(std::abs(angle)), sign * radius * (1.0 - std::cos(angle))},
+             angle});
+  }
+  return path;
+}
+
+}  // namespace
+
+TEST(PathCurvature, StraightLineIsZero)
+{
+  Path path;
+  for (int i = 0; i < 40; ++i) {
+    path.push_back(Pose2D{Vector2d{0.05 * static_cast<double>(i), 0.0}, 0.0});
+  }
+
+  for (const double window : {0.0, 0.05, 0.3, 1.0}) {
+    const std::vector<double> curvature = eltanin::path_curvature(path, window);
+    ASSERT_EQ(curvature.size(), path.size());
+    for (std::size_t i = 0; i < curvature.size(); ++i) {
+      EXPECT_NEAR(curvature[i], 0.0, kTol) << "window " << window << " index " << i;
+    }
+  }
+}
+
+TEST(PathCurvature, CircularArcMatchesInverseRadius)
+{
+  for (const double radius : {0.3, 0.5, 1.0, 2.0}) {
+    const Path path = make_arc(radius, std::numbers::pi, 0.05, true);
+    const std::vector<double> arc = cumulative_arc_length(path);
+    const double window = 0.2;
+    const std::vector<double> curvature = eltanin::path_curvature(path, window);
+
+    std::size_t checked = 0;
+    for (std::size_t i = 1; i + 1 < path.size(); ++i) {
+      if (arc[i] < window || arc.back() - arc[i] < window) {
+        continue;
+      }
+      EXPECT_NEAR(curvature[i], 1.0 / radius, 1e-9) << "radius " << radius << " index " << i;
+      ++checked;
+    }
+    EXPECT_GT(checked, 0u);
+  }
+}
+
+TEST(PathCurvature, WindowDoesNotBiasACircularArc)
+{
+  const double radius = 0.5;
+  const Path path = make_arc(radius, std::numbers::pi, 0.05, true);
+  const std::vector<double> arc = cumulative_arc_length(path);
+
+  for (const double window : {0.0, 0.1, 0.3, 0.5}) {
+    const std::vector<double> curvature = eltanin::path_curvature(path, window);
+    for (std::size_t i = 1; i + 1 < path.size(); ++i) {
+      if (arc[i] < window || arc.back() - arc[i] < window) {
+        continue;
+      }
+      EXPECT_NEAR(curvature[i], 1.0 / radius, 1e-9) << "window " << window << " index " << i;
+    }
+  }
+}
+
+TEST(PathCurvature, TurningRightIsNegative)
+{
+  const Path path = make_arc(1.0, 0.5 * std::numbers::pi, 0.05, false);
+  const std::vector<double> curvature = eltanin::path_curvature(path, 0.2);
+  EXPECT_NEAR(curvature[path.size() / 2], -1.0, 1e-9);
+}
+
+TEST(PathCurvature, EndsAreZero)
+{
+  const Path path = make_arc(1.0, 0.5 * std::numbers::pi, 0.05, true);
+  const std::vector<double> curvature = eltanin::path_curvature(path, 0.2);
+  EXPECT_DOUBLE_EQ(curvature.front(), 0.0);
+  EXPECT_DOUBLE_EQ(curvature.back(), 0.0);
+}
+
+TEST(PathCurvature, ShortPathsAreZero)
+{
+  EXPECT_TRUE(eltanin::path_curvature(Path{}, 0.3).empty());
+
+  const Path single{Pose2D{Vector2d{0.0, 0.0}, 0.0}};
+  EXPECT_EQ(eltanin::path_curvature(single, 0.3), std::vector<double>{0.0});
+
+  const Path pair{Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0}};
+  EXPECT_EQ(eltanin::path_curvature(pair, 0.3), (std::vector<double>{0.0, 0.0}));
+}
+
+TEST(PathCurvature, DuplicatePosesStayFinite)
+{
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{0.0, 0.0}, 0.0},
+    Pose2D{Vector2d{0.0, 0.0}, 0.5}, Pose2D{Vector2d{1.0, 0.0}, 0.0}};
+
+  const std::vector<double> curvature = eltanin::path_curvature(path, 0.0);
+  ASSERT_EQ(curvature.size(), 4u);
+  for (const double value : curvature) {
+    EXPECT_DOUBLE_EQ(value, 0.0);
+  }
+}
+
+TEST(PathCurvature, WindowSuppressesAnIsolatedKink)
+{
+  const double bend = 7.0 * std::numbers::pi / 180.0;
+  Path path;
+  for (int i = -10; i <= 0; ++i) {
+    path.push_back(Pose2D{Vector2d{0.05 * static_cast<double>(i), 0.0}, 0.0});
+  }
+  for (int i = 1; i <= 10; ++i) {
+    const double distance = 0.05 * static_cast<double>(i);
+    path.push_back(
+      Pose2D{Vector2d{distance * std::cos(bend), distance * std::sin(bend)}, bend});
+  }
+
+  const std::vector<double> narrow = eltanin::path_curvature(path, 0.0);
+  const std::vector<double> wide = eltanin::path_curvature(path, 0.28);
+  const double per_point = 2.0 * std::sin(0.5 * bend) / 0.05;
+
+  EXPECT_NEAR(narrow[10], per_point, 1e-9);
+  EXPECT_NEAR(wide[10], 2.0 * std::sin(0.5 * bend) / 0.30, 1e-9);
+  EXPECT_LT(wide[10], 0.2 * per_point);
 }
