@@ -78,14 +78,13 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
       (dx + dy + (std::numbers::sqrt2 - 2.0) * std::min(dx, dy)) * resolution);
   };
 
-  // Only paid for when something asks for it; the field is one float per cell.
-  std::vector<float> clearance;
+  ClearanceMap clearance;
   if (params_.clearance.penalty > 0.0) {
-    clearance = detail::build_obstacle_distance(grid);
+    clearance = detail::build_clearance_map(grid);
   }
-  const ObstacleField field{geometry, clearance};
-  const auto surcharge = [&](int mx, int my) {
-    return static_cast<float>(clearance_penalty(params_.clearance, field.at(mx, my)));
+  const auto extra_cost = [&](int mx, int my) {
+    const std::optional<float> room = clearance.get(mx, my);
+    return static_cast<float>(clearance_penalty(params_.clearance, room.value_or(0.0F)));
   };
 
   std::vector<float> g_score(cells, std::numeric_limits<float>::infinity());
@@ -134,7 +133,7 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
       const float step = diagonal ? diagonal_step : orthogonal_step;
       const float tentative =
         g_score[current] +
-        step * (1.0F + surcharge(nx, ny) + static_cast<float>(grid.surcharge(nx, ny)));
+        step * (1.0F + extra_cost(nx, ny) + static_cast<float>(grid.extra_cost(nx, ny)));
       if (tentative < g_score[neighbor]) {
         g_score[neighbor] = tentative;
         parent[neighbor] = static_cast<std::int32_t>(current);
@@ -167,18 +166,17 @@ PlanResult AStarPlanner::plan_on_grid(const PlanQuery & query) const
 
   // A window around the raw path, so the obstacle term does not pay for the whole map.
   const double reach = detail::smoother_reach(*params_.smoother);
-  std::optional<ObstacleWindow> window;
+  std::optional<ClearanceMap> window;
   if (reach > 0.0) {
     std::vector<Eigen::Vector2d> positions;
     positions.reserve(path.size());
     for (const Pose2D & pose : path) {
       positions.push_back(pose.position);
     }
-    window = detail::build_obstacle_window(grid, positions, reach);
+    window = detail::build_clearance_map(grid, positions, reach);
   }
-  const ObstacleField smoothing_field =
-    window.has_value() ? ObstacleField{*window} : ObstacleField{};
-  return PlanResult{detail::smooth_on_grid(path, grid, smoothing_field, *params_.smoother)};
+  const ClearanceMap room = window.has_value() ? std::move(*window) : ClearanceMap{};
+  return PlanResult{detail::smooth_on_grid(path, grid, room, *params_.smoother)};
 }
 
 }  // namespace eltanin::planner

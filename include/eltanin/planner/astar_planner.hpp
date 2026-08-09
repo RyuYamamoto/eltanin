@@ -15,7 +15,7 @@
 #ifndef ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 #define ELTANIN__PLANNER__ASTAR_PLANNER_HPP_
 
-#include <eltanin/planner/obstacle_field.hpp>
+#include <eltanin/planner/clearance_map.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin/planner/planner.hpp>
 

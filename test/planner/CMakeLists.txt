@@ -5,7 +5,7 @@ add_executable(eltanin_test_planner
   test_dubins_path.cpp
   test_reeds_shepp_path.cpp
   test_hybrid_astar_planner.cpp
-  test_obstacle_field.cpp
+  test_clearance_map.cpp
   test_footprint_aware_search.cpp
   test_planner_errors.cpp
   test_path_smoother.cpp

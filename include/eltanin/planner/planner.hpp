@@ -33,7 +33,7 @@ namespace eltanin::planner
 {
 
 /// Second pass for a start and goal the Free cells leave disconnected, such as across a narrow door.
-struct NarrowPassageFallback
+struct TraversabilityFallback
 {
   /// Off by default: the band only says a collision is possible, so the path may not be drivable.
   bool enabled{false};
@@ -46,7 +46,7 @@ struct PlannerParams
 {
   /// Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
   int start_search_radius_cells{8};
-  NarrowPassageFallback narrow_passage{};
+  TraversabilityFallback traversability_fallback{};
   /// Body outline; given one, the band is usable at headings where it actually clears.
   Polygon2D footprint{};
 };
@@ -96,18 +96,18 @@ public:
     PlanResult strict =
       plan_one_pass(map, model, grid, *start_index, *goal_index, start, goal, {});
     if (
-      strict.has_value() || !params_.narrow_passage.enabled ||
+      strict.has_value() || !params_.traversability_fallback.enabled ||
       !detail::is_relaxable(strict.error())) {
       return strict;
     }
     // Nothing else changes: the corridor the robot cannot fit through is what was in the way.
     PlanResult relaxed = plan_one_pass(
       map, model, grid, *start_index, *goal_index, start, goal,
-      TraversabilityPolicy{Traversability::Circumscribed, params_.narrow_passage.penalty});
-    if (relaxed.has_value()) {
-      relaxed.mark_narrow_passage();
+      TraversabilityPolicy{Traversability::Circumscribed, params_.traversability_fallback.penalty});
+    if (!relaxed.has_value()) {
+      return relaxed;
     }
-    return relaxed;
+    return PlanResult{*relaxed, true};
   }
 
 protected:
@@ -117,7 +117,7 @@ protected:
     if (params_.start_search_radius_cells < 0) {
       throw std::invalid_argument("start search radius must be non-negative");
     }
-    const double penalty = params_.narrow_passage.penalty;
+    const double penalty = params_.traversability_fallback.penalty;
     if (!std::isfinite(penalty) || penalty < 0.0) {
       throw std::invalid_argument("narrow passage penalty must be finite and non-negative");
     }
@@ -144,13 +144,13 @@ private:
     // A blocked goal is reported rather than silently moved away from the requested target.
     if (
       model.classify(map(goal_index.x, goal_index.y)) > policy.limit &&
-      !pose_is_usable(view, params_.footprint, goal)) {
+      !pose_is_free(view, params_.footprint, goal)) {
       return PlanResult{PlannerError::GoalBlocked};
     }
     // A start the body already fits at needs no rescue, even when its cell is only in the band.
     std::optional<map::MapIndex> search_start = start_index;
     if (!view.traversable(start_index.x, start_index.y) &&
-        !pose_is_usable(view, params_.footprint, start)) {
+        !pose_is_free(view, params_.footprint, start)) {
       search_start = find_nearest_traversable(
         map, model, start_index, params_.start_search_radius_cells, policy.limit);
     }

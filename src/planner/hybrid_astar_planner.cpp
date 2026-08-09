@@ -96,7 +96,6 @@ std::span<const Motion> control_set(const MotionModel & model, ControlSet & stor
   return std::span<const Motion>{storage.data(), count};
 }
 
-/// How many primitives that model uses, without needing the storage for them.
 std::size_t control_set_size(const MotionModel & model) noexcept
 {
   return 3 + (model.reverse ? 3 : 0) + (model.turn_in_place ? 2 : 0);
@@ -182,7 +181,7 @@ bool interior_is_free(
     const int sweeps = std::max(1, static_cast<int>(std::ceil(std::abs(turn) / SPIN_CHECK_STEP)));
     for (int sweep = 1; sweep < sweeps; ++sweep) {
       const double fraction = static_cast<double>(sweep) / static_cast<double>(sweeps);
-      if (!pose_is_usable(grid, footprint, propagate(from, 0.0, turn * fraction))) {
+      if (!pose_is_free(grid, footprint, propagate(from, 0.0, turn * fraction))) {
         return false;
       }
     }
@@ -192,7 +191,7 @@ bool interior_is_free(
     std::max(1, static_cast<int>(std::ceil(std::abs(travel) / collision_check_step)));
   for (int sample = 1; sample < sample_count; ++sample) {
     const double fraction = static_cast<double>(sample) / static_cast<double>(sample_count);
-    if (!pose_is_usable(grid, footprint, propagate(from, travel * fraction, turn * fraction))) {
+    if (!pose_is_free(grid, footprint, propagate(from, travel * fraction, turn * fraction))) {
       return false;
     }
   }
@@ -210,7 +209,7 @@ std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint
 }
 
 template <class Curve>
-bool curve_is_free(
+bool curve_is_clear(
   const TraversabilityView & grid, const Polygon2D & footprint, const Curve & curve,
   double check_step)
 {
@@ -218,7 +217,7 @@ bool curve_is_free(
   const int checks = std::max(1, static_cast<int>(std::ceil(length / check_step)));
   for (int i = 1; i <= checks; ++i) {
     const double s = length * static_cast<double>(i) / static_cast<double>(checks);
-    if (!pose_is_usable(grid, footprint, curve.sample(s))) {
+    if (!pose_is_free(grid, footprint, curve.sample(s))) {
       return false;
     }
   }
@@ -227,7 +226,7 @@ bool curve_is_free(
 
 /// Emits poses over (from, to]; rounding the count keeps each interval near output_step.
 template <class Curve>
-void append_run(
+void append_segment(
   std::vector<Pose2D> & samples, const Curve & curve, double from, double to, double output_step)
 {
   const double span = to - from;
@@ -256,7 +255,7 @@ double penalised_length(
 }
 
 /// Checked at collision_check_step but emitted at output_step, so the output stays evenly spaced.
-std::optional<std::vector<Pose2D>> connect_goal(
+std::optional<std::vector<Pose2D>> try_analytic_expansion(
   const TraversabilityView & grid, const Pose2D & start, const Pose2D & goal,
   const HybridAStarParams & params, double collision_check_step, double output_step)
 {
@@ -269,10 +268,10 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (dubins->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, params.common.footprint, *dubins, collision_check_step)) {
+    if (!curve_is_clear(grid, params.common.footprint, *dubins, collision_check_step)) {
       return std::nullopt;
     }
-    append_run(samples, *dubins, 0.0, dubins->length(), output_step);
+    append_segment(samples, *dubins, 0.0, dubins->length(), output_step);
     return samples;
   };
   if (!params.motion_model.reverse) {
@@ -288,7 +287,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
     if (reeds_shepp->length() == 0.0) {
       return samples;
     }
-    if (!curve_is_free(grid, params.common.footprint, *reeds_shepp, collision_check_step)) {
+    if (!curve_is_clear(grid, params.common.footprint, *reeds_shepp, collision_check_step)) {
       return std::nullopt;
     }
     // Each cusp ends a run, so a direction change always lands on a pose the follower can see.
@@ -301,13 +300,13 @@ std::optional<std::vector<Pose2D>> connect_goal(
       }
       const int sign = segment.length > 0.0 ? 1 : -1;
       if (direction != 0 && sign != direction) {
-        append_run(samples, *reeds_shepp, run_start, consumed, output_step);
+        append_segment(samples, *reeds_shepp, run_start, consumed, output_step);
         run_start = consumed;
       }
       direction = sign;
       consumed += std::abs(segment.length);
     }
-    append_run(samples, *reeds_shepp, run_start, consumed, output_step);
+    append_segment(samples, *reeds_shepp, run_start, consumed, output_step);
     return samples;
   };
 
@@ -324,7 +323,6 @@ std::optional<std::vector<Pose2D>> connect_goal(
   return reversing.has_value() ? reversing : forward_tail();
 }
 
-/// Cost to reach the goal cell over free cells, ignoring the turning radius; infinity when cut off.
 std::vector<float> distance_to_goal(
   const TraversabilityView & grid, const map::MapIndex & goal, bool allow_band)
 {
@@ -422,22 +420,23 @@ double arrival_cost(
   return dubins->length() + turn * turning_radius;
 }
 
-/// Length of a tail, charged for clearance exactly as a primitive would be.
-double tail_cost(
+/// An analytic expansion is charged for clearance and for the band exactly as a primitive is.
+double analytic_expansion_cost(
   const std::vector<Pose2D> & connection, const Pose2D & from, const TraversabilityView & grid,
-  const ObstacleField & field, const HybridAStarParams & params)
+  const ClearanceMap & room, const HybridAStarParams & params)
 {
   const bool charges_band = !params.common.footprint.empty();
   double cost = 0.0;
   Eigen::Vector2d previous = from.position;
   for (const Pose2D & pose : connection) {
     const double step = (pose.position - previous).norm();
-    double rate = 1.0 + clearance_penalty(params.clearance, field.at(pose.position));
-    // The tail crosses the same band the search pays for, so it pays the same rate.
+    double rate =
+      1.0 + clearance_penalty(
+              params.clearance, clearance_at(room, pose.position, params.clearance.distance));
     if (charges_band) {
       const std::optional<map::MapIndex> cell = grid.geometry().world_to_map(pose.position);
       if (cell.has_value() && grid.at(cell->x, cell->y) == Traversability::Circumscribed) {
-        rate += params.band_penalty;
+        rate += params.circumscribed_penalty;
       }
     }
     cost += step * rate;
@@ -447,9 +446,9 @@ double tail_cost(
 }
 
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
-Path attach_tail(
+Path attach_analytic_expansion(
   std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
-  double motion_step)
+  double motion_step, bool emit_goal_rotation)
 {
   if (connection.empty()) {
     poses[poses.size() - 1] = goal;
@@ -461,7 +460,8 @@ Path attach_tail(
   }
   poses.insert(poses.end(), connection.begin(), connection.end());
   // Reaching the requested heading is a turn on the spot, so it gets a pose of its own.
-  if (std::abs(shortest_angular_distance(poses.back().yaw, goal.yaw)) > SAME_HEADING) {
+  if (emit_goal_rotation && std::abs(shortest_angular_distance(poses.back().yaw, goal.yaw)) >
+                           SAME_HEADING) {
     poses.push_back(goal);
   } else {
     poses[poses.size() - 1] = goal;
@@ -476,8 +476,8 @@ PlanResult search(
   const map::MapGeometry & geometry = grid.geometry();
   const std::size_t cells = grid.cell_count();
   assert(cells > 0);
-  assert(pose_is_usable(grid, params.common.footprint, query.start));
-  assert(pose_is_usable(grid, params.common.footprint, query.goal));
+  assert(pose_is_free(grid, params.common.footprint, query.start));
+  assert(pose_is_free(grid, params.common.footprint, query.goal));
 
   const double resolution = geometry.resolution();
   const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
@@ -542,20 +542,19 @@ PlanResult search(
     const double cells_to_goal = remaining / resolution;
     return static_cast<std::size_t>(cells_to_goal / params.analytic_expansion_ratio);
   };
-  // Only paid for when something asks for it; the field is one float per cell.
-  std::vector<float> clearance;
+  ClearanceMap clearance;
   if (params.clearance.penalty > 0.0) {
-    clearance = detail::build_obstacle_distance(grid);
+    clearance = detail::build_clearance_map(grid);
   }
-  const ObstacleField field{geometry, clearance};
   // Distance to the walls, plus what the band costs: it is safety margin, not a shortcut.
-  const auto surcharge = [&](const map::MapIndex & index) {
-    double extra = clearance_penalty(params.clearance, field.at(index.x, index.y)) +
-                   grid.surcharge(index.x, index.y);
+  const auto extra_cost = [&](const map::MapIndex & index) {
+    const std::optional<float> room = clearance.get(index.x, index.y);
+    double extra = clearance_penalty(params.clearance, room.value_or(0.0F)) +
+                   grid.extra_cost(index.x, index.y);
     if (
       !params.common.footprint.empty() && grid.geometry().in_bounds(index.x, index.y) &&
       grid.at(index.x, index.y) == Traversability::Circumscribed) {
-      extra += params.band_penalty;
+      extra += params.circumscribed_penalty;
     }
     return extra;
   };
@@ -647,11 +646,11 @@ PlanResult search(
       }
       for (std::size_t i = 0; i < target_count; ++i) {
         const auto connection =
-          connect_goal(grid, current.pose, targets[i], params, collision_check_step, motion_step);
+          try_analytic_expansion(grid, current.pose, targets[i], params, collision_check_step, motion_step);
         if (!connection.has_value()) {
           continue;
         }
-        // attach_tail() finishes off-heading arrivals with a turn on the spot; sweep it too.
+        // attach_analytic_expansion() finishes off-heading arrivals with a turn on the spot; sweep it too.
         const double closing_turn =
           shortest_angular_distance(targets[i].yaw, query.goal.yaw);
         if (
@@ -663,11 +662,12 @@ PlanResult search(
         }
         // Scored rather than taken: a tail that hugs a wall must lose to a search that does not.
         const double cost =
-          current.g + tail_cost(*connection, current.pose, grid, field, params);
+          current.g + analytic_expansion_cost(*connection, current.pose, grid, clearance, params);
         if (cost < best_cost) {
           best_cost = cost;
-          best_path = attach_tail(
-            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step);
+          best_path = attach_analytic_expansion(
+            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step,
+            params.emit_goal_rotation);
         }
         break;
       }
@@ -686,7 +686,7 @@ PlanResult search(
       const Pose2D successor =
         propagate(current.pose, travel_of(motions[mode]), turn_of(motions[mode]));
       const auto successor_index = geometry.world_to_map(successor.position);
-      if (!successor_index.has_value() || !pose_is_usable(grid, params.common.footprint, successor)) {
+      if (!successor_index.has_value() || !pose_is_free(grid, params.common.footprint, successor)) {
         continue;
       }
       // A cell the goal cannot be reached from is not worth a state, let alone an expansion.
@@ -700,7 +700,7 @@ PlanResult search(
       // Charged per metre travelled, so the distance heuristic stays a lower bound on the cost.
       const auto tentative = static_cast<float>(
         current.g + transition_cost(current.mode, mode) +
-        surcharge(*successor_index) * std::abs(travel_of(motions[mode])));
+        extra_cost(*successor_index) * std::abs(travel_of(motions[mode])));
       if (tentative >= g_score[successor_state]) {
         continue;
       }
@@ -739,8 +739,8 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
     params_.steering_penalty >= 0.0 && std::isfinite(params_.steering_change_penalty) &&
     params_.steering_change_penalty >= 0.0 && std::isfinite(params_.reverse_penalty) &&
     params_.reverse_penalty > 0.0 && std::isfinite(params_.direction_change_penalty) &&
-    params_.direction_change_penalty >= 0.0 && std::isfinite(params_.band_penalty) &&
-    params_.band_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
+    params_.direction_change_penalty >= 0.0 && std::isfinite(params_.circumscribed_penalty) &&
+    params_.circumscribed_penalty >= 0.0 && params_.max_state_memory_bytes > 0;
   if (!valid) {
     throw std::invalid_argument("invalid HybridAStarParams");
   }
@@ -758,18 +758,18 @@ PlanResult HybridAStarPlanner::plan_on_grid(const PlanQuery & query) const
     if (!params_.common.footprint.empty() && endpoints_are_free) {
       HybridAStarParams without_outline = params_;
       without_outline.common.footprint = {};
-      PlanResult wide = plan_with_clearance(query, without_outline);
+      PlanResult wide = plan_once(query, without_outline);
       if (wide.has_value()) {
         return wide;
       }
     }
-    return plan_with_clearance(query, params_);
+    return plan_once(query, params_);
   } catch (const std::bad_alloc &) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
 }
 
-PlanResult HybridAStarPlanner::plan_with_clearance(
+PlanResult HybridAStarPlanner::plan_once(
   const PlanQuery & query, const HybridAStarParams & params)
 {
   {

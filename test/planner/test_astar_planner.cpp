@@ -293,12 +293,12 @@ TEST(AStarPlanner, CircumscribedGoalIsReachedByTheFallbackAndFlagged)
   map(4, 4) = CIRCUMSCRIBED_BAND_COST;
 
   auto params = eltanin_test::raw_astar_params();
-  params.common.narrow_passage.enabled = true;
+  params.common.traversability_fallback.enabled = true;
   const auto path =
     plan_raw(map, make_cost_model(), at_cell(map, 0, 0), at_cell(map, 4, 4), params);
 
   ASSERT_TRUE(path.has_value());
-  EXPECT_TRUE(path.narrow_passage());
+  EXPECT_TRUE(path.relaxed());
 }
 
 TEST(AStarPlanner, UnknownGoalFollowsTheModelSetting)

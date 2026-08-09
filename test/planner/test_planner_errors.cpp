@@ -296,18 +296,18 @@ TEST(NarrowPassage, TheBandPenaltySendsTheRelaxedPassToTheThinnestCrossing)
   const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
 
   auto cheap = eltanin_test::raw_astar_params();
-  cheap.common.narrow_passage.enabled = true;
-  cheap.common.narrow_passage.penalty = 0.0;
+  cheap.common.traversability_fallback.enabled = true;
+  cheap.common.traversability_fallback.penalty = 0.0;
   auto dear = cheap;
-  dear.common.narrow_passage.penalty = 20.0;
+  dear.common.traversability_fallback.penalty = 20.0;
 
   const auto through = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, cheap);
   const auto around = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, dear);
 
   ASSERT_TRUE(through.has_value());
   ASSERT_TRUE(around.has_value());
-  EXPECT_TRUE(through.narrow_passage());
-  EXPECT_TRUE(around.narrow_passage());
+  EXPECT_TRUE(through.relaxed());
+  EXPECT_TRUE(around.relaxed());
   // Charging for the band buys a detour to where it is one cell thick instead of seven.
   EXPECT_NEAR(eltanin::path_length(*through), 2.6, 1e-9);
   EXPECT_GT(eltanin::path_length(*around), eltanin::path_length(*through) + 0.3);
@@ -326,11 +326,11 @@ TEST(NarrowPassage, ARelaxedPassPaysThePenaltyForCrossingTheBand)
   const Pose2D goal{map.geometry().map_to_world(28, 5), 0.0};
 
   auto params = eltanin_test::raw_astar_params();
-  params.common.narrow_passage.enabled = true;
+  params.common.traversability_fallback.enabled = true;
   const auto path = eltanin::planner::plan_astar(map, make_cost_model(), start, goal, params);
 
   ASSERT_TRUE(path.has_value());
-  EXPECT_TRUE(path.narrow_passage());
+  EXPECT_TRUE(path.relaxed());
   // Crossing costs the band penalty, so the reported length is still the plain geometric one.
   EXPECT_NEAR(eltanin::path_length(*path), 2.6, 1e-9);
 }
@@ -356,17 +356,17 @@ TEST(NarrowPassage, BothPlannersGetThroughADoorwayInflationHasClosed)
   const Pose2D goal = at_cell(map, 55, 20);
 
   AStarParams relaxed_astar;
-  relaxed_astar.common.narrow_passage.enabled = true;
+  relaxed_astar.common.traversability_fallback.enabled = true;
   HybridAStarParams relaxed_hybrid;
-  relaxed_hybrid.common.narrow_passage.enabled = true;
+  relaxed_hybrid.common.traversability_fallback.enabled = true;
 
   const auto astar = plan_astar(map, make_cost_model(), start, goal, relaxed_astar);
   const auto hybrid = plan_hybrid_astar(map, make_cost_model(), start, goal, relaxed_hybrid);
 
   ASSERT_TRUE(astar.has_value());
   ASSERT_TRUE(hybrid.has_value());
-  EXPECT_TRUE(astar.narrow_passage());
-  EXPECT_TRUE(hybrid.narrow_passage());
+  EXPECT_TRUE(astar.relaxed());
+  EXPECT_TRUE(hybrid.relaxed());
 
   // The default is strict, so nothing gets through unless the caller asked for the fallback.
   EXPECT_EQ(

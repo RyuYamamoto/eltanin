@@ -20,7 +20,7 @@
 #include <eltanin/core/types.hpp>
 #include <eltanin/map/cell_map.hpp>
 #include <eltanin/map/map_geometry.hpp>
-#include <eltanin/planner/obstacle_field.hpp>
+#include <eltanin/planner/clearance_map.hpp>
 #include <eltanin/planner/traversability_view.hpp>
 
 namespace eltanin::planner
@@ -54,7 +54,7 @@ void validate_smoother_params(const SmootherParams & params);
 
 /// The smoothing sweep itself; the public smooth() and every planner share this one body.
 Path smooth_on_grid(
-  const Path & path, const TraversabilityView & grid, const ObstacleField & obstacle,
+  const Path & path, const TraversabilityView & grid, const ClearanceMap & obstacle,
   const SmootherParams & params);
 
 /// The clearance the obstacle term needs to see; 0 when the term is switched off.
@@ -78,17 +78,17 @@ Path smooth(
 
   // A window around the path, so the obstacle term costs the path's size and not the map's.
   const double reach = detail::smoother_reach(params);
-  std::optional<ObstacleWindow> window;
+  std::optional<ClearanceMap> window;
   if (reach > 0.0) {
     std::vector<Eigen::Vector2d> positions;
     positions.reserve(path.size());
     for (const Pose2D & pose : path) {
       positions.push_back(pose.position);
     }
-    window = detail::build_obstacle_window(view, positions, reach);
+    window = detail::build_clearance_map(view, positions, reach);
   }
-  const ObstacleField obstacle = window.has_value() ? ObstacleField{*window} : ObstacleField{};
-  return detail::smooth_on_grid(path, view, obstacle, params);
+  const ClearanceMap room = window.has_value() ? std::move(*window) : ClearanceMap{};
+  return detail::smooth_on_grid(path, view, room, params);
 }
 
 }  // namespace eltanin::planner

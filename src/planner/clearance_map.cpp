@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
-#include <eltanin/planner/obstacle_field.hpp>
+#include <eltanin/planner/clearance_map.hpp>
 
 #include <eltanin/map/crop.hpp>
 
@@ -22,7 +22,10 @@
 #include <stdexcept>
 #include <vector>
 
-namespace eltanin::planner::detail
+namespace eltanin::planner
+{
+
+namespace detail
 {
 
 namespace
@@ -95,7 +98,6 @@ void transpose(std::span<const float> source, std::span<float> destination, int 
   }
 }
 
-/// Runs the one-dimensional transform along every row of a row-major buffer, in place.
 void transform_rows(std::span<float> values, int rows, int cols)
 {
   std::vector<float> line(static_cast<std::size_t>(cols), 0.0F);
@@ -110,9 +112,9 @@ void transform_rows(std::span<float> values, int rows, int cols)
   }
 }
 
-/// Seeds one rectangle of the classified grid, transforms it, and converts it to metres.
-std::vector<float> distance_in_rect(
-  const TraversabilityView & grid, int min_x, int min_y, int size_x, int size_y, float cap)
+ClearanceMap distance_in_rect(
+  const TraversabilityView & grid, int min_x, int min_y, int size_x, int size_y, float cap,
+  const map::MapGeometry & window)
 {
   const map::MapGeometry & geometry = grid.geometry();
   const auto cells = static_cast<std::size_t>(size_x) * static_cast<std::size_t>(size_y);
@@ -124,7 +126,7 @@ std::vector<float> distance_in_rect(
   std::vector<float> squared(cells, 0.0F);
   for (int y = 0; y < size_y; ++y) {
     for (int x = 0; x < size_x; ++x) {
-      squared[at(x, y)] = grid.blocked(min_x + x, min_y + y) ? 0.0F : UNREACHED;
+      squared[at(x, y)] = grid.is_obstacle(min_x + x, min_y + y) ? 0.0F : UNREACHED;
     }
   }
 
@@ -145,7 +147,9 @@ std::vector<float> distance_in_rect(
       squared[at(x, y)] = cap > 0.0F ? std::min(metres, cap) : metres;
     }
   }
-  return squared;
+  ClearanceMap result(window, 0.0F);
+  std::copy(squared.begin(), squared.end(), result.data().begin());
+  return result;
 }
 
 }  // namespace
@@ -159,13 +163,13 @@ void validate_clearance_cost(const ClearanceCost & cost)
   }
 }
 
-std::vector<float> build_obstacle_distance(const TraversabilityView & grid)
+ClearanceMap build_clearance_map(const TraversabilityView & grid)
 {
   const map::MapGeometry & geometry = grid.geometry();
-  return distance_in_rect(grid, 0, 0, geometry.size_x(), geometry.size_y(), 0.0F);
+  return distance_in_rect(grid, 0, 0, geometry.size_x(), geometry.size_y(), 0.0F, geometry);
 }
 
-std::optional<ObstacleWindow> build_obstacle_window(
+std::optional<ClearanceMap> build_clearance_map(
   const TraversabilityView & grid, std::span<const Eigen::Vector2d> positions, double reach)
 {
   const map::MapGeometry & geometry = grid.geometry();
@@ -181,14 +185,81 @@ std::optional<ObstacleWindow> build_obstacle_window(
 
   const int size_x = rect->max_x - rect->min_x + 1;
   const int size_y = rect->max_y - rect->min_y + 1;
-  std::vector<float> distance =
-    distance_in_rect(grid, rect->min_x, rect->min_y, size_x, size_y, static_cast<float>(reach));
   const Eigen::Vector2d origin =
     geometry.origin() + Eigen::Vector2d{
                           static_cast<double>(rect->min_x) * geometry.resolution(),
                           static_cast<double>(rect->min_y) * geometry.resolution()};
-  return ObstacleWindow{
-    map::MapGeometry(size_x, size_y, geometry.resolution(), origin), std::move(distance), reach};
+  return distance_in_rect(
+    grid, rect->min_x, rect->min_y, size_x, size_y, static_cast<float>(reach),
+    map::MapGeometry(size_x, size_y, geometry.resolution(), origin));
 }
 
-}  // namespace eltanin::planner::detail
+
+}  // namespace detail
+
+namespace
+{
+
+struct Patch
+{
+  double d00;
+  double d10;
+  double d01;
+  double d11;
+  double fx;
+  double fy;
+};
+
+/// False when the point has no patch to read; cell centers sit half a cell inside the corner.
+bool locate(const ClearanceMap & field, const Eigen::Vector2d & world, double outside, Patch & patch)
+{
+  if (field.cell_count() == 0 || !world.allFinite()) {
+    return false;
+  }
+  const map::MapGeometry & geometry = field.geometry();
+  const Eigen::Vector2d offset =
+    (world - geometry.origin()) / geometry.resolution() - Eigen::Vector2d{0.5, 0.5};
+  const double floor_x = std::floor(offset.x());
+  const double floor_y = std::floor(offset.y());
+  const auto mx = static_cast<int>(floor_x);
+  const auto my = static_cast<int>(floor_y);
+  patch.fx = offset.x() - floor_x;
+  patch.fy = offset.y() - floor_y;
+  const auto read = [&](int x, int y) {
+    const std::optional<float> cell = field.get(x, y);
+    return cell.has_value() ? static_cast<double>(*cell) : outside;
+  };
+  patch.d00 = read(mx, my);
+  patch.d10 = read(mx + 1, my);
+  patch.d01 = read(mx, my + 1);
+  patch.d11 = read(mx + 1, my + 1);
+  return true;
+}
+
+}  // namespace
+
+double clearance_at(
+  const ClearanceMap & field, const Eigen::Vector2d & world, double outside) noexcept
+{
+  Patch patch;
+  if (!locate(field, world, outside, patch)) {
+    return outside;
+  }
+  return (1.0 - patch.fy) * ((1.0 - patch.fx) * patch.d00 + patch.fx * patch.d10) +
+         patch.fy * ((1.0 - patch.fx) * patch.d01 + patch.fx * patch.d11);
+}
+
+Eigen::Vector2d clearance_gradient(
+  const ClearanceMap & field, const Eigen::Vector2d & world) noexcept
+{
+  Patch patch;
+  if (!locate(field, world, 0.0, patch)) {
+    return Eigen::Vector2d::Zero();
+  }
+  const double resolution = field.geometry().resolution();
+  return Eigen::Vector2d{
+    ((1.0 - patch.fy) * (patch.d10 - patch.d00) + patch.fy * (patch.d11 - patch.d01)) / resolution,
+    ((1.0 - patch.fx) * (patch.d01 - patch.d00) + patch.fx * (patch.d11 - patch.d10)) / resolution};
+}
+
+}  // namespace eltanin::planner

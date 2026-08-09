@@ -63,7 +63,7 @@ double smoother_reach(const SmootherParams & params) noexcept
 }
 
 Path smooth_on_grid(
-  const Path & path, const TraversabilityView & grid, const ObstacleField & obstacle,
+  const Path & path, const TraversabilityView & grid, const ClearanceMap & obstacle,
   const SmootherParams & params)
 {
   if (path.size() <= 1) {
@@ -72,7 +72,7 @@ Path smooth_on_grid(
 
   Path smoothed = path;
   const std::size_t n = smoothed.size();
-  const bool push_off_walls = params.weight_obstacle > 0.0 && !obstacle.empty();
+  const bool push_off_walls = params.weight_obstacle > 0.0 && obstacle.cell_count() > 0;
   if (n >= 3) {
     for (int iteration = 0; iteration < params.max_iterations; ++iteration) {
       double displacement = 0.0;
@@ -88,11 +88,10 @@ Path smooth_on_grid(
                    smoothed[i - 2].position + smoothed[i + 2].position);
         }
         if (push_off_walls) {
-          const double clearance = obstacle.at(here);
-          if (clearance < params.obstacle_distance) {
-            // The gradient of the distance field points away from the wall that is closest.
-            step += params.weight_obstacle * (params.obstacle_distance - clearance) *
-                    obstacle.gradient(here);
+          const double room = clearance_at(obstacle, here, params.obstacle_distance);
+          if (room < params.obstacle_distance) {
+            step += params.weight_obstacle * (params.obstacle_distance - room) *
+                    clearance_gradient(obstacle, here);
           }
         }
 

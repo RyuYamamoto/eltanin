@@ -16,7 +16,7 @@
 #define ELTANIN__PLANNER__HYBRID_ASTAR_PLANNER_HPP_
 
 #include <eltanin/core/polygon.hpp>
-#include <eltanin/planner/obstacle_field.hpp>
+#include <eltanin/planner/clearance_map.hpp>
 #include <eltanin/planner/planner.hpp>
 
 #include <cstddef>
@@ -56,14 +56,13 @@ struct MotionModel
 struct HybridAStarParams
 {
   PlannerParams common{};
-  /// What the body can do; the primitives and the analytic tail are derived from it.
   MotionModel motion_model{};
   int heading_bins{72};
   /// Length of one motion primitive [m]; 0 derives a step that always changes the discrete state.
   double motion_step{0.0};
   /// Collision check interval along each primitive [m]; 0 selects half a map cell.
   double collision_check_step{0.0};
-  /// Dubins connection is attempted at every expanded node inside this distance from the goal [m].
+  /// The analytic expansion is tried at every expanded node inside this distance of the goal [m].
   double dubins_expansion_distance{1.0};
   /// Beyond that distance it is attempted every (cells to goal / this) nodes; larger tries more.
   double analytic_expansion_ratio{1.0};
@@ -75,10 +74,11 @@ struct HybridAStarParams
   double reverse_penalty{2.0};
   /// Charged once per switch between forward and reverse, as a multiple of one motion step.
   double direction_change_penalty{2.0};
-  /// On by default: this search already runs on a corridor, so the distance field is cheap.
   ClearanceCost clearance{0.5, 0.4};
-  /// Extra cost per metre of travel through the inflation band, once the outline lets it in.
-  double band_penalty{6.0};
+  /// Extra cost per metre of travel through the circumscribed band, once the outline lets it in.
+  double circumscribed_penalty{6.0};
+  /// Emit the closing turn as its own pose; a follower that cannot execute one wants this off.
+  bool emit_goal_rotation{true};
   ClearanceFallback clearance_fallback{};
   /// 0 allows the complete discretized state space to be expanded.
   std::size_t max_expansions{DEFAULT_MAX_EXPANSIONS};
@@ -86,7 +86,7 @@ struct HybridAStarParams
   std::size_t max_state_memory_bytes{DEFAULT_MAX_STATE_MEMORY_BYTES};
 };
 
-/// Forward-only Hybrid A* over (x, y, yaw); collisions are checked at the vehicle reference point.
+/// Hybrid A* over (x, y, yaw); what the body may do comes from MotionModel.
 class HybridAStarPlanner final : public Planner
 {
 public:
@@ -97,7 +97,7 @@ private:
   [[nodiscard]] PlanResult plan_on_grid(const PlanQuery & query) const override;
 
   /// One outline setting, with the clearance fallback applied on top of it.
-  [[nodiscard]] static PlanResult plan_with_clearance(
+  [[nodiscard]] static PlanResult plan_once(
     const PlanQuery & query, const HybridAStarParams & params);
 
   HybridAStarParams params_;

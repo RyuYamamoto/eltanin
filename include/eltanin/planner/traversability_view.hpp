@@ -118,7 +118,7 @@ public:
   }
 
   /// The obstacle itself rather than the inflation around it; this is what a footprint may not touch.
-  [[nodiscard]] bool blocked(int mx, int my) const noexcept
+  [[nodiscard]] bool is_obstacle(int mx, int my) const noexcept
   {
     if (!geometry_->in_bounds(mx, my)) {
       return true;
@@ -127,7 +127,7 @@ public:
   }
 
   /// Fraction to add to a step of travel ending here; 0 unless the cell is Circumscribed.
-  [[nodiscard]] double surcharge(int mx, int my) const noexcept
+  [[nodiscard]] double extra_cost(int mx, int my) const noexcept
   {
     if (!geometry_->in_bounds(mx, my)) {
       return 0.0;
@@ -160,7 +160,7 @@ private:
 };
 
 /// True when the body outline at this pose keeps clear of every cell that is an obstacle itself.
-[[nodiscard]] inline bool footprint_fits(
+[[nodiscard]] inline bool footprint_is_clear(
   const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
 {
   const map::MapGeometry & geometry = grid.geometry();
@@ -171,7 +171,7 @@ private:
   }
   for (int my = rect->min_y; my <= rect->max_y; ++my) {
     for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
-      if (grid.blocked(mx, my) && contains(outline, geometry.map_to_world(mx, my))) {
+      if (grid.is_obstacle(mx, my) && contains(outline, geometry.map_to_world(mx, my))) {
         return false;
       }
     }
@@ -180,7 +180,7 @@ private:
 }
 
 /// Free needs no outline, the band needs one at this heading, and Inscribed always collides.
-[[nodiscard]] inline bool pose_is_usable(
+[[nodiscard]] inline bool pose_is_free(
   const TraversabilityView & grid, const Polygon2D & footprint, const Pose2D & pose)
 {
   if (grid.traversable(pose.position)) {
@@ -193,7 +193,7 @@ private:
   if (!index.has_value() || grid.at(index->x, index->y) != Traversability::Circumscribed) {
     return false;
   }
-  return footprint_fits(grid, footprint, pose);
+  return footprint_is_clear(grid, footprint, pose);
 }
 
 }  // namespace eltanin::planner
