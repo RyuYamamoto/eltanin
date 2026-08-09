@@ -69,28 +69,34 @@ struct Motion
   int spin_bins;
 };
 
-constexpr std::array<Motion, 3> DUBINS_MOTIONS{
-  Motion{1.0, 0.0, 0}, Motion{1.0, -1.0, 0}, Motion{1.0, 1.0, 0}};
+/// Every primitive the widest model can use; a narrower one takes a prefix of this order.
+constexpr std::size_t MAX_MOTIONS = 8;
 
-constexpr std::array<Motion, 5> DIFFERENTIAL_MOTIONS{
-  Motion{1.0, 0.0, 0}, Motion{1.0, -1.0, 0}, Motion{1.0, 1.0, 0},
-  Motion{0.0, 0.0, -1}, Motion{0.0, 0.0, 1}};
+using ControlSet = std::array<Motion, MAX_MOTIONS>;
 
-constexpr std::array<Motion, 6> REEDS_SHEPP_MOTIONS{
-  Motion{1.0, 0.0, 0},  Motion{1.0, -1.0, 0},  Motion{1.0, 1.0, 0},
-  Motion{-1.0, 0.0, 0}, Motion{-1.0, -1.0, 0}, Motion{-1.0, 1.0, 0}};
-
-std::span<const Motion> control_set(MotionModel model) noexcept
+/// Forward arcs first, then reverse, then the turns on the spot; the search never sees the rest.
+std::span<const Motion> control_set(const MotionModel & model, ControlSet & storage) noexcept
 {
-  switch (model) {
-    case MotionModel::Differential:
-      return std::span<const Motion>{DIFFERENTIAL_MOTIONS};
-    case MotionModel::ReedsShepp:
-      return std::span<const Motion>{REEDS_SHEPP_MOTIONS};
-    case MotionModel::Dubins:
-      break;
+  std::size_t count = 0;
+  storage[count++] = Motion{1.0, 0.0, 0};
+  storage[count++] = Motion{1.0, -1.0, 0};
+  storage[count++] = Motion{1.0, 1.0, 0};
+  if (model.reverse) {
+    storage[count++] = Motion{-1.0, 0.0, 0};
+    storage[count++] = Motion{-1.0, -1.0, 0};
+    storage[count++] = Motion{-1.0, 1.0, 0};
   }
-  return std::span<const Motion>{DUBINS_MOTIONS};
+  if (model.turn_in_place) {
+    storage[count++] = Motion{0.0, 0.0, -1};
+    storage[count++] = Motion{0.0, 0.0, 1};
+  }
+  return std::span<const Motion>{storage.data(), count};
+}
+
+/// How many primitives that model uses, without needing the storage for them.
+std::size_t control_set_size(const MotionModel & model) noexcept
+{
+  return 3 + (model.reverse ? 3 : 0) + (model.turn_in_place ? 2 : 0);
 }
 
 /// Not an index into any control set, so "no previous primitive" needs no separate flag.
@@ -241,7 +247,7 @@ std::optional<std::vector<Pose2D>> connect_goal(
   const TraversabilityView & grid, const Pose2D & start, const Pose2D & goal,
   const HybridAStarParams & params, double collision_check_step, double output_step)
 {
-  const auto dubins = solve_dubins_path(start, goal, params.minimum_turning_radius);
+  const auto dubins = solve_dubins_path(start, goal, params.motion_model.minimum_turning_radius);
   const auto forward_tail = [&]() -> std::optional<std::vector<Pose2D>> {
     std::vector<Pose2D> samples;
     if (!dubins.has_value()) {
@@ -256,11 +262,11 @@ std::optional<std::vector<Pose2D>> connect_goal(
     append_run(samples, *dubins, 0.0, dubins->length(), output_step);
     return samples;
   };
-  if (params.motion_model != MotionModel::ReedsShepp) {
+  if (!params.motion_model.reverse) {
     return forward_tail();
   }
 
-  const auto reeds_shepp = solve_reeds_shepp_path(start, goal, params.minimum_turning_radius);
+  const auto reeds_shepp = solve_reeds_shepp_path(start, goal, params.motion_model.minimum_turning_radius);
   const auto reversing_tail = [&]() -> std::optional<std::vector<Pose2D>> {
     std::vector<Pose2D> samples;
     if (!reeds_shepp.has_value()) {
@@ -457,11 +463,11 @@ PlanResult search(
   const double motion_step =
     params.motion_step > 0.0
       ? params.motion_step
-      : std::max(std::numbers::sqrt2 * resolution, params.minimum_turning_radius * bin_width);
+      : std::max(std::numbers::sqrt2 * resolution, params.motion_model.minimum_turning_radius * bin_width);
   const double collision_check_step =
     params.collision_check_step > 0.0 ? params.collision_check_step : 0.5 * resolution;
   if (!motion_step_is_usable(
-        motion_step, resolution, params.minimum_turning_radius, params.heading_bins)) {
+        motion_step, resolution, params.motion_model.minimum_turning_radius, params.heading_bins)) {
     return PlanResult{PlannerError::ParamsIncompatibleWithMap};
   }
 
@@ -471,7 +477,7 @@ PlanResult search(
   }
   const std::size_t state_count = cells * heading_bins;
   // Node ids and state ids are 32 bit, and the search may append up to 3 nodes per expansion.
-  if (state_count > (INVALID_NODE - 1) / (control_set(params.motion_model).size() + 1)) {
+  if (state_count > (INVALID_NODE - 1) / (control_set_size(params.motion_model) + 1)) {
     return PlanResult{PlannerError::StateSpaceTooLarge};
   }
   const std::size_t closed_words = state_count / BITS_PER_WORD + 1;
@@ -525,18 +531,19 @@ PlanResult search(
     return clearance_penalty(params.clearance, field.at(index.x, index.y)) +
            grid.surcharge(index.x, index.y);
   };
-  const std::span<const Motion> motions = control_set(params.motion_model);
+  ControlSet primitives{};
+  const std::span<const Motion> motions = control_set(params.motion_model, primitives);
   const auto travel_of = [&](const Motion & motion) { return motion.travel_scale * motion_step; };
   const auto turn_of = [&](const Motion & motion) {
     return motion.travel_scale == 0.0
              ? static_cast<double>(motion.spin_bins) * bin_width
-             : travel_of(motion) * motion.curvature_scale / params.minimum_turning_radius;
+             : travel_of(motion) * motion.curvature_scale / params.motion_model.minimum_turning_radius;
   };
   const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
     const Motion & next = motions[next_mode];
     // A turn on the spot is charged the arc it would have cost at the minimum turning radius.
     if (next.travel_scale == 0.0) {
-      return std::abs(turn_of(next)) * params.minimum_turning_radius;
+      return std::abs(turn_of(next)) * params.motion_model.minimum_turning_radius;
     }
     // Any curvature costs the same, so a gentle primitive is not a cheaper way to travel.
     double multiplier = 1.0;
@@ -597,17 +604,17 @@ PlanResult search(
       std::array<Pose2D, 3> targets{query.goal, query.goal, query.goal};
       std::size_t target_count = 1;
       // Turning on the spot is a primitive here, so arriving off-heading is a legal way to finish.
-      if (params.motion_model == MotionModel::Differential) {
+      if (params.motion_model.turn_in_place) {
         const std::optional<Pose2D> shortest =
-          approach_pose(current.pose, query.goal.position, params.minimum_turning_radius);
+          approach_pose(current.pose, query.goal.position, params.motion_model.minimum_turning_radius);
         targets[1] = shortest.value_or(Pose2D{query.goal.position, current.pose.yaw});
         targets[2] = Pose2D{query.goal.position, current.pose.yaw};
         target_count = targets.size();
         // Arriving off-heading costs the follower a turn on the spot, so charge it as arc length.
         std::sort(
           targets.begin(), targets.end(), [&](const Pose2D & lhs, const Pose2D & rhs) {
-            return arrival_cost(current.pose, lhs, query.goal.yaw, params.minimum_turning_radius) <
-                   arrival_cost(current.pose, rhs, query.goal.yaw, params.minimum_turning_radius);
+            return arrival_cost(current.pose, lhs, query.goal.yaw, params.motion_model.minimum_turning_radius) <
+                   arrival_cost(current.pose, rhs, query.goal.yaw, params.motion_model.minimum_turning_radius);
           });
       }
       for (std::size_t i = 0; i < target_count; ++i) {
@@ -684,8 +691,8 @@ HybridAStarPlanner::HybridAStarPlanner(const HybridAStarParams & params)
 : Planner(params.common), params_(params)
 {
   const bool valid =
-    params_.heading_bins >= 8 && std::isfinite(params_.minimum_turning_radius) &&
-    params_.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
+    params_.heading_bins >= 8 && std::isfinite(params_.motion_model.minimum_turning_radius) &&
+    params_.motion_model.minimum_turning_radius > 0.0 && std::isfinite(params_.motion_step) &&
     params_.motion_step >= 0.0 && std::isfinite(params_.collision_check_step) &&
     params_.collision_check_step >= 0.0 && std::isfinite(params_.dubins_expansion_distance) &&
     params_.dubins_expansion_distance > 0.0 && std::isfinite(params_.heuristic_weight) &&

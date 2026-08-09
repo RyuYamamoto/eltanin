@@ -116,10 +116,10 @@ TEST(HybridAStarPlanner, ConstructorRejectsInvalidParameters)
   params.heading_bins = 7;
   EXPECT_THROW(HybridAStarPlanner{params}, std::invalid_argument);
 
-  constexpr std::array<double HybridAStarParams::*, 6> scalar_parameters{
-    &HybridAStarParams::minimum_turning_radius, &HybridAStarParams::motion_step,
-    &HybridAStarParams::collision_check_step, &HybridAStarParams::dubins_expansion_distance,
-    &HybridAStarParams::steering_penalty, &HybridAStarParams::steering_change_penalty};
+  constexpr std::array<double HybridAStarParams::*, 5> scalar_parameters{
+    &HybridAStarParams::motion_step, &HybridAStarParams::collision_check_step,
+    &HybridAStarParams::dubins_expansion_distance, &HybridAStarParams::steering_penalty,
+    &HybridAStarParams::steering_change_penalty};
   for (double HybridAStarParams::* const member : scalar_parameters) {
     params = HybridAStarParams{};
     params.*member = std::numeric_limits<double>::quiet_NaN();
@@ -127,7 +127,11 @@ TEST(HybridAStarPlanner, ConstructorRejectsInvalidParameters)
   }
 
   params = HybridAStarParams{};
-  params.minimum_turning_radius = 0.0;
+  params.motion_model.minimum_turning_radius = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(HybridAStarPlanner{params}, std::invalid_argument);
+
+  params = HybridAStarParams{};
+  params.motion_model.minimum_turning_radius = 0.0;
   EXPECT_THROW(HybridAStarPlanner{params}, std::invalid_argument);
   params = HybridAStarParams{};
   params.dubins_expansion_distance = 0.0;
@@ -140,7 +144,7 @@ TEST(HybridAStarPlanner, ChangesHeadingWithBoundedCurvature)
   const Pose2D start = at_cell(map, 5, 5, 0.0);
   const Pose2D goal = at_cell(map, 22, 22, std::numbers::pi / 2.0);
   HybridAStarParams params;
-  params.minimum_turning_radius = 0.4;
+  params.motion_model.minimum_turning_radius = 0.4;
 
   const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
@@ -148,7 +152,7 @@ TEST(HybridAStarPlanner, ChangesHeadingWithBoundedCurvature)
   ASSERT_GE(path->size(), 3u);
   expect_goal(*path, goal);
   expect_all_free(*path, map, make_cost_model());
-  const double radius = params.minimum_turning_radius;
+  const double radius = params.motion_model.minimum_turning_radius;
   for (std::size_t i = 0; i + 1 < path->size(); ++i) {
     const double chord = ((*path)[i + 1].position - (*path)[i].position).norm();
     const double delta_yaw =
@@ -410,7 +414,7 @@ TEST(HybridAStarPlanner, ADifferentialDriveReachesAHeadingTheGoalYawCannot)
   ASSERT_FALSE(exact.has_value());
 
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
   const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
   ASSERT_TRUE(free_yaw.has_value()) << eltanin::planner::to_string(free_yaw.error());
@@ -423,7 +427,7 @@ TEST(HybridAStarPlanner, ADifferentialDriveStillRespectsTheTurningRadiusUpToTheG
 {
   const Costmap map = open_map(40, 40);
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
   const Pose2D start = at_cell(map, 5, 5, 0.0);
 
   for (int quadrant = 0; quadrant < 8; ++quadrant) {
@@ -454,7 +458,7 @@ TEST(HybridAStarPlanner, ADifferentialDriveKeepsTheRequestedGoalPose)
   const Pose2D start = at_cell(map, 4, 20, 0.0);
   const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
 
   const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
@@ -469,7 +473,7 @@ TEST(HybridAStarPlanner, ADifferentialDrivePrefersTheRequestedPoseWhenItIsReacha
   const Pose2D start = at_cell(map, 5, 20, 0.0);
   const Pose2D goal = at_cell(map, 30, 20, 0.0);
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
 
   const auto free_yaw = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
   const auto exact = plan_hybrid_astar(map, make_cost_model(), start, goal);
@@ -498,7 +502,7 @@ TEST(HybridAStarPlanner, ADifferentialDriveDoesNotLoopRoundJustToFaceBackwards)
   const Pose2D ahead = at_cell(map, 130, 100, 0.0);
   const Pose2D backwards = at_cell(map, 130, 100, std::numbers::pi);
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
 
   const auto straight = plan_hybrid_astar(map, make_cost_model(), start, ahead, params);
   const auto reversed = plan_hybrid_astar(map, make_cost_model(), start, backwards, params);
@@ -523,9 +527,9 @@ namespace
 void expect_follows_control_set(
   const Path & path, const HybridAStarParams & params, double resolution)
 {
-  const double radius = params.minimum_turning_radius;
-  const bool may_spin = params.motion_model == eltanin::planner::MotionModel::Differential;
-  const bool may_reverse = params.motion_model == eltanin::planner::MotionModel::ReedsShepp;
+  const double radius = params.motion_model.minimum_turning_radius;
+  const bool may_spin = params.motion_model.turn_in_place;
+  const bool may_reverse = params.motion_model.reverse;
   const double bin_width = 2.0 * std::numbers::pi / static_cast<double>(params.heading_bins);
   const double step = params.motion_step > 0.0
                         ? params.motion_step
@@ -578,7 +582,7 @@ TEST(HybridAStarPlanner, TheDifferentialModelOnlyEverAddsATurnOnTheSpot)
     }
   }
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::Differential;
+  params.motion_model.turn_in_place = true;
   const Pose2D start = at_cell(map, 4, 20, 0.0);
   const Pose2D goal = at_cell(map, 28, 20, std::numbers::pi);
 
@@ -619,7 +623,7 @@ TEST(HybridAStarPlanner, AReedsSheppDriveBacksUpInsteadOfLoopingRound)
   const Pose2D goal = at_cell(map, 40, 60, 0.0);
 
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  params.motion_model.reverse = true;
   const auto reversing = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
   HybridAStarParams forward_only;
@@ -647,7 +651,7 @@ TEST(HybridAStarPlanner, AReedsSheppDriveTurnsRoundWhereDubinsCannot)
   const Pose2D goal = at_cell(map, 20, 30, std::numbers::pi);
 
   HybridAStarParams reeds_shepp;
-  reeds_shepp.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  reeds_shepp.motion_model.reverse = true;
   const auto reversing = plan_hybrid_astar(map, make_cost_model(), start, goal, reeds_shepp);
 
   const auto forward = plan_hybrid_astar(map, make_cost_model(), start, goal, HybridAStarParams{});
@@ -668,7 +672,7 @@ TEST(HybridAStarPlanner, AHighReversePenaltyKeepsTheReedsSheppDriveGoingForward)
   const Pose2D goal = at_cell(map, 40, 60, 0.0);
 
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  params.motion_model.reverse = true;
   params.reverse_penalty = 1000.0;
   const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
 
@@ -684,7 +688,7 @@ TEST(HybridAStarPlanner, AReedsSheppDriveIsDeterministic)
 {
   const Costmap map = open_map(120, 120);
   HybridAStarParams params;
-  params.motion_model = eltanin::planner::MotionModel::ReedsShepp;
+  params.motion_model.reverse = true;
   const Pose2D start = at_cell(map, 60, 60, 0.0);
   const Pose2D goal = at_cell(map, 35, 48, 2.0);
 
@@ -705,7 +709,7 @@ TEST(HybridAStarPlanner, PlansAtRadiiOneTurnCannotResolveIntoAHeadingBin)
   // Above resolution * sqrt(2) / bin_width, one turn of the default step stays inside its own bin.
   for (const double radius : {0.4, 1.0, 1.6, 1.7, 2.0, 2.5}) {
     HybridAStarParams params;
-    params.minimum_turning_radius = radius;
+    params.motion_model.minimum_turning_radius = radius;
     const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
     ASSERT_TRUE(path.has_value())
       << "radius " << radius << " failed with " << to_string(path.error());

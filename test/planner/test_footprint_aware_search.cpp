@@ -205,7 +205,7 @@ TEST(FootprintAwareSearch, TurnsACornerInACorridorNoAnalyticShotCanCross)
 
   HybridAStarParams aware;
   aware.common.footprint = body();
-  aware.minimum_turning_radius = 0.15;
+  aware.motion_model.minimum_turning_radius = 0.15;
 
   const auto path = plan_hybrid_astar(scene.inflated, scene.model, start, goal, aware);
 

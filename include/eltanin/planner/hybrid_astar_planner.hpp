@@ -39,24 +39,23 @@ struct ClearanceFallback
   double detour_tolerance{0.25};
 };
 
-/// What the vehicle can actually do, and therefore what the returned path may contain.
-enum class MotionModel
+/// What the body can do. The control set and the analytic connection both follow from this.
+struct MotionModel
 {
-  /// Forward arcs at or above the minimum turning radius; a car cannot do better.
-  Dubins,
-  /// Adds turning on the spot, which is what a differential drive does.
-  Differential,
-  /// Adds driving in reverse, so the analytic connection becomes a Reeds-Shepp path.
-  ReedsShepp,
+  /// Tightest arc the body can drive [m].
+  double minimum_turning_radius{0.4};
+  /// The body can drive backwards, which also makes the analytic connection a Reeds-Shepp path.
+  bool reverse{false};
+  /// The body can rotate without translating, as a differential drive does.
+  bool turn_in_place{false};
 };
 
 struct HybridAStarParams
 {
   PlannerParams common{};
-  /// Which primitives the search may use, and which the output is allowed to contain.
-  MotionModel motion_model{MotionModel::Dubins};
+  /// What the body can do; the primitives and the analytic tail are derived from it.
+  MotionModel motion_model{};
   int heading_bins{72};
-  double minimum_turning_radius{0.4};
   /// Length of one motion primitive [m]; 0 derives a step that always changes the discrete state.
   double motion_step{0.0};
   /// Collision check interval along each primitive [m]; 0 selects half a map cell.

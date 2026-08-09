@@ -24,6 +24,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <iostream>
 
 namespace
@@ -35,7 +36,7 @@ int usage(const char * program)
 {
   std::cerr << "usage: " << program
             << " <map.yaml> <output_dir> <start_x> <start_y> <start_yaw>"
-               " <goal_x> <goal_y> <goal_yaw>\n";
+               " <goal_x> <goal_y> <goal_yaw> [dubins|differential|reeds-shepp]\n";
   return EXIT_FAILURE;
 }
 
@@ -78,7 +79,7 @@ bool write_footprint(const std::filesystem::path & file, const eltanin::Polygon2
 
 int main(int argc, char ** argv)
 {
-  if (argc != 9) {
+  if (argc < 9 || argc > 10) {
     return usage(argv[0]);
   }
 
@@ -118,7 +119,18 @@ int main(int argc, char ** argv)
   const eltanin::map::Costmap costmap = eltanin_examples::crop_around(
     inflated->map, eltanin_examples::positions_of(*guide), lower_left);
   eltanin::planner::HybridAStarParams params;
-  params.minimum_turning_radius = TURNING_RADIUS;
+  params.motion_model.minimum_turning_radius = TURNING_RADIUS;
+  params.common.footprint = eltanin_examples::robot_footprint();
+  if (argc >= 10) {
+    const std::string name = argv[9];
+    if (name == "differential") {
+      params.motion_model.turn_in_place = true;
+    } else if (name == "reeds-shepp") {
+      params.motion_model.reverse = true;
+    } else if (name != "dubins") {
+      return usage(argv[0]);
+    }
+  }
 
   const auto path =
     eltanin::planner::plan_hybrid_astar(costmap, inflated->model, start, goal, params);
