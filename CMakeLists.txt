@@ -13,6 +13,10 @@ endif()
 option(ELTANIN_BUILD_TESTS "Build eltanin unit tests" ${ELTANIN_IS_TOP_LEVEL})
 option(ELTANIN_BUILD_EXAMPLES "Build eltanin examples" OFF)
 option(ELTANIN_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
+# OFF keeps eltanin_control on the stdlib and Eigen only; ON adds the OSQP dependency the MPC needs.
+option(ELTANIN_ENABLE_MPC "Build the MPC path follower and its QP solver backend" OFF)
+set(ELTANIN_MPC_SOLVER_PROVIDER "fetch" CACHE STRING
+  "Where OSQP comes from when ELTANIN_ENABLE_MPC is ON: fetch or package")
 option(ELTANIN_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(ELTANIN_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
@@ -49,6 +53,33 @@ endif()
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
 include(GNUInstallDirs)
+
+if(ELTANIN_ENABLE_MPC)
+  if(ELTANIN_MPC_SOLVER_PROVIDER STREQUAL "package")
+    find_package(osqp REQUIRED)
+    set(ELTANIN_OSQP_TARGET osqp::osqpstatic)
+  elseif(ELTANIN_MPC_SOLVER_PROVIDER STREQUAL "fetch")
+    # Forced so that a stale cache from a previous configure cannot turn the demo or tests back on.
+    set(OSQP_BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    set(OSQP_BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(OSQP_BUILD_DEMO_EXE OFF CACHE BOOL "" FORCE)
+    set(OSQP_BUILD_UNITTESTS OFF CACHE BOOL "" FORCE)
+    set(OSQP_ALGEBRA_BACKEND "builtin" CACHE STRING "" FORCE)
+    set(OSQP_ENABLE_INTERRUPT OFF CACHE BOOL "" FORCE)
+    set(OSQP_ENABLE_PRINTING OFF CACHE BOOL "" FORCE)
+    set(OSQP_ENABLE_PROFILING ON CACHE BOOL "" FORCE)
+    include(FetchContent)
+    FetchContent_Declare(osqp
+      GIT_REPOSITORY https://github.com/osqp/osqp.git
+      GIT_TAG v1.0.0
+      GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(osqp)
+    set(ELTANIN_OSQP_TARGET osqpstatic)
+  else()
+    message(FATAL_ERROR
+      "ELTANIN_MPC_SOLVER_PROVIDER must be fetch or package, got ${ELTANIN_MPC_SOLVER_PROVIDER}")
+  endif()
+endif()
 
 # --------------------------------------------------------------------------
 # Modules
