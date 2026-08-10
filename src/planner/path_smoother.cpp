@@ -14,7 +14,10 @@
 
 #include <eltanin/planner/path_smoother.hpp>
 
+#include <eltanin/core/angle.hpp>
+
 #include <cmath>
+#include <numbers>
 #include <stdexcept>
 
 namespace eltanin::planner::detail
@@ -39,21 +42,32 @@ void assign_tangent_yaw(Path & path)
         first_tangent = i;
       }
     }
+    // A turn on the spot has no tangent, so the pose keeps the heading the planner gave it.
+    if (path.direction_of(i) == Direction::InPlace) {
+      continue;
+    }
     // A coincident pair carries the previous tangent forward instead of atan2(0, 0).
     if (has_tangent) {
-      path[i].yaw = tangent_yaw;
+      // The yaw is the body heading, which on a reverse segment is the tangent turned by pi.
+      path[i].yaw = path.direction_of(i) == Direction::Reverse
+                      ? normalize_angle(tangent_yaw + std::numbers::pi)
+                      : tangent_yaw;
     }
   }
 
   if (first_tangent == n) {
     // Every point coincides, so the terminal yaw is the only orientation available.
     for (std::size_t i = 0; i + 1 < n; ++i) {
-      path[i].yaw = path[n - 1].yaw;
+      if (path.direction_of(i) != Direction::InPlace) {
+        path[i].yaw = path[n - 1].yaw;
+      }
     }
     return;
   }
   for (std::size_t i = 0; i < first_tangent; ++i) {
-    path[i].yaw = path[first_tangent].yaw;
+    if (path.direction_of(i) != Direction::InPlace) {
+      path[i].yaw = path[first_tangent].yaw;
+    }
   }
 }
 
@@ -77,6 +91,10 @@ Path smooth_on_grid(
     for (int iteration = 0; iteration < params.max_iterations; ++iteration) {
       double displacement = 0.0;
       for (std::size_t i = 1; i + 1 < n; ++i) {
+        // A cusp is where the body reverses; rounding it off would erase the manoeuvre.
+        if (smoothed.is_cusp(i)) {
+          continue;
+        }
         const Eigen::Vector2d & here = smoothed[i].position;
         Eigen::Vector2d step =
           params.weight_data * (path[i].position - here) +

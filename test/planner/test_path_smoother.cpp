@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License
 
+#include <eltanin/core/angle.hpp>
 #include <eltanin/core/path.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/grid_map.hpp>
@@ -24,6 +25,7 @@
 
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <vector>
 
@@ -486,4 +488,83 @@ TEST(PathSmoother, RejectsCurvatureWeightsThatWouldNotConverge)
   unstable.weight_curvature = 0.02;
 
   EXPECT_THROW(smooth(input, map, make_cost_model(), unstable), std::invalid_argument);
+}
+
+namespace
+{
+
+/// Forward along +x for `forward` poses, then reverse back along the same line for `back` poses.
+Path cusp_path(std::size_t forward, std::size_t back, double spacing)
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{1.0, 1.0}, 0.0});
+  for (std::size_t i = 1; i <= forward; ++i) {
+    path.push_back(
+      Pose2D{Vector2d{1.0 + spacing * static_cast<double>(i), 1.0}, 0.0},
+      eltanin::Direction::Forward);
+  }
+  const double turn = 1.0 + spacing * static_cast<double>(forward);
+  for (std::size_t i = 1; i <= back; ++i) {
+    path.push_back(
+      Pose2D{Vector2d{turn - spacing * static_cast<double>(i), 1.0 + 0.02 * static_cast<double>(i)},
+             0.0},
+      eltanin::Direction::Reverse);
+  }
+  return path;
+}
+
+}  // namespace
+
+TEST(PathSmoother, AReverseSegmentGetsTheTangentTurnedByPi)
+{
+  const Costmap map = open_map(60, 60);
+  const Path input = cusp_path(10, 10, 0.2);
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 50));
+
+  ASSERT_TRUE(output.has_directions());
+  for (std::size_t i = 0; i + 1 < output.size(); ++i) {
+    const Vector2d delta = output[i + 1].position - output[i].position;
+    const double tangent = std::atan2(delta.y(), delta.x());
+    const double expected = output.direction_of(i) == eltanin::Direction::Reverse
+                              ? eltanin::normalize_angle(tangent + std::numbers::pi)
+                              : tangent;
+    EXPECT_NEAR(eltanin::shortest_angular_distance(output[i].yaw, expected), 0.0, 1e-12)
+      << "pose " << i;
+  }
+}
+
+TEST(PathSmoother, TheCuspPoseIsPinnedLikeTheTwoEnds)
+{
+  const Costmap map = open_map(60, 60);
+  const Path input = cusp_path(10, 10, 0.2);
+  const std::size_t cusp = 10;
+  ASSERT_TRUE(input.is_cusp(cusp));
+
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 50));
+
+  ASSERT_EQ(output.size(), input.size());
+  EXPECT_DOUBLE_EQ(output[cusp].position.x(), input[cusp].position.x());
+  EXPECT_DOUBLE_EQ(output[cusp].position.y(), input[cusp].position.y());
+  EXPECT_EQ(output.directions(), input.directions());
+}
+
+TEST(PathSmoother, ATurnOnTheSpotKeepsThePlannerHeading)
+{
+  const Costmap map = open_map(40, 40);
+  Path input;
+  input.push_back(Pose2D{Vector2d{1.0, 1.0}, 0.0});
+  for (int i = 1; i <= 5; ++i) {
+    input.push_back(
+      Pose2D{Vector2d{1.0 + 0.2 * i, 1.0}, 0.0}, eltanin::Direction::Forward);
+  }
+  input.push_back(Pose2D{Vector2d{2.0, 1.0}, 1.2}, eltanin::Direction::InPlace);
+  for (int i = 1; i <= 5; ++i) {
+    input.push_back(
+      Pose2D{Vector2d{2.0 + 0.2 * i * std::cos(1.2), 1.0 + 0.2 * i * std::sin(1.2)}, 1.2},
+      eltanin::Direction::Forward);
+  }
+
+  const Path output = smooth(input, map, make_cost_model(), eltanin_test::basic_smoother_params(0.5, 0.3, 0.0, 50));
+
+  EXPECT_DOUBLE_EQ(output[6].yaw, 1.2);
 }
