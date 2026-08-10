@@ -37,10 +37,10 @@ struct VelocityProfileParams
   double max_decel{0.5};
   /// Chord arc length of the curvature estimator [m]; below v_max / w_max it measures sampling.
   double curvature_window{0.3};
-  /// Floor applied to the curvature-derived bound only, so a corner can never mean "stop" [m/s].
-  double min_linear_vel{0.05};
-  /// Terminal speed of the backward pass [m/s]; 0 makes the profile stop on the last pose.
-  double terminal_linear_vel{0.0};
+  /// Floor under the curvature-derived bound, as a magnitude, so a corner never means "stop" [m/s].
+  double min_speed{0.05};
+  /// Speed magnitude the backward pass starts from [m/s]; 0 makes the profile stop on the goal.
+  double terminal_speed{0.0};
 };
 
 /// Speed upper bound along one path, built from its curvature and the body limits.

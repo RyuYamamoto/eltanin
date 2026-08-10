@@ -34,8 +34,8 @@ std::optional<VelocityProfile> VelocityProfile::create(const VelocityProfilePara
   const bool all_finite =
     std::isfinite(params.max_linear_vel) && std::isfinite(params.max_angular_vel) &&
     std::isfinite(params.max_lateral_accel) && std::isfinite(params.max_decel) &&
-    std::isfinite(params.curvature_window) && std::isfinite(params.min_linear_vel) &&
-    std::isfinite(params.terminal_linear_vel);
+    std::isfinite(params.curvature_window) && std::isfinite(params.min_speed) &&
+    std::isfinite(params.terminal_speed);
   if (!all_finite) {
     return std::nullopt;
   }
@@ -48,10 +48,10 @@ std::optional<VelocityProfile> VelocityProfile::create(const VelocityProfilePara
   if (params.curvature_window < 0.0) {
     return std::nullopt;
   }
-  if (params.min_linear_vel < 0.0 || params.min_linear_vel > params.max_linear_vel) {
+  if (params.min_speed < 0.0 || params.min_speed > params.max_linear_vel) {
     return std::nullopt;
   }
-  if (params.terminal_linear_vel < 0.0 || params.terminal_linear_vel > params.max_linear_vel) {
+  if (params.terminal_speed < 0.0 || params.terminal_speed > params.max_linear_vel) {
     return std::nullopt;
   }
   return VelocityProfile(params);
@@ -74,16 +74,33 @@ void VelocityProfile::build(const Path & path)
     const double angular_bound = params_.max_angular_vel / magnitude;
     const double lateral_bound = std::sqrt(params_.max_lateral_accel / magnitude);
     limits_[i] = std::max(
-      params_.min_linear_vel,
+      params_.min_speed,
       std::min({params_.max_linear_vel, angular_bound, lateral_bound}));
   }
 
-  limits_.back() = std::min(limits_.back(), params_.terminal_linear_vel);
+  // A cusp is a full stop, so neither pass may carry speed across one.
+  limits_.back() = std::min(limits_.back(), params_.terminal_speed);
   for (std::size_t i = path.size() - 1; i > 0; --i) {
+    if (path.is_cusp(i)) {
+      limits_[i] = 0.0;
+    }
     const double span = arc_lengths_[i] - arc_lengths_[i - 1];
     const double reachable =
       std::sqrt(limits_[i] * limits_[i] + 2.0 * params_.max_decel * span);
     limits_[i - 1] = std::min(limits_[i - 1], reachable);
+  }
+
+  // The forward pass starts at cusps and nowhere else, so a path without one keeps its old profile.
+  bool leaving_a_cusp = false;
+  for (std::size_t i = 1; i < path.size(); ++i) {
+    leaving_a_cusp = leaving_a_cusp || path.is_cusp(i - 1);
+    if (!leaving_a_cusp) {
+      continue;
+    }
+    const double span = arc_lengths_[i] - arc_lengths_[i - 1];
+    const double reachable =
+      std::sqrt(limits_[i - 1] * limits_[i - 1] + 2.0 * params_.max_decel * span);
+    limits_[i] = std::min(limits_[i], reachable);
   }
 }
 

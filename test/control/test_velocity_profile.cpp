@@ -53,7 +53,7 @@ VelocityProfile make_profile(const VelocityProfileParams & params)
 VelocityProfileParams instantaneous_only()
 {
   VelocityProfileParams params;
-  params.terminal_linear_vel = params.max_linear_vel;
+  params.terminal_speed = params.max_linear_vel;
   return params;
 }
 
@@ -129,12 +129,12 @@ TEST(VelocityProfile, CreateRejectsNonFiniteParams)
     EXPECT_FALSE(VelocityProfile::create(params).has_value()) << "curvature_window=" << bad;
 
     params = VelocityProfileParams{};
-    params.min_linear_vel = bad;
-    EXPECT_FALSE(VelocityProfile::create(params).has_value()) << "min_linear_vel=" << bad;
+    params.min_speed = bad;
+    EXPECT_FALSE(VelocityProfile::create(params).has_value()) << "min_speed=" << bad;
 
     params = VelocityProfileParams{};
-    params.terminal_linear_vel = bad;
-    EXPECT_FALSE(VelocityProfile::create(params).has_value()) << "terminal_linear_vel=" << bad;
+    params.terminal_speed = bad;
+    EXPECT_FALSE(VelocityProfile::create(params).has_value()) << "terminal_speed=" << bad;
   }
 }
 
@@ -163,15 +163,15 @@ TEST(VelocityProfile, CreateRejectsOutOfRangeParams)
   EXPECT_FALSE(VelocityProfile::create(params).has_value());
 
   params = VelocityProfileParams{};
-  params.min_linear_vel = params.max_linear_vel + 1e-9;
+  params.min_speed = params.max_linear_vel + 1e-9;
   EXPECT_FALSE(VelocityProfile::create(params).has_value());
 
   params = VelocityProfileParams{};
-  params.terminal_linear_vel = params.max_linear_vel + 1e-9;
+  params.terminal_speed = params.max_linear_vel + 1e-9;
   EXPECT_FALSE(VelocityProfile::create(params).has_value());
 
   params = VelocityProfileParams{};
-  params.min_linear_vel = -1e-9;
+  params.min_speed = -1e-9;
   EXPECT_FALSE(VelocityProfile::create(params).has_value());
 }
 
@@ -228,7 +228,7 @@ TEST(VelocityProfile, ACircularArcSitsOnTheAngularAndLateralBounds)
 TEST(VelocityProfile, TheCreepFloorAppliesToTheCurvatureBoundOnly)
 {
   VelocityProfileParams params;
-  params.min_linear_vel = 0.12;
+  params.min_speed = 0.12;
   VelocityProfile profile = make_profile(params);
   // A 6 cm radius is far below anything the body can drive, so the raw bound lands under the floor.
   const Path path = make_arc_path(0.06, std::numbers::pi, 0.01, 1.0);
@@ -239,9 +239,9 @@ TEST(VelocityProfile, TheCreepFloorAppliesToTheCurvatureBoundOnly)
     if (arc.back() - arc[i] < 0.2) {
       continue;
     }
-    EXPECT_GE(profile.at_index(i), params.min_linear_vel - kTol) << "index " << i;
+    EXPECT_GE(profile.at_index(i), params.min_speed - kTol) << "index " << i;
   }
-  EXPECT_DOUBLE_EQ(profile.limits().back(), params.terminal_linear_vel);
+  EXPECT_DOUBLE_EQ(profile.limits().back(), params.terminal_speed);
 }
 
 TEST(VelocityProfile, TheProfileEndsAtTheTerminalSpeed)
@@ -393,4 +393,44 @@ TEST(VelocityProfile, ClearDropsTheBound)
   profile.clear();
   EXPECT_FALSE(profile.built());
   EXPECT_EQ(profile.at_index(0), kInf);
+}
+
+TEST(VelocityProfile, ACuspIsAFullStopInBothPasses)
+{
+  VelocityProfileParams params;
+  params.max_decel = 0.5;
+  VelocityProfile profile = make_profile(params);
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  const std::size_t cusp = 20;
+  ASSERT_TRUE(path.is_cusp(cusp));
+
+  profile.build(path);
+
+  EXPECT_DOUBLE_EQ(profile.at_index(cusp), 0.0);
+  const std::vector<double> & arc = profile.arc_lengths();
+  for (std::size_t i = 0; i < path.size(); ++i) {
+    const double to_cusp = std::abs(arc[i] - arc[cusp]);
+    const double reachable = std::sqrt(2.0 * params.max_decel * to_cusp);
+    EXPECT_LE(profile.at_index(i), reachable + kTol) << "index " << i;
+  }
+}
+
+TEST(VelocityProfile, APathWithoutCuspsKeepsExactlyTheProfileItHadBefore)
+{
+  VelocityProfileParams params;
+  VelocityProfile bare = make_profile(params);
+  VelocityProfile directed = make_profile(params);
+
+  const Path plain = make_arc_path(1.0, std::numbers::pi, 0.05, 1.0);
+  Path with_directions(
+    plain.poses(), std::vector<eltanin::Direction>(plain.size() - 1, eltanin::Direction::Forward));
+  ASSERT_TRUE(with_directions.has_directions());
+
+  bare.build(plain);
+  directed.build(with_directions);
+
+  ASSERT_EQ(bare.limits().size(), directed.limits().size());
+  for (std::size_t i = 0; i < bare.limits().size(); ++i) {
+    EXPECT_DOUBLE_EQ(bare.limits()[i], directed.limits()[i]) << "index " << i;
+  }
 }
