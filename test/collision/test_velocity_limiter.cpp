@@ -199,11 +199,11 @@ TEST(LimitCommand, LimitsAReverseCommandByItsMagnitude)
 {
   const VelocityLimiterParams params;
   const double v_in = -0.5;
-  const Twist2D limited = limit_command(params, twist(v_in, 0.0), true, 0.25);
+  const Twist2D limited = limit_command(params, twist(v_in, 0.0), true, 0.4);
 
-  const double v_max = std::sqrt(2.0 * params.max_deceleration * (0.25 - params.collision_margin));
+  const double v_max = std::sqrt(2.0 * params.max_deceleration * (0.4 - params.collision_margin));
   EXPECT_DOUBLE_EQ(limited.linear.x(), -v_max);
-  EXPECT_DOUBLE_EQ(limited.linear.x(), -std::sqrt(0.05));
+  EXPECT_DOUBLE_EQ(limited.linear.x(), -std::sqrt(0.2));
   EXPECT_LT(limited.linear.x(), 0.0);
   EXPECT_LT(std::abs(limited.linear.x()), std::abs(v_in));
   // navyu computed std::min(v_max, v_in), which for a reverse command returns v_in unchanged.
@@ -244,6 +244,38 @@ TEST(LimitCommand, StopsWhenTheCollisionIsInsideTheMargin)
     EXPECT_DOUBLE_EQ(std::abs(limited.linear.x()), 0.0);
     EXPECT_DOUBLE_EQ(limited.angular, 0.0);
   }
+}
+
+TEST(LimitCommand, TheReactionTimeBindsInsideTheCrossover)
+{
+  const VelocityLimiterParams params;
+  const double crossover =
+    2.0 * params.max_deceleration * params.reaction_time * params.reaction_time;
+  EXPECT_DOUBLE_EQ(crossover, 0.09);
+
+  const Twist2D near = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.04);
+  EXPECT_DOUBLE_EQ(near.linear.x(), 0.04 / params.reaction_time);
+  EXPECT_LT(near.linear.x(), std::sqrt(2.0 * params.max_deceleration * 0.04));
+
+  const Twist2D at_crossover =
+    limit_command(params, twist(0.5, 0.0), true, params.collision_margin + crossover);
+  EXPECT_DOUBLE_EQ(at_crossover.linear.x(), crossover / params.reaction_time);
+  EXPECT_DOUBLE_EQ(
+    at_crossover.linear.x(), std::sqrt(2.0 * params.max_deceleration * crossover));
+
+  const Twist2D far = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.25);
+  EXPECT_DOUBLE_EQ(far.linear.x(), std::sqrt(2.0 * params.max_deceleration * 0.25));
+  EXPECT_LT(far.linear.x(), 0.25 / params.reaction_time);
+}
+
+TEST(LimitCommand, TheReactionTimeCapKeepsTheSignAndTheCurvature)
+{
+  const VelocityLimiterParams params;
+  const Twist2D cmd_in = twist(-0.5, 0.4);
+  const Twist2D limited = limit_command(params, cmd_in, true, params.collision_margin + 0.04);
+
+  EXPECT_DOUBLE_EQ(limited.linear.x(), -0.04 / params.reaction_time);
+  EXPECT_DOUBLE_EQ(limited.angular / limited.linear.x(), cmd_in.angular / cmd_in.linear.x());
 }
 
 TEST(LimitCommand, PassesTheCommandThroughWhenThereIsNoCollision)
@@ -346,6 +378,31 @@ TEST(VelocityLimiterLimit, PassesTheCommandThroughOnAFreeMap)
   EXPECT_DOUBLE_EQ(result.command.linear.x(), cmd_in.linear.x());
   EXPECT_DOUBLE_EQ(result.command.angular, cmd_in.angular);
   EXPECT_EQ(result.predicted_poses.size(), 11u);
+}
+
+TEST(VelocityLimiterLimit, ReportsTheTimeToCollision)
+{
+  const CollisionScenario wall = wall_scenario(false);
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+  const Twist2D cmd_in = twist(-0.5, 0.0);
+
+  const VelocityLimiter::Result blocked =
+    limiter.limit(wall.map, wall.model, pose_at_cell(15, 11, 0.0), cmd_in);
+  EXPECT_DOUBLE_EQ(
+    blocked.time_to_collision,
+    (blocked.collision_distance - limiter.params().collision_margin) /
+      std::abs(cmd_in.linear.x()));
+
+  const CollisionScenario open = free_scenario();
+  const VelocityLimiter::Result clear =
+    limiter.limit(open.map, open.model, pose_at_cell(11, 11, 0.0), twist(0.05, 0.0));
+  EXPECT_EQ(clear.time_to_collision, INFINITE_DISTANCE);
+
+  const CollisionScenario obstacle = single_obstacle_scenario(5, 0);
+  const VelocityLimiter::Result at_rest =
+    limiter.limit(obstacle.map, obstacle.model, pose_at_cell(11, 11, 0.0), twist(0.0, 0.5));
+  EXPECT_TRUE(at_rest.has_collision);
+  EXPECT_EQ(at_rest.time_to_collision, INFINITE_DISTANCE);
 }
 
 TEST(VelocityLimiterLimit, IsDeterministicAcrossCalls)

@@ -41,7 +41,7 @@ using Eigen::Vector2d;
 
 constexpr double CONTROL_DT = 0.1;
 
-constexpr int MAX_CYCLES = 10;
+constexpr int MAX_CYCLES = 40;
 constexpr double HALF_FOOTPRINT = 0.3;
 
 struct ClosedLoopTrace
@@ -77,10 +77,11 @@ ClosedLoopTrace run_closed_loop(
   return trace;
 }
 
-/// Deepest the braking law can enter the margin in one control period, once the distance is exact.
-double margin_overshoot(const VelocityLimiterParams & params)
+/// Bisection quantum of the rollout; the stop can undershoot the margin by at most one of them.
+double margin_overshoot(const VelocityLimiter & limiter, const Twist2D & cmd_in)
 {
-  return 0.5 * params.max_deceleration * CONTROL_DT * CONTROL_DT;
+  const double step_arc = std::abs(cmd_in.linear.x()) * limiter.prediction_dt(cmd_in);
+  return step_arc / 16.0;
 }
 
 Pose2D pose_at_cell(int mx, int my, double yaw)
@@ -107,7 +108,7 @@ TEST(VelocityLimiterClosedLoop, StopsInFrontOfAWallWhenDrivingForward)
   const double wall_centre_x = 0.05 * 23.0 + 0.025;
   const double clearance = wall_centre_x - (trace.stop_pose.position.x() + HALF_FOOTPRINT);
   const VelocityLimiterParams & params = limiter.params();
-  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(params));
+  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(limiter, cmd_in));
   EXPECT_LE(clearance, params.collision_margin + 2.0 * std::abs(cmd_in.linear.x()) * CONTROL_DT);
 }
 
@@ -129,7 +130,7 @@ TEST(VelocityLimiterClosedLoop, StopsInFrontOfAWallWhenDrivingBackward)
   const double wall_centre_x = 0.025;
   const double clearance = (trace.stop_pose.position.x() - HALF_FOOTPRINT) - wall_centre_x;
   const VelocityLimiterParams & params = limiter.params();
-  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(params));
+  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(limiter, cmd_in));
   EXPECT_LE(clearance, params.collision_margin + 2.0 * std::abs(cmd_in.linear.x()) * CONTROL_DT);
 }
 

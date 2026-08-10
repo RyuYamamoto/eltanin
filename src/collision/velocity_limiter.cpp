@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace eltanin::collision
 {
@@ -57,12 +58,24 @@ std::optional<VelocityLimiter> VelocityLimiter::create(const VelocityLimiterPara
 namespace detail
 {
 
+double time_to_collision(
+  const VelocityLimiterParams & params, const Twist2D & cmd_in, double collision_distance)
+{
+  const double speed = std::abs(cmd_in.linear.x());
+  if (speed <= MIN_LINEAR_VEL) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return std::max(0.0, collision_distance - params.collision_margin) / speed;
+}
+
 Twist2D limit_command(
   const VelocityLimiterParams & params, const Twist2D & cmd_in, bool has_collision,
   double collision_distance)
 {
   const double d_col = std::max(0.0, collision_distance - params.collision_margin);
-  const double v_max = std::sqrt(2.0 * params.max_deceleration * d_col);
+  // Two caps: one so the robot can still brake, one so the latency budget cannot be spent closing.
+  const double v_max = std::min(
+    std::sqrt(2.0 * params.max_deceleration * d_col), d_col / params.reaction_time);
   const double v_in = cmd_in.linear.x();
   // clamp() caps the magnitude while keeping the sign, which std::min() fails to do when v_in < 0.
   const double v_out = std::clamp(v_in, -v_max, v_max);

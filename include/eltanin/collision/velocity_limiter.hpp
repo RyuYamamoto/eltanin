@@ -59,7 +59,11 @@ inline constexpr double MIN_LINEAR_VEL = 1e-9;
 /// Bisections inside the colliding step; fixed, because the resolution of a stop is not a setting.
 inline constexpr int COLLISION_REFINEMENT_STEPS = 4;
 
-/// Braking-distance law applied to the magnitude of the command; the input sign is preserved.
+/// Time [s] the requested command needs to close the gap down to the margin; +inf when it never does.
+double time_to_collision(
+  const VelocityLimiterParams & params, const Twist2D & cmd_in, double collision_distance);
+
+/// Braking-distance and reaction-time laws on the magnitude of the command; the sign is preserved.
 Twist2D limit_command(
   const VelocityLimiterParams & params, const Twist2D & cmd_in, bool has_collision,
   double collision_distance);
@@ -113,6 +117,8 @@ public:
     std::vector<Pose2D> predicted_poses{};
     /// Prediction horizon [s] this command was rolled out over; see horizon().
     double horizon{0.0};
+    /// Seconds the requested command would still take to reach the margin; +inf when free or at rest.
+    double time_to_collision{std::numeric_limits<double>::infinity()};
   };
 
   /// nullopt when the footprint is degenerate, non-convex, excludes the origin, or a value is bad.
@@ -186,6 +192,8 @@ VelocityLimiter::Result VelocityLimiter::limit(
     pose = next;
   }
 
+  result.time_to_collision =
+    detail::time_to_collision(params_, cmd_in, result.collision_distance);
   result.command =
     detail::limit_command(params_, cmd_in, result.has_collision, result.collision_distance);
   return result;
