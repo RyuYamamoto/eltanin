@@ -26,6 +26,7 @@ namespace
 {
 
 using eltanin::cumulative_arc_length;
+using eltanin::Direction;
 using eltanin::Path;
 using eltanin::path_length;
 using eltanin::Pose2D;
@@ -187,6 +188,120 @@ TEST(Path, ConstructionFromVector)
   EXPECT_EQ(path.size(), 2u);
   EXPECT_NEAR(path_length(path), 2.0, kTol);
   EXPECT_EQ(path.poses().size(), 2u);
+}
+
+TEST(PathDirections, AnUndirectedPathIsAllForward)
+{
+  const Path path{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}};
+  EXPECT_FALSE(path.has_directions());
+  EXPECT_TRUE(path.directions().empty());
+  EXPECT_FALSE(path.has_reverse());
+  for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+    EXPECT_EQ(path.direction_of(i), Direction::Forward);
+    EXPECT_FALSE(path.is_cusp(i));
+  }
+  EXPECT_EQ(path.run_bounds(1), std::make_pair(std::size_t{0}, std::size_t{2}));
+}
+
+TEST(PathDirections, ConstructionCarriesOneEntryPerSegment)
+{
+  std::vector<Pose2D> poses{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}};
+  std::vector<Direction> directions{Direction::Forward, Direction::Reverse};
+  const Path path(std::move(poses), std::move(directions));
+  EXPECT_TRUE(path.has_directions());
+  EXPECT_EQ(path.directions().size(), path.size() - 1);
+  EXPECT_EQ(path.direction_of(0), Direction::Forward);
+  EXPECT_EQ(path.direction_of(1), Direction::Reverse);
+  EXPECT_TRUE(path.has_reverse());
+}
+
+TEST(PathDirections, DirectedPushBackPromotesAnUndirectedPath)
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  path.push_back(Pose2D{Vector2d{1.0, 0.0}, 0.0});
+  EXPECT_FALSE(path.has_directions());
+  path.push_back(Pose2D{Vector2d{0.5, 0.0}, 0.0}, Direction::Reverse);
+  EXPECT_TRUE(path.has_directions());
+  EXPECT_EQ(path.directions().size(), 2u);
+  EXPECT_EQ(path.direction_of(0), Direction::Forward);
+  EXPECT_EQ(path.direction_of(1), Direction::Reverse);
+}
+
+TEST(PathDirections, UndirectedPushBackKeepsTheArrayAsLongAsTheSegments)
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  path.push_back(Pose2D{Vector2d{1.0, 0.0}, 0.0}, Direction::Reverse);
+  path.push_back(Pose2D{Vector2d{2.0, 0.0}, 0.0});
+  EXPECT_EQ(path.directions().size(), path.size() - 1);
+  EXPECT_EQ(path.direction_of(1), Direction::Forward);
+}
+
+TEST(PathDirections, ClearDropsTheDirections)
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  path.push_back(Pose2D{Vector2d{1.0, 0.0}, 0.0}, Direction::Reverse);
+  path.clear();
+  EXPECT_TRUE(path.empty());
+  EXPECT_FALSE(path.has_directions());
+}
+
+TEST(PathDirections, ACuspIsThePoseWhoseSegmentsDisagree)
+{
+  std::vector<Pose2D> poses{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}, Pose2D{Vector2d{1.5, 0.0}, 0.0},
+    Pose2D{Vector2d{1.0, 0.0}, 0.0}};
+  std::vector<Direction> directions{
+    Direction::Forward, Direction::Forward, Direction::Reverse, Direction::Reverse};
+  const Path path(std::move(poses), std::move(directions));
+  EXPECT_FALSE(path.is_cusp(0));
+  EXPECT_FALSE(path.is_cusp(1));
+  EXPECT_TRUE(path.is_cusp(2));
+  EXPECT_FALSE(path.is_cusp(3));
+  EXPECT_FALSE(path.is_cusp(4));
+}
+
+TEST(PathDirections, RunBoundsStopAtCusps)
+{
+  std::vector<Pose2D> poses{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{2.0, 0.0}, 0.0}, Pose2D{Vector2d{1.5, 0.0}, 0.0},
+    Pose2D{Vector2d{1.0, 0.0}, 0.0}};
+  std::vector<Direction> directions{
+    Direction::Forward, Direction::Forward, Direction::Reverse, Direction::Reverse};
+  const Path path(std::move(poses), std::move(directions));
+  EXPECT_EQ(path.run_bounds(0), std::make_pair(std::size_t{0}, std::size_t{2}));
+  EXPECT_EQ(path.run_bounds(1), std::make_pair(std::size_t{0}, std::size_t{2}));
+  EXPECT_EQ(path.run_bounds(2), std::make_pair(std::size_t{2}, std::size_t{4}));
+  EXPECT_EQ(path.run_bounds(4), std::make_pair(std::size_t{2}, std::size_t{4}));
+}
+
+TEST(PathDirections, RunBoundsOnDegeneratePaths)
+{
+  const Path empty;
+  EXPECT_EQ(empty.run_bounds(0), std::make_pair(std::size_t{0}, std::size_t{0}));
+  const Path single{Pose2D{Vector2d{0.0, 0.0}, 0.0}};
+  EXPECT_EQ(single.run_bounds(7), std::make_pair(std::size_t{0}, std::size_t{0}));
+}
+
+TEST(PathDirections, InPlaceIsItsOwnRun)
+{
+  std::vector<Pose2D> poses{
+    Pose2D{Vector2d{0.0, 0.0}, 0.0}, Pose2D{Vector2d{1.0, 0.0}, 0.0},
+    Pose2D{Vector2d{1.0, 0.0}, 1.0}, Pose2D{Vector2d{1.0, 1.0}, 1.0}};
+  std::vector<Direction> directions{Direction::Forward, Direction::InPlace, Direction::Forward};
+  const Path path(std::move(poses), std::move(directions));
+  EXPECT_FALSE(path.has_reverse());
+  EXPECT_TRUE(path.is_cusp(1));
+  EXPECT_TRUE(path.is_cusp(2));
+  EXPECT_EQ(path.run_bounds(1), std::make_pair(std::size_t{1}, std::size_t{2}));
 }
 
 namespace
