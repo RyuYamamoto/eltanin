@@ -278,9 +278,9 @@ p99 が 6.04 → 2.49、最大が 7.46 → 3.47 と約 2.2 倍緩くなる点で
 | C-2 | **ゴール到達判定は経路点間隔に依存する。** 「最近傍点が末尾の点」で判定するため、最終線分の中点を越えた時点で成立する。点間隔 `s` の経路では最大 `s/2` 手前で止まる (実測 0.024992 m / `s/2 = 0.025`)。距離許容値パラメータは追加していない (navyu 踏襲) |
 | C-3 | **最終姿勢合わせを持たない。** T4 が経路末尾に載せた `goal.yaw` は T5 では使わない。要求 goal の向きに合わせる旋回が必要なら後続タスクが足す。**T5 では持たない。E-10 の `GoalApproach` が引き取った (§12)** |
 | C-4 | **経路点の `yaw` を使わない。** 目標点の方位は `atan2` で作る (navyu 踏襲)。経路の `yaw` を信頼する設計は利用者が現れてから |
-| C-5 | **最近傍 index は単調増加する。** 保存済み index 以降だけを探索するため、終端付近や自己交差で過去区間へ吸着しない。逆走や大きな自己位置ジャンプで過去区間へ戻す用途は対象外 |
+| C-5 | **最近傍 index は単調増加する。** 保存済み index 以降だけを探索するため、終端付近や自己交差で過去区間へ吸着しない。逆走や大きな自己位置ジャンプで過去区間へ戻す用途は対象外。**この単調進捗は `detail::nearest_index_from()` として `GoalApproach` と共有する** (T13) |
 | C-6 | **新しい経路を渡すときは呼び出し側が `reset()` を呼ぶ。** `yaw_aligned_` は経路の入れ替えを検知できないため、新しい経路でも向き合わせが再開しない。`NoPath` / `GoalReached` では自動でリセットされる |
-| C-7 | 後退・カスプ・全方向移動には対応しない。速度は `[0, desired_linear_vel]`、`Twist2D::linear.y()` は常に 0 (差動二輪) |
+| C-7 | 後退・カスプ・全方向移動には対応しない。速度は `[0, desired_linear_vel]`、`Twist2D::linear.y()` は常に 0 (差動二輪)。**T13 以降、後退区間を含む経路は黙って誤追従せず `supports()` が false を返し、基底が `FollowStatus::PathNotSupported` とゼロ指令を返す。**`Direction::InPlace` だけを含む経路は従来どおり受け付ける |
 | C-8 | 実測速度を受け取らない。`compute()` が持つのは指令値であり、状態推定・遅延補償・速度フィードバックは範囲外 (navyu も同じ) |
 | C-9 | スレッド安全性は呼び出し側の責務。既存モジュールと同じ立場 |
 | C-10 | 経路点の座標は有限であることを前提とする。`path` の各点の有限性は検査しない |
@@ -707,11 +707,11 @@ bang-bang の破綻条件は `dt > yaw_goal_tolerance / max_angular_vel = 0.10 s
 | G-1 | 時計を持たない。`dt` を引数で受ける | §1 / navyu 欠陥 7 |
 | G-2 | `compute()` はヒープ確保をしない | §1 / navyu 欠陥 8 |
 | G-3 | コストマップを見ない。障害物由来の減速は `VelocityLimiter` の担当 | C-11 |
-| G-4 | 後退しない。オーバーシュートしても戻らず旋回のみで合わせる | C-7 |
+| G-4 | 後退しない。オーバーシュートしても戻らず旋回のみで合わせる。**T13 でも維持する** (後退でゴールへ進入する経路は扱うが、行き過ぎたときに後退で戻るリカバリは作らない) | C-7 |
 | G-5 | **経路の identity を検知できない。新しい経路では呼び出し側が `reset()` を呼ぶ。** ラッチがあるため本クラスでは必須である | C-6 |
 | G-6 | スレッド安全性は呼び出し側の責務 | C-9 |
 | G-7 | `dt` に上限がある。`create()` は検証できない。打ち切りは進捗検査が行う (12.7) | C-1 |
-| G-8 | 経路は前進のみでカスプを含まず自己交差しないことを前提とする | C-5 |
+| G-8 | **カスプを含む経路を扱う。**進捗を `detail::nearest_index_from()` で単調にしたため、経路が折り返しても `remaining_arc` が飛ばない。自己交差しないことは引き続き前提とする (T13) | C-5 |
 | G-9 | ROS / Rerun / matplotlib-cpp / Python を知らない | `AGENTS.md` |
 | G-10 | 実測速度を受け取らない。状態推定・遅延補償は範囲外 | C-8 |
 | G-11 | 経路点の座標は有限であることを前提とし、検査しない | C-10 |
@@ -823,17 +823,20 @@ follow(state, path, dt)                     非仮想。基底が持つ
 | 段 | 式 |
 |---|---|
 | 1 | `κ_i = path_curvature(path, curvature_window)` |
-| 2 | `v_i = max(min_linear_vel, min(v_max, ω_max/\|κ_i\|, sqrt(a_lat/\|κ_i\|)))` |
-| 3 | 後ろ向きパス `v_i = min(v_i, sqrt(v_{i+1}² + 2·a_decel·Δs_i))`、末尾は `terminal_linear_vel` |
+| 2 | `v_i = max(min_speed, min(v_max, ω_max/\|κ_i\|, sqrt(a_lat/\|κ_i\|)))` |
+| 3 | 後ろ向きパス `v_i = min(v_i, sqrt(v_{i+1}² + 2·a_decel·Δs_i))`、末尾は `terminal_speed`、**カスプは 0** |
+| 4 | 前向きパス `v_i = min(v_i, sqrt(v_{i-1}² + 2·a_decel·Δs_i))`、**カスプから先だけ**掛ける |
 
 段 2 は `κ = 0` で両項が `+inf` になり `min` が `v_max` を選ぶ。**0 除算を分岐で避けず `+inf` を通す**
 ことで分岐が 1 本減り、IEEE754 の意味で正しい。
 
-**クリープ下限 `min_linear_vel` は段 2 にだけ掛ける。** 段 3 の後に掛けると終端の 0 が潰れてゴール手前で
+**クリープ下限 `min_speed` は段 2 にだけ掛ける。** 段 3 の後に掛けると終端の 0 が潰れてゴール手前で
 止まれなくなる。`test_velocity_profile.cpp: TheCreepFloorAppliesToTheCurvatureBoundOnly` が固定している。
 
-**前向きパス (加速度制限) は入れない。** MPC は加速度制約を定式化に持ち、`PurePursuit` は 1 次遅れランプを
-持つ。二重に掛けると「なぜ加速が遅いか」の説明箇所が 2 つになる。
+**前向きパス (加速度制限) は経路先頭からは掛けない。** MPC は加速度制約を定式化に持ち、`PurePursuit` は
+1 次遅れランプを持つ。二重に掛けると「なぜ加速が遅いか」の説明箇所が 2 つになる。**段 4 が走るのはカスプ
+から先だけ**で、カスプを持たない経路では 1 度も掛からず、出力は T13 以前とビット単位で同じである
+(`test_velocity_profile.cpp: APathWithoutCuspsKeepsExactlyTheProfileItHadBefore`)。
 
 | パラメータ | 既定 | 根拠 |
 |---|---|---|
@@ -842,8 +845,8 @@ follow(state, path, dt)                     非仮想。基底が持つ
 | `max_lateral_accel` | 0.50 [m/s²] | **実機未計測。** 保守側に置いたことが根拠であって、測った値ではない |
 | `max_decel` | 0.50 [m/s²] | `GoalApproachParams::approach_decel` と同値 |
 | `curvature_window` | 0.30 [m] | 機体が全速で描ける最小半径 `v_max/ω_max = 0.32 m`。これより短い窓は標本化を測る |
-| `min_linear_vel` | 0.05 [m/s] | 折れ点 1 個で停止させないためのクリープ下限 |
-| `terminal_linear_vel` | 0.0 [m/s] | ゴールを「終端速度 0 の点」として後ろ向きパスに含める |
+| `min_speed` | 0.05 [m/s] | 折れ点 1 個で停止させないためのクリープ下限。**大きさの床**であり、符号付きの下限である `MpcFollowerParams::min_linear_vel` とは別物 (T13 で改名) |
+| `terminal_speed` | 0.0 [m/s] | ゴールを「終端速度 0 の点」として後ろ向きパスに含める (T13 で `terminal_linear_vel` から改名) |
 
 **既定は無効 (`std::optional` が `nullopt`) である。** 有効化して初めて挙動が変わるので、§4.1 に固定した
 `PurePursuit` の閾値は 1 つも動かない。無効時の上界は `+inf` で、`apply_linear_limit()` が恒等写像になる
@@ -858,7 +861,7 @@ follow(state, path, dt)                     非仮想。基底が持つ
 **`GoalApproach` は消していない。** 後ろ向きパスの `sqrt(2·a·s)` は `GoalApproach` の減速則と式も既定値も
 同じなので両者の `min` は実質冪等だが、`GoalApproach` は到達ラッチと最終姿勢合わせという別の責務を持つ。
 
-**既知の相互作用**: `terminal_linear_vel = 0` はプロファイルを持つ追従器を最終姿勢の手前で止める。
+**既知の相互作用**: `terminal_speed = 0` はプロファイルを持つ追従器を最終姿勢の手前で止める。
 `PurePursuit` 単体 (`GoalApproach` なし) では終端許容 (`0.5 × 点間隔`) に届かず `GoalReached` を返せない
 場合がある。§12.1 の合成では `GoalApproach` が `xy_goal_tolerance = 0.10 m` で到達を宣言するので問題は出ない。
 
@@ -1218,7 +1221,7 @@ out = limiter.limit(costmap, model, robot.pose, cmd);
 | # | 制約・前提 |
 |---|---|
 | M-1 | 車両モデルは差動二輪のみ。`Twist2D::linear.y()` は常に 0 |
-| M-2 | 前進のみ (`min_linear_vel` 既定 0)。後退・カスプは実行しない |
+| M-2 | **後退とカスプを実行する** (T13)。`min_linear_vel < 0` が後退を許し、下限は `-max_linear_vel`。既定は 0 のままで、0 のときに後退区間を含む経路が来たら `PathNotSupported` を返す。経路は run (カスプで区切られた極大区間) 単位で追い、run の終端では必ず速度 0 を通る |
 | M-3 | 障害物を見ない。安全は後段の `VelocityLimiter` に依存する |
 | M-4 | 経路点の `yaw` を参照として使う。ただし最終点の yaw は接線に置き換える (§13.5.1) |
 | M-5 | 実機の加減速限界は未計測。`max_angular_accel = 3.0 rad/s²` は測った値ではなく仮値である |
@@ -1241,21 +1244,101 @@ out = limiter.limit(costmap, model, robot.pose, cmd);
 | 6 | QP が非実行可能 | 起きない (§13.4.1)。検査はするが到達しない | — |
 | 7 | 反復上限で打ち切り | 準最適解を棄却してフォールバック | `MpcFollower` |
 | 8 | 解に非有限値 | フォールバックの減速へ落とす | `MpcFollower` |
-| 9 | 曲率が極端に大きい点 | 窓つき外接円で発散しない。加えて段 2 に `min_linear_vel` の下限 | `VelocityProfile` |
+| 9 | 曲率が極端に大きい点 | 窓つき外接円で発散しない。加えて段 2 に `min_speed` の下限 | `VelocityProfile` |
 | 10 | 重複点 (`Δs → 0`) | 外接円の分母が 0 → 曲率 0 | `path_curvature` |
 | 11 | 経路が 2 点 | 窓が取れないので全点 0 → `max_linear_vel` | `path_curvature` |
 | 12 | プロファイル無効 | 上界 `+inf` → `apply_linear_limit()` が恒等写像 | 基底 |
 | 13 | `OFF` ビルドで `"mpc"` | `FollowerError::MpcNotBuilt` | ファクトリ |
-| 14 | 同一位置の連続姿勢 (その場旋回経路) | 参照弧長が進まず yaw だけ飛ぶ。NaN を出さず後退もしないことだけを固定した | 参照生成 |
+| 14 | 同一位置の連続姿勢 (その場旋回経路) | 参照弧長が進まず yaw だけ飛ぶ。`Direction::InPlace` の run は長さ 0 で即座に次へ渡る | 参照生成 |
+| 15 | カスプ (T13) | run の終端で参照速度 0。実速度が `STOPPED_SPEED` を下回るまで次の run を取らない | `MpcFollower` |
+| 16 | 1 周期での速度符号反転 (T13) | 基底が線速度を 0 に置き換える。角速度は残す | 基底 |
 
 ### 13.16 検証しなかったこと / 既知の制限
 
 | # | 内容 |
 |---|---|
 | 1 | **実機検証。** 環境がない。`SimpleSimulator` と合成経路・実マップに限る |
-| 2 | **その場旋回の明示的な実行。** Hybrid A* の `allow_turn_in_place` が作る同一位置の連続姿勢を MPC が能動的に回るモードは持たない。NaN を出さないことと後退しないことだけをテストで固定した |
-| 3 | **後退走行・カスプ。** `min_linear_vel` はパラメータだが既定 0 で、負値での検証はしていない |
+| 2 | **その場旋回の明示的な実行。** Hybrid A* の `allow_turn_in_place` が作る同一位置の連続姿勢を MPC が能動的に回るモードは持たない。`Direction::InPlace` の run は長さ 0 なので即座に次の run へ渡り、向きは `max_heading_error` ゲートの旋回が合わせる |
+| 3 | **後退走行の実機検証。** 単体・合成経路では固定した (直線後退 / 切り返し 1 回 / 2 回、カスプでの 0 通過、run に閉じた投影)。実機 (kachaka) での走行はまだである |
 | 4 | **むだ時間補償。** 実測値がない |
 | 5 | **MPC のコスト関数への障害物項。** C-11 を踏襲した。③ と ④ の差が小さいこと (§13.8) は、次に効くのが速度制御ではなく障害物項である可能性を示している |
 | 6 | **`max_iter` を超えたときの実挙動。** 意図的に `max_iterations = 1` にした単体テストでしか観測していない。既定パラメータの実マップ全周では 1 度も起きていない |
 | 7 | **`R = 0.3 m` 級の円弧に対する Pure Pursuit + プロファイル。** 改善しないことを記録しただけで直していない (§13.10) |
+
+---
+
+## 14. T13: 後退走行 (Hybrid A* / Reeds-Shepp が出す後退区間を実行する)
+
+Hybrid A* は `allow_reverse` で Reeds-Shepp の切り返し経路を計画できたが、追従器が実行できないため
+封印されていた (`docs/planner-design.md` §14.15)。T13 はそれを解いた。**§6 の C-5 / C-7、§12.9 の
+G-4 / G-8、§13.14 の M-2、§13.16 の項目 3 はここで改訂されている。**
+
+### 14.1 契約 (この 3 つからすべてが導かれる)
+
+| ID | 契約 |
+|---|---|
+| **I-1** | **`Pose2D::yaw` は車体の向きであって接線ではない。** 後退区間では 接線 = `yaw + π`。Hybrid A* は元からこれを満たしていた (`propagate()` は `travel < 0` でも yaw を車体向きのまま進める) |
+| **I-2** | **区間種別は姿勢ではなくセグメントが持つ。** 姿勢 `n` 個 ⇔ セグメント `n-1` 個。カスプは「`direction_of(i-1) != direction_of(i)` である姿勢 `i`」として一意に定まる |
+| **I-3** | **指令速度はカスプで必ず 0 を通過する。** 1 周期で符号を跨がない。アルゴリズムの副作用ではなく基底の明示的なガードで担保する |
+
+I-1 を宣言した結果、**追加コードが要らなくなった箇所**が 3 つある。`max_heading_error` ゲート
+(`anchor.yaw` が既に車体向き)、線形化 (`integrate_differential_drive` は符号付き `v` を正しく転がす)、
+横誤差の符号規約。逆に I-1 を破っていたのは `assign_tangent_yaw()` と MPC の終端 yaw 書き換えの 2 箇所
+だけで、直したのはそこである。
+
+### 14.2 型 (`eltanin::Direction` と `Path`)
+
+`Path` はセグメントごとの `std::vector<Direction>` を持つ。**空は「全区間 Forward」を意味する**ので、
+A\* ・costmap・collision・既存テストは 1 行も変わらない。`Pose2D` には欄を足していない
+(`interpolate_pose()` が 2 姿勢の方向をどう合成するか定義できないため)。
+
+| メンバ | 意味 |
+|---|---|
+| `has_directions()` | 明示的に方向を持つか (空 = false = 全前進) |
+| `direction_of(segment)` | 姿勢 `segment` → `segment + 1` の駆動方向 |
+| `is_cusp(pose)` | 前後のセグメント種別が異なる内点か |
+| `has_reverse()` | `Reverse` を 1 つでも含むか |
+| `run_bounds(pose)` | `pose` が属する run の先頭・末尾姿勢 (両端含む)。カスプに立つ姿勢はそこで始まる run を開く |
+
+### 14.3 追従器がしていること
+
+| 部品 | 変更 |
+|---|---|
+| 基底 `PathFollower` | `supports(path)` フックを追加。false なら `follow_on_path()` を呼ばず `FollowStatus::PathNotSupported` とゼロ指令を返す。加えて I-3 の符号跨ぎガード (線速度のみ 0 に置き換え、角速度は残す) |
+| `PurePursuit` | `supports()` は `!path.has_reverse()`。**本体は 1 行も変えていない。**`ω = 2 v sinα / L` は前進でのみ安定な法則なので、対応ではなく拒否にした。`Direction::InPlace` だけの経路は拒否しない (今日の kachaka デモ構成が `allow_turn_in_place: true` のため) |
+| `MpcFollower` | `supports()` は `!has_reverse() \|\| min_linear_vel < 0`。追従は run 単位。投影は `[run_first, run_last]` に閉じ込め、参照は run 終端で 0 に落ち、終端重みがカスプへ引きつける。run を渡すのは「投影が run 終端に達し、かつ実速度が `STOPPED_SPEED` を下回った」ときだけで、達していて止まっていない間は加速度制限で 0 まで落とす |
+| `MpcFollower` (終端 yaw) | 最終セグメントが `Reverse` なら接線 + π、`InPlace` なら書き換えない |
+| `MpcFollower` (ゴール判定) | 折り返す経路は自分のゴールの上を通るので、**最終 run でなければゴールを宣言しない** |
+| `VelocityProfile` | 大きさ (符号なし) のまま。後ろ向き掃引をカスプで止め、カスプから先だけ前向き掃引を足す。`min_linear_vel` → `min_speed`、`terminal_linear_vel` → `terminal_speed` に改名して `MpcFollowerParams::min_linear_vel` (符号付き) との衝突を解消 |
+| `GoalApproach` | `nearest_index` を単調進捗にし、`PurePursuit` と `detail::nearest_index_from()` で共有。カスプで `remaining_arc` が飛ばない |
+| `VelocityLimiter` | **1 行も変えていない。**元から符号対称で、前進と後退の厳密な鏡像が閉ループテストで固定されている |
+
+**`yaw_aligned_` は run をまたいでもクリアしない。** Reeds-Shepp のカスプでは車体向きは連続で、I-1 の下では
+`heading_error ≈ 0` のまま通過する。ここでクリアするとカスプごとに無意味なその場旋回が 1 回入る。
+
+### 14.4 `min_linear_vel` の契約
+
+`create()` は `min_linear_vel < -max_linear_vel` を拒否するようになった。これで `max_linear_vel` が
+**両方向の大きさの上限**になり、`eltanin_ros_common::VelocityLimits` の既存の宣言と一致する。
+
+### 14.5 前進のみ経路への影響 (回帰の実測)
+
+`examples/eltanin_track_on_real_map`、参照マップ `navyu_navigation/map/map.pgm`、既定パラメータ、
+自動選択の start / goal (727 点 / 37.25 m)。基点 `1b70dee` を worktree に出してビルドし直し、同じ条件で
+測った値と並べる。
+
+| 構成 | 最大横方向誤差 | ステップ | `circ` | ゴール残距離 |
+|---|---|---|---|---|
+| MPC (実装前 / 実装後) | 2.61145 cm / **2.61145 cm** | 7463 / **7463** | 50 / **50** | 2.44941 cm / **2.44941 cm** |
+| MPC + プロファイル (実装前 / 実装後) | 2.21836 cm / **2.21836 cm** | 7494 / **7494** | 54 / **54** | 2.41846 cm / **2.41846 cm** |
+| Pure Pursuit (実装前 / 実装後) | 5.01129 cm / **5.01129 cm** | 7532 / **7532** | 79 / **79** | 2.18988 cm / **2.18988 cm** |
+
+**3 構成とも全桁一致した。**前進のみ経路 (方向配列を持たない `Path`) は今日と同じコード経路を通る、
+という設計がそのまま数値に出ている。§6 の C-1 (既存の追従性能を悪化させない) は満たしている。
+
+### 14.6 検証しなかったこと
+
+- **実機 (kachaka) での後退走行。**§13.16 の項目 3 を参照
+- **経路途中のその場旋回の能動実行。**`Direction::InPlace` は表現できるが回す制御モードは作っていない
+- **`PurePursuit` の後退対応。**拒否するところまでで、後退版の制御則は別の設計になる
+- **`GoalApproach` のオーバーシュート後退リカバリ。**G-4 は維持している
