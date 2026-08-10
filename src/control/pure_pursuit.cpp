@@ -36,22 +36,6 @@ constexpr double ALIGNMENT_ANGULAR_VEL_RATIO = 0.5;
 /// Below this the bearing to the target pose is undefined, so the heading error is taken as 0 [m].
 constexpr double MIN_TARGET_DISTANCE = 1e-9;
 
-/// Nearest pose at or after the saved progress; loops and endpoints cannot move it backwards.
-std::size_t nearest_index(
-  const Path & path, const Eigen::Vector2d & position, std::size_t from)
-{
-  std::size_t nearest = std::min(from, path.size() - 1);
-  double min_distance = (path[nearest].position - position).squaredNorm();
-  for (std::size_t i = nearest + 1; i < path.size(); ++i) {
-    const double distance = (path[i].position - position).squaredNorm();
-    if (distance < min_distance) {
-      min_distance = distance;
-      nearest = i;
-    }
-  }
-  return nearest;
-}
-
 Twist2D alignment_command(double heading_error, double max_angular_vel)
 {
   return Twist2D{
@@ -120,7 +104,7 @@ FollowResult PurePursuit::pursue(const FollowerState & state, const Path & path,
 {
   const Pose2D & robot = state.pose;
 
-  const std::size_t nearest = nearest_index(path, robot.position, nearest_index_);
+  const std::size_t nearest = detail::nearest_index_from(path, robot.position, nearest_index_);
   nearest_index_ = nearest;
   if (nearest + 1 == path.size()) {
     const double terminal_spacing =

@@ -748,4 +748,94 @@ TEST(GoalApproach, ApplyLinearLimitDoesNotRaiseTheCommand)
   EXPECT_EQ(cmd_out.angular, cmd_in.angular);
 }
 
+TEST(GoalApproach, ApplyLinearLimitCapsTheMagnitudeOfAReversingCommand)
+{
+  const Twist2D cmd_in{Vector2d{-0.5, 0.0}, 0.8};
+  const Twist2D cmd_out = apply_linear_limit(cmd_in, 0.25);
+
+  EXPECT_DOUBLE_EQ(cmd_out.linear.x(), -0.25);
+  EXPECT_DOUBLE_EQ(cmd_out.angular, 0.4);
+  EXPECT_DOUBLE_EQ(cmd_out.angular / cmd_out.linear.x(), cmd_in.angular / cmd_in.linear.x());
+}
+
+TEST(GoalApproach, ApplyLinearLimitIsExactlyMirroredBetweenTheTwoDirections)
+{
+  for (const double limit : {0.0, 0.1, 0.25, kInf}) {
+    const Twist2D forward = apply_linear_limit(Twist2D{Vector2d{0.5, 0.0}, 0.8}, limit);
+    const Twist2D backward = apply_linear_limit(Twist2D{Vector2d{-0.5, 0.0}, 0.8}, limit);
+    EXPECT_DOUBLE_EQ(backward.linear.x(), -forward.linear.x()) << "limit " << limit;
+    EXPECT_DOUBLE_EQ(backward.angular, forward.angular) << "limit " << limit;
+  }
+}
+
+TEST(GoalApproach, ApplyLinearLimitLeavesASlowReversingCommandAlone)
+{
+  const Twist2D cmd_in{Vector2d{-0.2, 0.0}, 0.3};
+  const Twist2D cmd_out = apply_linear_limit(cmd_in, 0.9);
+
+  EXPECT_EQ(cmd_out.linear.x(), cmd_in.linear.x());
+  EXPECT_EQ(cmd_out.angular, cmd_in.angular);
+}
+
+TEST(GoalApproach, TheRemainingArcDoesNotJumpWhenThePathDoublesBack)
+{
+  GoalApproach approach = make_approach();
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  const std::size_t cusp = 20;
+  ASSERT_TRUE(path.is_cusp(cusp));
+
+  // Walking the forward run, then the reverse run, exactly as the body would.
+  double previous = kInf;
+  for (std::size_t i = 0; i <= cusp; ++i) {
+    const GoalApproach::Result result = approach.compute(path[i], path, APPROACH_DT);
+    EXPECT_LE(result.remaining_arc, previous + 1e-9) << "forward pose " << i;
+    previous = result.remaining_arc;
+  }
+  for (std::size_t i = cusp + 1; i < path.size(); ++i) {
+    const GoalApproach::Result result = approach.compute(path[i], path, APPROACH_DT);
+    EXPECT_LE(result.remaining_arc, previous + 1e-9) << "reverse pose " << i;
+    previous = result.remaining_arc;
+  }
+  EXPECT_LE(previous, GoalApproachParams{}.xy_goal_tolerance);
+}
+
+TEST(GoalApproach, WithoutMonotoneProgressTheArcWouldReadTheNearSideOfTheCusp)
+{
+  GoalApproach approach = make_approach();
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  const std::size_t cusp = 20;
+
+  // Halfway out on the forward run the body sits on top of the reverse run's last poses.
+  const GoalApproach::Result early = approach.compute(path[10], path, APPROACH_DT);
+  // Both legs still have to be driven, so the arc is the whole 1.5 m less what is behind.
+  EXPECT_NEAR(early.remaining_arc, 1.0, 1e-9);
+
+  const GoalApproach::Result at_cusp = approach.compute(path[cusp], path, APPROACH_DT);
+  EXPECT_NEAR(at_cusp.remaining_arc, 0.5, 1e-9);
+}
+
+TEST(GoalApproach, AGoalReachedBackwardsStillDeceleratesAndLatches)
+{
+  GoalApproachParams params;
+  params.approach_distance = 0.4;
+  GoalApproach approach = make_approach(params);
+  const Path path = eltanin_test::make_reverse_straight_path(1.0, 0.05);
+
+  bool decelerated = false;
+  for (std::size_t i = 0; i < path.size(); ++i) {
+    const GoalApproach::Result result = approach.compute(path[i], path, APPROACH_DT);
+    if (result.state == GoalApproach::State::Approaching) {
+      decelerated = true;
+      EXPECT_GE(result.linear_vel_limit, 0.0);
+      EXPECT_LE(
+        result.linear_vel_limit,
+        std::sqrt(2.0 * params.approach_decel * params.approach_distance) + 1e-9);
+    }
+  }
+  EXPECT_TRUE(decelerated);
+  const GoalApproach::Result final_result =
+    approach.compute(path[path.size() - 1], path, APPROACH_DT);
+  EXPECT_EQ(final_result.state, GoalApproach::State::Reached);
+}
+
 }  // namespace

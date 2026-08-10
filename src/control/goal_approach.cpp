@@ -35,21 +35,6 @@ constexpr double YAW_ALIGN_GAIN = 2.0;
 /// Linear velocities below this magnitude [m/s] carry no ratio.
 constexpr double MIN_LINEAR_VEL = 1e-9;
 
-/// Twin of nearest_index() in pure_pursuit.cpp; merging them is left to E-2 / E-3 (S8).
-std::size_t nearest_index(const Path & path, const Eigen::Vector2d & position)
-{
-  std::size_t nearest = 0;
-  double min_distance = (path[0].position - position).squaredNorm();
-  for (std::size_t i = 1; i < path.size(); ++i) {
-    const double distance = (path[i].position - position).squaredNorm();
-    if (distance < min_distance) {
-      min_distance = distance;
-      nearest = i;
-    }
-  }
-  return nearest;
-}
-
 /// Polyline length from `from` to the last pose; 0 when `from` is already the last one.
 double remaining_arc_from(const Path & path, std::size_t from)
 {
@@ -75,6 +60,22 @@ Twist2D apply_linear_limit(const Twist2D & cmd_in, double limit)
   const double v_out = std::clamp(v_in, -limit, limit);
   const double ratio = (std::abs(v_in) > MIN_LINEAR_VEL) ? v_out / v_in : 1.0;
   return Twist2D{Eigen::Vector2d{v_out, 0.0}, cmd_in.angular * ratio};
+}
+
+std::size_t nearest_index_from(
+  const Path & path, const Eigen::Vector2d & position, std::size_t from)
+{
+  assert(!path.empty());
+  std::size_t nearest = std::min(from, path.size() - 1);
+  double min_distance = (path[nearest].position - position).squaredNorm();
+  for (std::size_t i = nearest + 1; i < path.size(); ++i) {
+    const double distance = (path[i].position - position).squaredNorm();
+    if (distance < min_distance) {
+      min_distance = distance;
+      nearest = i;
+    }
+  }
+  return nearest;
 }
 
 }  // namespace detail
@@ -118,7 +119,8 @@ GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & pa
   Result result;
   if (!path.empty()) {
     const Pose2D & goal = path[path.size() - 1];
-    const std::size_t nearest = nearest_index(path, robot.position);
+    progress_ = detail::nearest_index_from(path, robot.position, progress_);
+    const std::size_t nearest = progress_;
     result.position_error = (goal.position - robot.position).norm();
     result.remaining_arc =
       std::max(remaining_arc_from(path, nearest), result.position_error);
@@ -172,6 +174,7 @@ void GoalApproach::reset() noexcept
 {
   latched_.reset();
   align_elapsed_ = 0.0;
+  progress_ = 0;
 }
 
 }  // namespace eltanin::control

@@ -18,6 +18,7 @@
 #include <eltanin/core/path.hpp>
 #include <eltanin/core/types.hpp>
 
+#include <cstddef>
 #include <limits>
 #include <optional>
 
@@ -45,6 +46,10 @@ namespace detail
 
 /// Scales the whole command so the curvature is preserved; `limit` may be +inf (identity).
 Twist2D apply_linear_limit(const Twist2D & cmd_in, double limit);
+
+/// Nearest pose at or after `from`; a path that doubles back cannot pull the progress backwards.
+std::size_t nearest_index_from(
+  const Path & path, const Eigen::Vector2d & position, std::size_t from);
 
 }  // namespace detail
 
@@ -92,6 +97,8 @@ private:
   /// Set once Reached or AlignmentTimeout is entered; nothing but reset() clears it.
   std::optional<State> latched_{};
   double align_elapsed_{0.0};
+  /// Search progress on the current path; reset() is required when the path changes.
+  std::size_t progress_{0};
 };
 
 }  // namespace eltanin::control
