@@ -47,9 +47,10 @@ namespace detail
 /// Scales the whole command so the curvature is preserved; `limit` may be +inf (identity).
 Twist2D apply_linear_limit(const Twist2D & cmd_in, double limit);
 
-/// Nearest pose at or after `from`; a path that doubles back cannot pull the progress backwards.
+/// Nearest pose in [from, to]; progress can neither be pulled backwards nor jump over a cusp.
 std::size_t nearest_index_from(
-  const Path & path, const Eigen::Vector2d & position, std::size_t from);
+  const Path & path, const Eigen::Vector2d & position, std::size_t from,
+  std::size_t to = std::numeric_limits<std::size_t>::max());
 
 }  // namespace detail
 

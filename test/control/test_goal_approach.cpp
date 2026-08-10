@@ -838,4 +838,75 @@ TEST(GoalApproach, AGoalReachedBackwardsStillDeceleratesAndLatches)
   EXPECT_EQ(final_result.state, GoalApproach::State::Reached);
 }
 
+namespace
+{
+
+/// Out along +x and back 5 mm to the side: the shape a parking manoeuvre really has on the robot.
+Path make_retracing_cusp_path()
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  for (int i = 1; i <= 20; ++i) {
+    path.push_back(Pose2D{Vector2d{0.05 * i, 0.0}, 0.0}, eltanin::Direction::Forward);
+  }
+  for (int i = 1; i <= 20; ++i) {
+    path.push_back(Pose2D{Vector2d{1.0 - 0.05 * i, 0.005}, 0.0}, eltanin::Direction::Reverse);
+  }
+  return path;
+}
+
+/// Tracking error puts the body nearer the return leg than the outbound one it is actually on.
+Pose2D on_outbound_leg(double x)
+{
+  return Pose2D{Vector2d{x, 0.004}, 0.0};
+}
+
+}  // namespace
+
+TEST(GoalApproach, ProgressDoesNotJumpOntoTheReturnLegOfACusp)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_retracing_cusp_path();
+  ASSERT_TRUE(path.is_cusp(20));
+
+  const GoalApproach::Result result = approach.compute(on_outbound_leg(0.5), path, APPROACH_DT);
+
+  // Half the outbound leg plus the whole return leg is still to be driven, not just half of one.
+  EXPECT_NEAR(result.remaining_arc, 1.5, 0.02);
+  EXPECT_EQ(result.state, GoalApproach::State::Inactive);
+}
+
+TEST(GoalApproach, TheOutboundLegIsNeverMistakenForTheApproach)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_retracing_cusp_path();
+
+  for (int i = 0; i <= 20; ++i) {
+    const GoalApproach::Result result =
+      approach.compute(on_outbound_leg(0.05 * i), path, APPROACH_DT);
+    EXPECT_GE(result.remaining_arc, 1.0 - 1e-9) << "outbound pose " << i;
+    EXPECT_EQ(result.state, GoalApproach::State::Inactive) << "outbound pose " << i;
+  }
+}
+
+TEST(GoalApproach, TheProgressCrossesTheCuspOnceTheBodyReachesIt)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_retracing_cusp_path();
+
+  double previous = kInf;
+  for (int i = 0; i <= 20; ++i) {
+    const GoalApproach::Result result =
+      approach.compute(on_outbound_leg(0.05 * i), path, APPROACH_DT);
+    EXPECT_LE(result.remaining_arc, previous + 1e-9) << "outbound pose " << i;
+    previous = result.remaining_arc;
+  }
+  for (std::size_t i = 21; i < path.size(); ++i) {
+    const GoalApproach::Result result = approach.compute(path[i], path, APPROACH_DT);
+    EXPECT_LE(result.remaining_arc, previous + 1e-9) << "return pose " << i;
+    previous = result.remaining_arc;
+  }
+  EXPECT_LE(previous, GoalApproachParams{}.xy_goal_tolerance);
+}
+
 }  // namespace

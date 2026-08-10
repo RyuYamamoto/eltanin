@@ -63,12 +63,13 @@ Twist2D apply_linear_limit(const Twist2D & cmd_in, double limit)
 }
 
 std::size_t nearest_index_from(
-  const Path & path, const Eigen::Vector2d & position, std::size_t from)
+  const Path & path, const Eigen::Vector2d & position, std::size_t from, std::size_t to)
 {
   assert(!path.empty());
-  std::size_t nearest = std::min(from, path.size() - 1);
+  const std::size_t last = std::min(to, path.size() - 1);
+  std::size_t nearest = std::min(from, last);
   double min_distance = (path[nearest].position - position).squaredNorm();
-  for (std::size_t i = nearest + 1; i < path.size(); ++i) {
+  for (std::size_t i = nearest + 1; i <= last; ++i) {
     const double distance = (path[i].position - position).squaredNorm();
     if (distance < min_distance) {
       min_distance = distance;
@@ -119,7 +120,10 @@ GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & pa
   Result result;
   if (!path.empty()) {
     const Pose2D & goal = path[path.size() - 1];
-    progress_ = detail::nearest_index_from(path, robot.position, progress_);
+    // The two legs of a cusp run within millimetres of each other, so the search has to be held
+    // inside the run the body is driving; without that the return leg reads as "almost the goal".
+    progress_ = detail::nearest_index_from(
+      path, robot.position, progress_, path.run_bounds(progress_).second);
     const std::size_t nearest = progress_;
     result.position_error = (goal.position - robot.position).norm();
     result.remaining_arc =
