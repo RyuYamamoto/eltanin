@@ -175,6 +175,22 @@ check_footprint_exact:
 `VelocityLimiterParams::exact_footprint_check` (既定 `true`) が `limit()` の 1 step ごとの
 呼び分けを決める。`bool` に不正値がないので `create()` の検証 (§6) には足していない。
 
+#### 2.5.1 距離マップ上では `Free` 短絡が正当になる (T12)
+
+`collision_predictor` は `local_map` をそのまま渡すのではなく、受信ごとに
+`map::build_distance_map()` で距離マップ (`GridMap<float>`) を作ってから渡す (§3.9)。
+セル値が障害物までの距離そのものなので `d(中心) > circumscribed_radius` は
+「どの向きでも衝突しない」を**厳密に含意する**。つまり距離マップの上では
+第 1 段の `Free` 短絡は近似ではなく定理であり、R-10 の欠陥そのものが消える。
+
+| | 膨張なしコストマップ | 距離マップ |
+|---|---|---|
+| 第 1 段の `Free` 短絡 | **不当** (`LETHAL` に重なる姿勢を `Free` と返す) | **正当** |
+| `exact_footprint_check` の意味 | 安全のために必須 | 性能の選択。`false` でも結果は正しい |
+
+既定 `true` は維持する。`Free` 帯では両者が必ず一致するので無害であり、
+膨張なしコストマップを直接渡す利用者が現れたときに退化しないため。
+
 **「走行では 0 サイクルしか変わらない」を「厳密判定は不要」と読まないこと。**変わらないのは
 走行が通る姿勢が膨張帯を避けて計画された経路上にあるからで、膨張のない `local_map` を渡す
 `collision_predictor` では 2 つの入口の結果は日常的に食い違う
@@ -214,11 +230,13 @@ cmd_vel_in_.angular.z = std::min(w_lim, cmd_vel_in_.angular.z);
 
 ```cpp
 const double d_col = std::max(0.0, collision_distance - params.collision_margin);
-const double v_max = std::sqrt(2.0 * params.max_deceleration * d_col);  // 常に非負 = 大きさの上限
+const double v_max = std::min(                       // 2 本の上限の小さい方 (§3.6)
+  std::sqrt(2.0 * params.max_deceleration * d_col),  // 制動距離則
+  d_col / params.reaction_time);                     // 反応時間則
 const double v_in  = cmd_in.linear.x();
-const double v_out = std::clamp(v_in, -v_max, v_max);                   // 符号を保つ
-const double ratio = (std::abs(v_in) > MIN_LINEAR_VEL) ? v_out / v_in : 1.0;
-double w_out = cmd_in.angular * ratio;                                  // 曲率を維持
+const double v_out = std::clamp(v_in * proximity_scale, -v_max, v_max);  // 符号を保つ
+const double ratio = (std::abs(v_in) > MIN_LINEAR_VEL) ? v_out / v_in : proximity_scale;
+double w_out = cmd_in.angular * ratio;                                   // 曲率を維持
 ```
 
 | 性質 | 根拠 |
@@ -232,17 +250,27 @@ double w_out = cmd_in.angular * ratio;                                  // 曲�
 `limit_command()` は**非テンプレートで `.cpp` に置き、マップを一切見ない**。後退バグの回帰テストが
 コストマップを組まずに書けることを構造で保証している。
 
-### 3.1 制限量は階段状に落ちる
+### 3.1 制限量は階段状に落ちていた (T12 で解消)
 
-`collision_distance` は予測 1 step の弧長 `abs(v) * dt` (既定 0.1 m) の倍数に量子化されるため、
-閉ループの `v_out` は単調にも等間隔にも減らない (実測: `-0.4472, -0.4472, -0.3162, -0.3162, 0`)。
-滑らかにするには `prediction_steps` を上げるしかない。テストは単調性を仮定せず、
+**T12 以前**: `collision_distance` は予測 1 step の弧長 `abs(v) * dt` の倍数に量子化されるため、
+閉ループの `v_out` は単調にも等間隔にも減らなかった (実測: `-0.4472, -0.4472, -0.3162, -0.3162, 0`)。
+kachaka の同梱既定値 (`v = 0.30`, 1 step = 0.06 m, `a = 0.5`, `margin = 0.2`) では
+`v_out < 0.30` になるのは `d < 0.29 m` のときだけで、**フルスピードと完全停止の間に
+中間段が 1 つしか無い = 出力が実質 3 値**だった。滑らかにするには `prediction_steps` を
+上げるしかなかった。
+
+**T12 以降**: 悪いのは制動距離則ではなく入力の量子化なので、`prediction_steps` を上げるのではなく
+**衝突が見つかった 1 step だけを二分探索で詰める** (§3.7)。kachaka で分解能 1.7 mm になり、
+階段は消えた。テストは引き続き単調性も等間隔も仮定せず、次の 3 点で固定する。
 
 - 各周期で「制限後の指令で進んだ姿勢が衝突していない」(安全性)
 - 有限周期内に `v_out == 0.0` に到達する (停止性)
-- 停止余裕が `[collision_margin, collision_margin + 2 * abs(v) * dt]` に入る (過剰に手前で止まらない)
+- 停止余裕が `[collision_margin - q, collision_margin + 2 * abs(v) * dt]` に入る
+  (過剰に手前で止まらない)。`q = abs(v) * dt / 2^4` は二分探索の分解能である
 
-の 3 点で固定している。
+下限に `q` が付くのは、**距離が正確になったぶん余分な安全余裕が消えたから**である。
+T12 以前は量子化が最大 1 step 分 (0.065 m) だけ距離を過小評価しており、
+それが `collision_margin` の外側にそのまま上乗せされていた。
 
 ### 3.2 弧長は弦長ではない
 
@@ -262,6 +290,147 @@ double w_out = cmd_in.angular * ratio;                                  // 曲�
 最初に判定するのは 1 step 先である。既に重なっている姿勢は指令を 0 にしても直らないので、
 リミッタの責務ではない。ただし指令が完全に 0 のときは 1 step 先 = 現在姿勢になるため、
 結果として現在姿勢が判定される (`has_collision = true`、`collision_distance = 0`)。
+
+### 3.5 予測地平は速度から導出する (T12)
+
+**T12 以前**: `prediction_time` (既定 2.0 s) という設定値だった。定速ツイストで時間 `t` 進めた
+横方向位置は `y = (v/w)(1 - cos wt)` で、`w` の揺れ `Delta w` への感度は先頭項で
+**`Delta w * v * t^2 / 2`**。経路追従中の pure pursuit は `w` が周期ごとに揺れるので:
+
+| 地平 `t` | 先端の横方向ばらつき (`Delta w = 0.5`, `v = 0.3`) | フットプリント半幅 0.12 m との比 |
+|---|---|---|
+| **2.0 s (旧既定)** | **0.30 m** | **2.5 倍** |
+| 1.0 s | 0.075 m | 0.6 倍 |
+| 0.9 s | 0.061 m | 0.5 倍 |
+
+`t^2` で効くため、2.0 s の先端はノイズであり、そこでの衝突判定は周期ごとに反転する。
+一方で物理的に必要な地平は 0.9 s しかない (制動時間 `abs(v)/a` = 0.6 s +
+レイテンシ予算 0.3 s)。**余分な地平はノイズにしかなっていなかった。**
+
+**T12 以降**: `prediction_time` を廃止し、地平を導出量にした。
+
+```
+horizon(v) = reaction_time + abs(v) / max_deceleration
+dt(v)      = horizon(v) / prediction_steps
+```
+
+- 先端は「止まるのに必要な分 + レイテンシ分」しか伸びない。kachaka で 0.9 s / 0.27 m。
+- 低速では自動的に短くなる (`v = 0` で `horizon = reaction_time`)。**任意の秒数を選ぶ必要がない。**
+- すり抜けの検証がパラメータではなく導出量になる:
+  `max_linear_vel * horizon(max_linear_vel) / prediction_steps < 2 * inscribed_radius`。
+  速度上限を上げると `prediction_steps` を増やす必要が出る、という関係が式で見える。
+  **この検査は ROS 側の起動時警告に置いた** (`eltanin` は速度上限を知らない)。
+- 予測に使うのは実速度ではなく**要求指令**である (§9)。地平が要求指令から決まるので、
+  出力を絞っても地平は縮まず、「見えなくなって加速し直す」振動は起きない。
+
+### 3.6 反応時間の項 (TTC)
+
+制動距離則だけだと、レイテンシ (センサ齢 + 制御周期 + `cmd_timeout` + ドライバの watchdog) の
+間に詰めきる速度が許される。**TTC = `(collision_distance - margin) / abs(v)` が
+`reaction_time` を下回らない**ことを要求すると、上限が 1 本増える。
+
+```
+v_max_brake    = sqrt(2 * max_deceleration * f)     f = max(0, collision_distance - margin)
+v_max_reaction = f / reaction_time
+v_max          = min(v_max_brake, v_max_reaction)
+```
+
+- 2 項の交点は `f = 2 * max_deceleration * reaction_time^2` = kachaka で **0.09 m**。
+  それより近いと反応項が縛る。
+- `reaction_time` が地平の導出 (§3.5) と この項の両方に使われるのは意図的である。
+  **「レイテンシ予算」という 1 つの数字が 2 箇所で一貫して効く。**
+- 無衝突は `f = +inf` → 両項 `+inf` → 素通し。§3 の性質はすべて保たれる。
+- `Result::time_to_collision` に秒単位で出す。実機で読める一次情報になる。
+
+**副作用: 停止までの周期数が増える。**反応項は `f` について線形なので、`f` は
+おおよそ幾何級数で減る (比 `1 - control_dt / reaction_time`)。制動距離則だけなら
+`sqrt` の overshoot で余裕に食い込んで有限回で 0 になっていた。実際に 0 に到達するのは
+`collision_distance` が二分探索の分解能 (§3.7) で量子化されているからで、
+kachaka 相当の閉ループで 6 周期 → 14 周期程度になる。**「止まらなくなる」のではなく
+「最後の数 cm を這って止まる」**方向の変化である。
+
+### 3.7 衝突した 1 step だけを二分探索で詰める
+
+```
+step k-1 が自由, step k が衝突 -> 区間 [0, dt] を COLLISION_REFINEMENT_STEPS 回二分し、
+最後に自由だった点までの弧長を collision_distance とする。
+```
+
+| 論点 | 判断 |
+|---|---|
+| 回数を固定 (4 回) にした | **安全に効く分解能を設定で外せるようにしない。**kachaka では 1 step = 0.027 m なので分解能 1.7 mm |
+| `prediction_steps` を増やすのではない | 追加コストは 1 周期あたり 4 判定。`prediction_steps` を 4 倍にするより安く、地平の形も変わらない |
+| マップ外を衝突側に倒す | 区間内でマップから出た場合は安全側 (`blocked`) に寄せる。距離を伸ばす方向には絶対に倒さない |
+| 常に「最後に自由だった点」を採る | 真の境界を**下から**近似する。誤差は 1 step の 1/16 で、必ず安全側 |
+| 単調性の仮定 | 区間内で衝突が単調であることを仮定している。1 step の弧長がフットプリント厚より十分小さいことが根拠で、それを保証するのが §3.5 のすり抜け検査である |
+
+### 3.8 近接ランプ (減速はするが停止はしない)
+
+単一セルの誤検知が即全停止になるのを避け、狭所を滑らかに走るために、
+**クリアランスに応じた無次元スケール**を掛ける。
+
+```
+clearance = min over (現在のフットプリント中心, 直進スイープ) の d(点) - circumscribed_radius
+            スイープは現在の向き、符号は v の符号、長さは制動距離 v^2 / 2a
+
+scale = 1                                                     (c >= slow_down_clearance)
+      = min_proximity_scale                                   (c <= stop_clearance)
+      = min + (1 - min) * (c - stop) / (slow - stop)           (その間)
+```
+
+| 論点 | 判断 |
+|---|---|
+| **`min_proximity_scale > 0` は本質的** | ランプが 0 に落ちられると狭い通路を走ること自体ができない。kachaka は半幅 0.12 m なので 0.6 m の廊下でクリアランスは 0.13 m しかない。**停止できる経路は §3 / §3.6 の縦方向 2 項だけ**であり、`create()` が `(0, 1]` を強制する |
+| 入力にロールアウトの姿勢を使わない | §3.5 のとおり先端は `w` の揺れで暴れる。近接項は `w` が入らない量だけから作る |
+| クリアランスは外接円で測る | `d(中心) - circumscribed_radius` は保守側の下界。境界サンプリングはしない。精度より「間違えようがないこと」を採る |
+| 曲率を無視する | 急旋回中に横へ振り出す側のクリアランスは見落とす。**衝突そのものはロールアウトを使う縦方向 2 項が見ている**ので、見落としても停止性は落ちない。近接項は「減速の滑らかさ」を担う項である |
+| 純旋回にも掛ける | 予測が実際に衝突する回転は従来どおり `w = 0`。衝突しない回転は `w_in * scale` で遅くなる |
+
+3 つの量は別物であり、全部必要である。
+
+- `collision_margin` + `max_deceleration` = **縦**「ぶつかる前に止まれるか」
+- `reaction_time` = **縦**「レイテンシの間に詰めきらないか」
+- `stop_clearance` / `slow_down_clearance` = **横**「この狭さで何 m/s まで許すか」
+
+### 3.9 クリアランスを持つのは距離マップだけ
+
+近接ランプの入力はセル値が距離であることを要求する。`uint8_t` コストマップは満たさない。
+`core/traversability.hpp` に 3 つ目の**任意**契約を足して分岐した。
+
+```cpp
+template <class Model, class Cell>
+concept ClearanceModel = requires(const Model & m, Cell c) {
+  { m.clearance(c) } -> std::same_as<double>;
+};
+```
+
+`limit()` の中で `if constexpr (ClearanceModel<Model, cell_type>)` により近接ランプを適用する。
+`CostTraversabilityModel` は満たさないので、**コストマップで呼べば T12 以前と同じ則**になる。
+
+「1 つの名前に 2 つの振る舞い」のリスクは**観測可能にすることで塞ぐ**。`Result::clearance` を
+`std::optional<double>` にし、コストマップ経路では `nullopt` にした。ノードは毎周期の診断に
+`clearance_available` として出す。距離マップ専用にしてコストマップ経路を消す案は
+`examples` 2 本と統合デモを巻き込むので採らない。
+
+距離マップ自体は `map::build_distance_map()` (Felzenszwalb-Huttenlocher の分離可能 2 パス法、
+`O(cells)`) が作る。詳細と `InflationLayer` の LUT との違いは `docs/costmap-design.md` §7.1。
+
+### 3.10 時間の項は `VelocityLimiter` の外に出す
+
+`limit()` が `const` で周期間の状態を持たないことは意図的な設計性質であり (§6)、崩さない。
+片側ヒステリシスは `VelocityGovernor` という別クラスに置いた。
+
+```
+held = min(scale_raw, held + dt / release_time)
+```
+
+- **下げは即時、上げはレート制限。**`dt <= 0` は「現在の (より厳しい) 制限を保持」。
+- **停止側に時間フィルタは入れない。**単一セルの誤検知への対策は「連続ランプで 1 セルが
+  全停止にならないこと」(§3.8) と「障害物層で N 回ヒットを要求すること」(`local_map` 側) であり、
+  **停止を遅らせることではない。**
+- `Governor::update()` は `limit()` を呼んだあと `detail::limit_command()` を
+  `held` で 1 回引き直すだけである。予測はやり直さない。
+- 幾何と則は `VelocityLimiter`、時間は `VelocityGovernor`。ノードが持つのは後者である。
 
 ---
 
@@ -354,9 +523,15 @@ T1 から移送された要件のうち**重心 / 点と多角形の符号付き
 | `inscribed_radius(footprint).has_value()` | 「n >= 3」「`abs(area) > 1e-12`」「原点が内部」を一度に課す。退化検査を自作しない |
 | `is_convex(footprint)` | 凸に限定する (`contains` は凹でも正しいが、内接半径の意味づけが凸を前提にする) |
 | `prediction_steps >= 1` | `dt` の除算 |
-| `prediction_time` が有限かつ正 | |
+| `reaction_time` が有限かつ正 | 地平の導出 (§3.5) と反応時間則 (§3.6) の両方で割る |
 | `collision_margin` が有限かつ非負 | |
-| `max_deceleration` が有限かつ正 | `v_max = sqrt(2 a d)` の a。0 だと常停止になる |
+| `max_deceleration` が有限かつ正 | `v_max = sqrt(2 a d)` の a。0 だと常停止になる。地平の導出でも割る |
+| `stop_clearance` が有限かつ非負 | |
+| `slow_down_clearance > stop_clearance` | ランプの分母 |
+| `min_proximity_scale` が `(0, 1]` | **0 を許すと近接ランプが停止になり狭路が通れなくなる** (§3.8) |
+| `circumscribed_radius(footprint)` が求まる | 近接ランプのオフセット。`limit()` の中で毎回計算しない |
+
+`VelocityGovernor::create()` は上記に加えて `release_time` が有限かつ正であることを課す。
 
 通過したら footprint を CCW に正規化して保持する。`params()` が返す footprint は
 入力と頂点順序が違いうる。
@@ -404,8 +579,14 @@ ROS ノード化は後続タスクである。T7 は ROS を使わない統合�
   後者は `transform(footprint, pose)` で world 系に移すこと。**コアは描画しない。**
 - 曲率に応じた減速を足す場合、`v_max` をもう 1 本作って `min` を取る形で合成できる。
   `Result` は 1 つで足り、ゾーンやモードを増やす必要はない。`collision` 側の API は変わらない。
+  **T12 の反応時間則 (§3.6) はまさにこの形で足した。**
 - スキャン点に対する判定 (`footprint_hits_points`) はコストマップを作らない構成で使える。
-- 実速度ではなく**要求指令**で予測している。実速度が低くても予測地平は縮まない (navyu 踏襲)。
+- 実速度ではなく**要求指令**で予測している (T12 でも変えていない)。「今の指令を実行したら
+  何が起きるか」を答えるのがこのモジュールの仕事だからである。地平は要求指令の大きさから
+  導出されるので (§3.5)、出力を絞っても視野は縮まない。
+- ノードが持つのは `VelocityGovernor` である。`local_map` は受信ごとに 1 回だけ
+  `build_distance_map()` に通し、距離マップを保持する。コストマップは保持しない
+  (`is_obstacle` が距離 0 だけを見るので、距離マップ 1 枚で障害物の同一性も保たれる)。
 
 ---
 
@@ -419,8 +600,10 @@ ROS ノード化は後続タスクである。T7 は ROS を使わない統合�
 | `test/map/test_cost_model.cpp` (追記) | `is_obstacle` が `LETHAL` のみ / 未知セル政策 / 膨張値は `Inscribed` だが非占有 |
 | `test/sim/test_simple_simulator.cpp` | 既定構築 / `set_pose` / `update` の戻り値 / **共有積分との厳密一致** / 累積 |
 | `test/collision/test_collision_checker.cpp` | `FirstStage` / 8 方位の短絡 / `Circumscribed` の向き依存 / 辺上・頂点上 / クランプ / 各粒度の層 / 厳密入口 (`check_footprint_exact`) の非膨張マップ回帰・`OutsideMap` 一致・保守性の単調性 |
-| `test/collision/test_velocity_limiter.cpp` | `create` の検証 9 通り / 制限式 (後退の回帰) / 曲率保持 / 素通し / 打ち切り / 決定性 / 頂点順序不変 / `exact_footprint_check` の既定と分岐 |
-| `test/collision/test_velocity_limiter_closed_loop.cpp` | 前進・後退の停止、各周期の無衝突、停止余裕、純旋回が阻害されないこと |
+| `test/map/test_distance_map.cpp` | 総当たり計算との一致 / 障害物セルが厳密に 0 / `max_distance` の飽和 (マップが `max_distance` より小さい場合を含む) / unknown がモデル経由で源になること / `nullopt` の条件 / 1 行 1 列の 2 パス |
+| `test/collision/test_velocity_limiter.cpp` | `create` の検証 / 制限式 (後退の回帰) / 曲率保持 / 素通し / 打ち切り / 決定性 / 頂点順序不変 / `exact_footprint_check` の既定と分岐 / **地平の導出 / 二分細分化 / 反応時間則の交点 / 近接ランプの単調性と下限 / コストマップ経路で `clearance` が `nullopt`** |
+| `test/collision/test_velocity_limiter_closed_loop.cpp` | 前進・後退の停止、各周期の無衝突、停止余裕、純旋回が阻害されないこと、**0.6 m 通路を止まらずに通れること (近接ランプが停止に化けない回帰)** |
+| `test/collision/test_velocity_governor.cpp` | 下げが即時 / 上げが `release_time` のレート / `dt <= 0` で保持 / `reset()` 後も次の周期で即座に下がる / コストマップ経路ではヒステリシスが働かない |
 
 ---
 

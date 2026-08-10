@@ -17,6 +17,7 @@
 #include <eltanin/core/footprint.hpp>
 #include <eltanin/core/polygon.hpp>
 #include <eltanin/map/cost_model.hpp>
+#include <eltanin/map/distance_map.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/map/layers/inflation_layer.hpp>
 #include <eltanin/map_io/pgm.hpp>
@@ -28,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <vector>
@@ -104,6 +106,18 @@ Scenario wall_scenario(const InflationCostModel & inflation)
   return inflate(std::move(map), inflation);
 }
 
+/// The same wall with no inflation at all; the shape collision_predictor turns into a distance map.
+Costmap raw_wall_map()
+{
+  Costmap map(
+    MapGeometry(MAP_CELLS, MAP_CELLS, RESOLUTION, Eigen::Vector2d::Zero()),
+    eltanin::map::FREE_SPACE);
+  for (int my = 0; my < map.size_y(); ++my) {
+    map(MAP_CELLS - 1, my) = eltanin::map::LETHAL_OBSTACLE;
+  }
+  return map;
+}
+
 /// A single lethal cell diagonally offset from the robot, which lands in the Circumscribed band.
 Scenario single_obstacle_scenario(const InflationCostModel & inflation, int offset_x, int offset_y)
 {
@@ -155,6 +169,41 @@ bool write_velocity_profile(
         << forward.command.linear.x() << ',' << reverse.command.linear.x() << ','
         << navyu_limit(braking_limit(forward.collision_distance), REQUESTED_SPEED) << ','
         << navyu_limit(braking_limit(reverse.collision_distance), -REQUESTED_SPEED) << '\n';
+  }
+  return static_cast<bool>(out);
+}
+
+/// Cross-section of the distance-map law: the clearance, the proximity ramp and the two caps.
+bool write_distance_profile(
+  const std::filesystem::path & file, const VelocityLimiter & limiter)
+{
+  const auto distances = eltanin::map::build_distance_map(
+    raw_wall_map(),
+    CostTraversabilityModel(eltanin::map::INSCRIBED_INFLATED_OBSTACLE, false),
+    eltanin::map::DistanceMapParams{});
+  const auto model =
+    DistanceTraversabilityModel::from_footprint(limiter.footprint(), INFLATION_RADIUS);
+  if (!distances.has_value() || !model.has_value()) {
+    return false;
+  }
+
+  std::ofstream out(file);
+  if (!out) {
+    return false;
+  }
+  const double wall_x = cell_centre(MAP_CELLS - 1, 0).x();
+  out << "gap,collision_distance,time_to_collision,clearance,proximity_scale,v_out\n";
+
+  for (int mx = 10; mx < MAP_CELLS - 1; ++mx) {
+    const Eigen::Vector2d position = cell_centre(mx, MAP_CELLS / 2);
+    const VelocityLimiter::Result forward = limiter.limit(
+      *distances, *model, Pose2D{position, 0.0},
+      Twist2D{Eigen::Vector2d{REQUESTED_SPEED, 0.0}, 0.0});
+
+    out << wall_x - position.x() << ',' << forward.collision_distance << ','
+        << forward.time_to_collision << ','
+        << forward.clearance.value_or(std::numeric_limits<double>::quiet_NaN()) << ','
+        << forward.proximity_scale << ',' << forward.command.linear.x() << '\n';
   }
   return static_cast<bool>(out);
 }
@@ -287,6 +336,7 @@ int main(int argc, char ** argv)
 
   if (
     !write_velocity_profile(output_dir / "velocity_profile.csv", wall, *limiter) ||
+    !write_distance_profile(output_dir / "distance_profile.csv", *limiter) ||
     !write_closed_loop_csv(output_dir / "closed_loop_forward.csv", wall, *limiter, REQUESTED_SPEED) ||
     !write_heading_sweep(output_dir / "heading_sweep_diagonal.csv", diagonal, footprint, 5, 5) ||
     !write_heading_sweep(output_dir / "heading_sweep_head_on.csv", head_on, footprint, 5, 0) ||
@@ -323,7 +373,8 @@ int main(int argc, char ** argv)
   std::cout << "inscribed " << distance_model.inscribed_radius() << " m, circumscribed "
             << distance_model.circumscribed_radius() << " m, circumscribed_cost "
             << static_cast<int>(inflation->circumscribed_cost()) << '\n'
-            << "wrote velocity_profile.csv, closed_loop_forward.csv, heading_sweep_diagonal.csv,"
+            << "wrote velocity_profile.csv, distance_profile.csv, closed_loop_forward.csv,"
+            << " heading_sweep_diagonal.csv,"
             << " heading_sweep_head_on.csv, bands.pgm, meta.txt into " << output_dir << '\n';
   return EXIT_SUCCESS;
 }

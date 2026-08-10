@@ -126,7 +126,7 @@ def plot_velocity_profile(src, dst):
 
     ax.annotate('forward   eltanin = navyu\n(both limit correctly)', (1.30, 0.53), va='bottom',
                 color=ELTANIN, fontsize=9, fontweight='bold')
-    ax.annotate('reverse   eltanin\n(mirrors forward)', (0.62, -0.20), color=ELTANIN,
+    ax.annotate('reverse   eltanin\n(mirrors forward)', (1.05, -0.30), color=ELTANIN,
                 fontsize=9, fontweight='bold')
     ax.annotate('reverse   navyu  -  never limited', (1.30, -0.46), va='bottom', color=NAVYU,
                 fontsize=9, fontweight='bold')
@@ -137,14 +137,6 @@ def plot_velocity_profile(src, dst):
         ax.annotate('braking-distance law binds', (knee.max() + 0.02, 0.66), ha='left',
                     va='top', color=MUTED, fontsize=9)
 
-    for value in (0.447214, 0.316228):
-        ax.annotate(f'{value:.3f}', (gap[np.argmin(np.abs(forward - value))], value),
-                    textcoords='offset points', xytext=(-2, 7), ha='center', fontsize=8,
-                    color=MUTED)
-        ax.annotate(f'-{value:.3f}', (gap[np.argmin(np.abs(reverse + value))], -value),
-                    textcoords='offset points', xytext=(26, 1), ha='center', fontsize=8,
-                    color=MUTED)
-
     ax.set_xlabel('gap between the robot origin and the wall cell centre  [m]')
     ax.set_ylabel('commanded linear velocity  [m/s]')
     ax.set_title(r"Requested $\pm$0.5 m/s towards a wall: navyu's std::min() leaves reverse "
@@ -153,6 +145,38 @@ def plot_velocity_profile(src, dst):
     ax.set_ylim(-0.62, 0.72)
     fig.tight_layout()
     fig.savefig(dst / 'velocity_profile.png')
+    plt.close(fig)
+
+
+def plot_distance_profile(src, dst):
+    """Draw the distance-map law: the clearance, the proximity ramp and the resulting speed."""
+    data = read_csv(src / 'distance_profile.csv')
+    keep = (data['gap'] >= 0.1) & (data['gap'] <= 1.35)
+    gap = data['gap'][keep]
+
+    fig, (top, bottom) = plt.subplots(2, 1, figsize=(8.0, 6.4), sharex=True)
+
+    top.axhline(0.0, color='#c9c8c3', linewidth=1.0, zorder=1)
+    top.plot(gap, data['clearance'][keep], color=ELTANIN, linewidth=2, zorder=3)
+    top.plot(gap, data['proximity_scale'][keep], color=NAVYU, linewidth=2,
+             linestyle=(0, (6, 2)), zorder=3)
+    top.annotate('clearance  [m]', (1.30, 0.50), color=ELTANIN, fontsize=9, fontweight='bold')
+    top.annotate('proximity scale', (0.95, 0.90), color=NAVYU, fontsize=9, fontweight='bold')
+    top.set_ylabel('clearance [m] / scale')
+    top.set_title('Distance-map law: the ramp slows the command down but never stops it')
+
+    bottom.plot(gap, data['v_out'][keep], color=ELTANIN, linewidth=2, zorder=3)
+    stopped = gap[data['v_out'][keep] <= 0.0]
+    if stopped.size:
+        bottom.axvspan(stopped.max() + 0.025, gap.min() - 0.025, color=BAND, alpha=0.12, zorder=0)
+        bottom.annotate('the two longitudinal laws stop the robot', (stopped.max(), 0.30),
+                        ha='left', va='center', color=MUTED, fontsize=9)
+    bottom.set_xlabel('gap between the robot origin and the wall cell centre  [m]')
+    bottom.set_ylabel('commanded linear velocity  [m/s]')
+
+    bottom.set_xlim(1.38, 0.07)
+    fig.tight_layout()
+    fig.savefig(dst / 'distance_profile.png')
     plt.close(fig)
 
 
@@ -354,13 +378,15 @@ def main():
 
     if args.synthetic is not None:
         require(args.synthetic,
-                ('velocity_profile.csv', 'heading_sweep_diagonal.csv',
+                ('velocity_profile.csv', 'distance_profile.csv', 'heading_sweep_diagonal.csv',
                  'heading_sweep_head_on.csv', 'closed_loop_forward.csv'),
                 'eltanin_limiter_profile')
         plot_velocity_profile(args.synthetic, args.out)
+        plot_distance_profile(args.synthetic, args.out)
         plot_heading_sweep(args.synthetic, args.out)
         plot_closed_loop(args.synthetic, args.out)
-        written += ['velocity_profile.png', 'heading_sweep.png', 'closed_loop.png']
+        written += ['velocity_profile.png', 'distance_profile.png', 'heading_sweep.png',
+                    'closed_loop.png']
 
     if args.real is not None:
         require(args.real,

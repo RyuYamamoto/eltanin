@@ -230,9 +230,35 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 
 第一段階で意図的に含めなかったもの。なぜやらなかったかと、どう追加するかを記す。
 
-### 7.1 距離場 (EDT) の導入
+### 7.1 距離場 (EDT) の導入 (T12 で実装済み)
 
-**なぜ第一段階でやらないか**: 三段階の判定は `uint8_t` だけで表現できる。距離場が追加するのは量子化回避の精度と FMM / 勾配法系での再利用性であり、navyu 相当の動作確認には不要。
+`map/distance_map.hpp` の `build_distance_map()` が実装である。下の 4 段階のうち
+1 / 2 / 3 を実施し、4 (コストマップを距離場の派生物にする) はやっていない。
+コストマップ経路と距離マップ経路は並存する。
+
+| 項目 | `InflationLayer` (T2) | `build_distance_map()` (T12) |
+|---|---|---|
+| 出力 | `uint8_t` コスト | `float` 距離 [m] |
+| 手法 | nav2 式のオフセット LUT を膨張半径の円内に適用 | Felzenszwalb-Huttenlocher の分離可能 2 パス法 |
+| 距離 | 保持しない (コストに畳んで捨てる) | **セル値そのものが距離** |
+| 計算量 | `O(cells * 膨張半径^2 / resolution^2)` | `O(cells)` (膨張半径に依存しない) |
+| 打ち切り | 膨張半径の外は触らない | `max_distance` で飽和する |
+| 用途 | `global_costmap` (プランナが読む) | `collision_predictor` の近接ランプ (`docs/collision-design.md` §3.8) |
+
+実装上の注意を 2 つ記録する。
+
+- 2 パスの中核 (`detail::distance_transform_squared`) は `std::vector<double>` 上の
+  非テンプレート関数として `.cpp` に置いた。アルゴリズムの回帰テストがマップを組まずに書ける。
+- 源でないセルの初期値は `+inf` ではなく**有限の番兵** `size_x^2 + size_y^2 + 1` にした。
+  放物線の下方包絡線の交点計算に `inf - inf` が現れると NaN になるためである。
+  飽和判定は `sqrt` してから比較するのではなく**番兵そのものと比較**する。
+  そうしないと、マップの対角長が `max_distance` より短いとき (局所窓ではよくある)
+  障害物が 1 つも無いセルが `max_distance` に届かない。
+
+`test/planner/planner_fixture.hpp` の `make_distance_map()` / `distance_map_from_costmap()` は
+**別物**である。あちらは 3 値の分類を代表距離に焼き直す合成ヘルパで、EDT ではない。
+
+**なぜ第一段階でやらなかったか**: 三段階の判定は `uint8_t` だけで表現できる。距離場が追加するのは量子化回避の精度と FMM / 勾配法系での再利用性であり、navyu 相当の動作確認には不要。
 
 **どう追加するか**:
 
@@ -244,6 +270,7 @@ concept TraversabilityModel = requires(const Model & model, Cell cell) {
 **プランナ・セーフティ本体は変更不要**である。テンプレート化された縫い目 (6 章) により、セル型と判定モデルの差し替えだけで済む。
 
 **確認事項**: 4000×4000 の `float` 距離場は 64MB になる。メモリ方針を見直す必要がある。
+T12 の利用者は 120×120 セル (6 m / 0.05 m) の局所窓で 57 KB なので、この論点には触れていない。
 
 ### 7.2 2 パスフォールバック探索による狭路緩和
 
