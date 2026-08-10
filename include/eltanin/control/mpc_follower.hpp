@@ -20,6 +20,7 @@
 #include <eltanin/control/velocity_profile.hpp>
 #include <eltanin/core/types.hpp>
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <span>
@@ -35,7 +36,7 @@ struct MpcFollowerParams
   double prediction_dt{0.1};
   /// Forward velocity bound [m/s]; matches PurePursuitParams::desired_linear_vel.
   double max_linear_vel{0.5};
-  /// Lower velocity bound [m/s]; 0 forbids reversing, as every follower here does.
+  /// Lower velocity bound [m/s]; 0 forbids reversing and -max_linear_vel is as low as it may go.
   double min_linear_vel{0.0};
   /// Symmetric bound on the commanded angular velocity [rad/s].
   double max_angular_vel{1.0};
@@ -86,6 +87,17 @@ struct MpcPrediction
   double yaw_error{0.0};
 };
 
+/// Which run of the path is being executed; a run ends at a cusp, where the body has to stop.
+struct MpcRunProgress
+{
+  Direction direction{Direction::Forward};
+  /// Runs finished before this one; 0 on the first run of the path.
+  std::size_t run_index{0};
+  /// Pose index of the cusp that ends this run; only meaningful when has_cusp is true.
+  std::size_t cusp_index{0};
+  bool has_cusp{false};
+};
+
 /// Linear time-varying MPC over the differential-drive model, solved as one sparse QP per cycle.
 class MpcFollower : public PathFollower
 {
@@ -100,6 +112,10 @@ public:
   [[nodiscard]] const MpcPrediction & prediction() const noexcept;
   [[nodiscard]] const MpcSolverStats & solver_stats() const noexcept;
   [[nodiscard]] const MpcFollowerParams & params() const noexcept;
+  [[nodiscard]] const MpcRunProgress & run_progress() const noexcept;
+
+  /// A reversing path needs a negative min_linear_vel; without one there is nothing to execute it.
+  [[nodiscard]] bool supports(const Path & path) const noexcept override;
 
 protected:
   [[nodiscard]] FollowResult follow_on_path(

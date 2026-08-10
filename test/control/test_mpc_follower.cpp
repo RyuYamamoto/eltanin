@@ -22,6 +22,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -384,6 +385,7 @@ TEST(MpcFollower, ItStaysFiniteOnAPathThatTurnsInPlace)
       Vector2d{travel * std::cos(1.4), travel * std::sin(1.4)}, 1.4});
   }
 
+  ASSERT_FALSE(path.has_reverse());
   const std::vector<FollowResult> results =
     drive(follower, path, Pose2D{Vector2d{0.0, 0.0}, 0.0}, 200);
   for (const FollowResult & result : results) {
@@ -416,4 +418,177 @@ TEST(MpcFollower, TheHeadingGateReopensWhenThePathJumpsAway)
   EXPECT_DOUBLE_EQ(turned.command.linear.x(), 0.0);
   EXPECT_LT(turned.command.angular, 0.0);
   EXPECT_NEAR(normalize_angle(follower.prediction().yaw_error), beyond, 1e-9);
+}
+
+namespace
+{
+
+/// Parameters that allow reversing at the same speed as driving forwards.
+MpcFollowerParams reversing_params()
+{
+  MpcFollowerParams params;
+  params.max_linear_vel = 0.3;
+  params.min_linear_vel = -0.3;
+  return params;
+}
+
+/// Largest number of poses any of these paths need to be driven end to end.
+constexpr int kCycles = 800;
+
+}  // namespace
+
+TEST(MpcFollower, CreateAcceptsANegativeMinLinearVelDownToMinusMax)
+{
+  MpcFollowerParams params;
+  params.max_linear_vel = 0.3;
+
+  params.min_linear_vel = -0.3;
+  EXPECT_TRUE(MpcFollower::create(params).has_value());
+  params.min_linear_vel = -0.1;
+  EXPECT_TRUE(MpcFollower::create(params).has_value());
+  params.min_linear_vel = -0.3 - 1e-9;
+  EXPECT_FALSE(MpcFollower::create(params).has_value());
+  params.min_linear_vel = 0.4;
+  EXPECT_FALSE(MpcFollower::create(params).has_value());
+}
+
+TEST(MpcFollower, AReversingPathIsRefusedWhenNothingCanExecuteIt)
+{
+  MpcFollower follower = make_mpc();
+  ASSERT_DOUBLE_EQ(follower.params().min_linear_vel, 0.0);
+  const Path path = eltanin_test::make_reverse_straight_path(1.0, 0.05);
+
+  const FollowResult result =
+    follower.follow(FollowerState{Pose2D{Vector2d{0.0, 0.0}, 0.0}}, path, kDt);
+  EXPECT_EQ(result.status, FollowStatus::PathNotSupported);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
+}
+
+TEST(MpcFollower, AllReverseIsDrivenBackwardsToTheGoal)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_reverse_straight_path(1.0, 0.05);
+
+  const std::vector<FollowResult> results =
+    drive(follower, path, Pose2D{Vector2d{0.0, 0.0}, 0.0}, kCycles);
+
+  ASSERT_FALSE(results.empty());
+  EXPECT_EQ(results.back().status, FollowStatus::GoalReached);
+  bool moved_backwards = false;
+  for (const FollowResult & result : results) {
+    EXPECT_LE(result.command.linear.x(), 1e-9);
+    moved_backwards = moved_backwards || result.command.linear.x() < -0.05;
+  }
+  EXPECT_TRUE(moved_backwards);
+}
+
+TEST(MpcFollower, TheCommandNeverStepsAcrossZeroOnACuspPath)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+
+  const std::vector<FollowResult> results =
+    drive(follower, path, Pose2D{Vector2d{0.0, 0.0}, 0.0}, kCycles);
+
+  ASSERT_GE(results.size(), 2u);
+  for (std::size_t i = 1; i < results.size(); ++i) {
+    const double before = results[i - 1].command.linear.x();
+    const double after = results[i].command.linear.x();
+    EXPECT_GE(before * after, 0.0) << "cycle " << i << " went " << before << " -> " << after;
+  }
+}
+
+TEST(MpcFollower, ItStopsAtTheCuspAndThenTakesUpTheReverseRun)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+
+  EXPECT_EQ(follower.run_progress().run_index, 0u);
+  const std::vector<FollowResult> results =
+    drive(follower, path, Pose2D{Vector2d{0.0, 0.0}, 0.0}, kCycles);
+
+  ASSERT_FALSE(results.empty());
+  EXPECT_EQ(results.back().status, FollowStatus::GoalReached);
+  bool drove_forward = false;
+  bool drove_backward = false;
+  for (const FollowResult & result : results) {
+    drove_forward = drove_forward || result.command.linear.x() > 0.05;
+    drove_backward = drove_backward || result.command.linear.x() < -0.05;
+  }
+  EXPECT_TRUE(drove_forward);
+  EXPECT_TRUE(drove_backward);
+}
+
+TEST(MpcFollower, TheRunProgressNamesTheDirectionAndTheCuspAhead)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  const std::size_t cusp = 20;
+  ASSERT_TRUE(path.is_cusp(cusp));
+
+  static_cast<void>(follower.follow(FollowerState{Pose2D{Vector2d{0.0, 0.0}, 0.0}}, path, kDt));
+  EXPECT_EQ(follower.run_progress().direction, eltanin::Direction::Forward);
+  EXPECT_TRUE(follower.run_progress().has_cusp);
+  EXPECT_EQ(follower.run_progress().cusp_index, cusp);
+
+  std::optional<Twist2D> measured;
+  Pose2D pose{Vector2d{0.0, 0.0}, 0.0};
+  for (int i = 0; i < kCycles; ++i) {
+    const FollowResult result = follower.follow(FollowerState{pose, measured}, path, kDt);
+    if (follower.run_progress().run_index == 1) {
+      break;
+    }
+    measured = result.command;
+    pose = integrate_differential_drive(pose, result.command, kDt);
+  }
+  EXPECT_EQ(follower.run_progress().run_index, 1u);
+  EXPECT_EQ(follower.run_progress().direction, eltanin::Direction::Reverse);
+  EXPECT_FALSE(follower.run_progress().has_cusp);
+}
+
+TEST(MpcFollower, TwoCuspsAreExecutedOneRunAtATime)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_two_cusp_path(1.0, 0.05);
+
+  std::vector<FollowResult> results;
+  std::size_t runs_seen = 0;
+  std::optional<Twist2D> measured;
+  Pose2D pose{Vector2d{0.0, 0.0}, 0.0};
+  for (int i = 0; i < kCycles; ++i) {
+    const FollowResult result = follower.follow(FollowerState{pose, measured}, path, kDt);
+    results.push_back(result);
+    runs_seen = std::max(runs_seen, follower.run_progress().run_index);
+    if (result.status == FollowStatus::GoalReached) {
+      break;
+    }
+    measured = result.command;
+    pose = integrate_differential_drive(pose, result.command, kDt);
+  }
+
+  ASSERT_FALSE(results.empty());
+  EXPECT_EQ(results.back().status, FollowStatus::GoalReached);
+  EXPECT_EQ(runs_seen, 2u);
+  for (std::size_t i = 1; i < results.size(); ++i) {
+    EXPECT_GE(results[i - 1].command.linear.x() * results[i].command.linear.x(), 0.0)
+      << "cycle " << i;
+  }
+}
+
+TEST(MpcFollower, AReverseRunDoesNotSendItTurningOnTheSpot)
+{
+  MpcFollower follower = make_mpc(reversing_params());
+  const Path path = eltanin_test::make_reverse_straight_path(1.0, 0.05);
+
+  const std::vector<FollowResult> results =
+    drive(follower, path, Pose2D{Vector2d{0.0, 0.0}, 0.0}, kCycles);
+
+  ASSERT_GE(results.size(), 5u);
+  // Alignment turns command exactly zero speed; a reverse run must not need any of them.
+  std::size_t stationary = 0;
+  for (const FollowResult & result : results) {
+    stationary += result.command.linear.x() == 0.0 ? 1u : 0u;
+  }
+  EXPECT_LE(stationary, 2u);
+  EXPECT_NEAR(follower.prediction().yaw_error, 0.0, 0.2);
 }

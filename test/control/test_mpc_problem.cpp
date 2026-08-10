@@ -44,6 +44,7 @@ using eltanin::control::detail::PathProjection;
 using eltanin::control::detail::pose_at_arc;
 using eltanin::control::detail::project_on_path;
 using eltanin::control::detail::QpStructure;
+using eltanin::control::detail::ReferenceRun;
 using eltanin_test::make_arc_path;
 using eltanin_test::make_straight_path;
 using Eigen::Vector2d;
@@ -96,14 +97,15 @@ double dense_p(const MpcProblem & problem, int row, int column)
 }
 
 MpcReference reference_on(
-  const Path & path, const MpcFollowerParams & params, const Vector2d & robot)
+  const Path & path, const MpcFollowerParams & params, const Vector2d & robot,
+  const ReferenceRun & run = ReferenceRun{})
 {
   const std::vector<double> arc = cumulative_arc_length(path);
   const PathProjection start = project_on_path(path, arc, robot, 0);
   MpcReference reference;
   reference.resize(params.prediction_horizon);
   build_reference(
-    path, arc, start, params.prediction_dt, params.max_linear_vel, nullptr, reference);
+    path, arc, start, params.prediction_dt, params.max_linear_vel, nullptr, run, reference);
   return reference;
 }
 
@@ -395,4 +397,81 @@ TEST(MpcProblem, TheInputBlockCarriesTheRateCoupling)
   EXPECT_NEAR(
     dense_p(problem, last, last),
     2.0 * (params.weight_linear_vel + params.weight_linear_vel_rate), 1e-9);
+}
+
+TEST(MpcProblem, ProjectionStaysInsideTheRunItIsGiven)
+{
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  const std::vector<double> arc = cumulative_arc_length(path);
+  const std::size_t cusp = 20;
+  ASSERT_TRUE(path.is_cusp(cusp));
+
+  // Past the cusp the projection clamps to it instead of running on into the next run.
+  const PathProjection beyond = project_on_path(path, arc, Vector2d{1.5, 0.0}, 0, cusp);
+  EXPECT_LE(beyond.index, cusp - 1);
+  EXPECT_NEAR(beyond.arc, arc[cusp], kTol);
+
+  // The bound is what holds it back: without one the scan reaches the whole path.
+  const PathProjection unbounded = project_on_path(path, arc, Vector2d{1.5, 0.0}, 0);
+  EXPECT_NEAR(unbounded.arc, arc[cusp], kTol);
+  const PathProjection halted = project_on_path(path, arc, Vector2d{1.5, 0.0}, 0, 5);
+  EXPECT_NEAR(halted.arc, arc[5], kTol);
+}
+
+TEST(MpcProblem, AReverseRunAsksForNegativeSpeedAndStillTurnsWithTheArc)
+{
+  const MpcFollowerParams params = small_params();
+  const Path path = eltanin_test::make_reverse_straight_path(5.0, 0.05);
+  const MpcReference reference = reference_on(
+    path, params, Vector2d{0.0, 0.0},
+    ReferenceRun{cumulative_arc_length(path).back(), eltanin::Direction::Reverse});
+
+  for (int k = 0; k < params.prediction_horizon; ++k) {
+    const auto index = static_cast<std::size_t>(k);
+    EXPECT_NEAR(reference.linear_vel[index], -params.max_linear_vel, kTol) << "step " << k;
+    // The arc is unsigned no matter which way the run is driven.
+    EXPECT_NEAR(
+      reference.arc[index + 1] - reference.arc[index],
+      params.max_linear_vel * params.prediction_dt, kTol)
+      << "step " << k;
+  }
+}
+
+TEST(MpcProblem, TheReferenceStopsDeadAtTheEndOfTheRun)
+{
+  const MpcFollowerParams params = small_params();
+  const Path path = make_straight_path(5.0, 0.05);
+  const double end = 0.15;
+  const MpcReference reference =
+    reference_on(path, params, Vector2d{0.0, 0.0}, ReferenceRun{end, eltanin::Direction::Forward});
+
+  bool stopped = false;
+  for (int k = 0; k < params.prediction_horizon; ++k) {
+    const auto index = static_cast<std::size_t>(k);
+    if (reference.arc[index] >= end) {
+      stopped = true;
+      EXPECT_NEAR(reference.linear_vel[index], 0.0, kTol) << "step " << k;
+      EXPECT_NEAR(reference.angular_vel[index], 0.0, kTol) << "step " << k;
+    }
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_LE(reference.arc.back(), end + kTol);
+}
+
+TEST(MpcProblem, AReverseRunKeepsTheFeedForwardTurnRate)
+{
+  const MpcFollowerParams params = small_params();
+  Path forward = make_arc_path(2.0, std::numbers::pi, 0.05, 1.0);
+  Path reverse(forward.poses(), std::vector<eltanin::Direction>(
+                                  forward.size() - 1, eltanin::Direction::Reverse));
+  const MpcReference reference = reference_on(
+    reverse, params, Vector2d{0.0, 0.0},
+    ReferenceRun{cumulative_arc_length(reverse).back(), eltanin::Direction::Reverse});
+
+  for (int k = 0; k < params.prediction_horizon; ++k) {
+    const auto index = static_cast<std::size_t>(k);
+    // The heading still turns with the arc, so the sign of omega does not follow the speed.
+    EXPECT_NEAR(reference.angular_vel[index], -reference.linear_vel[index] / 2.0, 1e-3)
+      << "step " << k;
+  }
 }

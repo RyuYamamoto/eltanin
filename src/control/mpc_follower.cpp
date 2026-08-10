@@ -76,6 +76,10 @@ bool limits_are_valid(const MpcFollowerParams & params)
   if (params.max_linear_vel <= 0.0 || params.min_linear_vel > params.max_linear_vel) {
     return false;
   }
+  // max_linear_vel bounds the speed in both directions, exactly as the robot profile declares.
+  if (params.min_linear_vel < -params.max_linear_vel) {
+    return false;
+  }
   if (params.max_angular_vel <= 0.0 || params.max_linear_accel <= 0.0 ||
       params.max_angular_accel <= 0.0) {
     return false;
@@ -126,7 +130,13 @@ struct MpcFollower::Impl
   std::vector<Pose2D> predicted;
   MpcPrediction observation{};
   MpcSolverStats stats{};
+  MpcRunProgress run{};
   std::size_t progress{0};
+  /// First and last pose of the run being tracked; a run ends at a cusp or at the goal.
+  std::size_t run_first{0};
+  std::size_t run_last{0};
+  /// Half the spacing before the cusp: how close counts as having arrived at it [m].
+  double run_end_slack{0.0};
   bool arc_valid{false};
   bool yaw_aligned{false};
 
@@ -137,6 +147,20 @@ struct MpcFollower::Impl
     solution.assign(static_cast<std::size_t>(problem.structure().variables), 0.0);
     predicted.assign(static_cast<std::size_t>(params.prediction_horizon) + 1, Pose2D{});
     arc_lengths.reserve(1024);
+  }
+
+  /// Points the window at the run opening at pose `first`; pose 0 opens the first run of the path.
+  void take_up_run(std::size_t first)
+  {
+    const std::pair<std::size_t, std::size_t> bounds = working_path.run_bounds(first);
+    run_first = bounds.first;
+    run_last = bounds.second;
+    run.direction = working_path.direction_of(run_first);
+    run.has_cusp = run_last + 1 < working_path.size();
+    run.cusp_index = run.has_cusp ? run_last : 0;
+    run.run_index = first == 0 ? 0 : run.run_index + 1;
+    run_end_slack =
+      run_last > 0 ? 0.5 * (arc_lengths[run_last] - arc_lengths[run_last - 1]) : 0.0;
   }
 };
 
@@ -176,9 +200,20 @@ const MpcSolverStats & MpcFollower::solver_stats() const noexcept { return impl_
 
 const MpcFollowerParams & MpcFollower::params() const noexcept { return impl_->params; }
 
+const MpcRunProgress & MpcFollower::run_progress() const noexcept { return impl_->run; }
+
+bool MpcFollower::supports(const Path & path) const noexcept
+{
+  return !path.has_reverse() || impl_->params.min_linear_vel < 0.0;
+}
+
 void MpcFollower::reset_derived() noexcept
 {
   impl_->progress = 0;
+  impl_->run = MpcRunProgress{};
+  impl_->run_first = 0;
+  impl_->run_last = 0;
+  impl_->run_end_slack = 0.0;
   impl_->arc_valid = false;
   impl_->yaw_aligned = false;
   impl_->stats = MpcSolverStats{};
@@ -200,30 +235,60 @@ FollowResult MpcFollower::follow_on_path(
     // The last pose carries the goal orientation, which is GoalApproach's business, not a heading
     // to steer towards; the tangent of the final segment is what the body actually travels along.
     const std::size_t last = impl.working_path.size() - 1;
+    const Direction final_direction = impl.working_path.direction_of(last - 1);
     const Eigen::Vector2d final_step =
       impl.working_path[last].position - impl.working_path[last - 1].position;
-    if (final_step.squaredNorm() > 0.0) {
-      impl.working_path[last].yaw = std::atan2(final_step.y(), final_step.x());
+    if (final_step.squaredNorm() > 0.0 && final_direction != Direction::InPlace) {
+      const double tangent = std::atan2(final_step.y(), final_step.x());
+      impl.working_path[last].yaw = final_direction == Direction::Reverse
+                                      ? normalize_angle(tangent + std::numbers::pi)
+                                      : tangent;
     }
     impl.arc_lengths = cumulative_arc_length(impl.working_path);
     impl.arc_valid = true;
+    impl.take_up_run(0);
   }
   const Path & route = impl.working_path;
 
   const double terminal_spacing =
     (route[route.size() - 1].position - route[route.size() - 2].position).norm();
-  if ((route[route.size() - 1].position - state.pose.position).norm() <= 0.5 * terminal_spacing) {
+  // A path that doubles back passes over its own goal, so only the final run may end the follow.
+  if (
+    !impl.run.has_cusp &&
+    (route[route.size() - 1].position - state.pose.position).norm() <= 0.5 * terminal_spacing) {
     reset();
     return FollowResult{Twist2D{}, FollowStatus::GoalReached};
   }
 
-  const detail::PathProjection projection =
-    detail::project_on_path(route, impl.arc_lengths, state.pose.position, impl.progress);
+  impl.progress = std::max(impl.progress, impl.run_first);
+  detail::PathProjection projection = detail::project_on_path(
+    route, impl.arc_lengths, state.pose.position, impl.progress, impl.run_last);
   impl.progress = projection.index;
 
+  // A cusp is a full stop: the body gives up its speed before it is handed the next run.
+  if (impl.run.has_cusp && projection.arc >= impl.arc_lengths[impl.run_last] - impl.run_end_slack) {
+    const double speed = twist_of(state).linear.x();
+    if (std::abs(speed) > STOPPED_SPEED) {
+      const double magnitude = std::max(0.0, std::abs(speed) - params.max_linear_accel * dt);
+      return FollowResult{
+        Twist2D{Eigen::Vector2d{std::copysign(magnitude, speed), 0.0}, 0.0},
+        FollowStatus::Tracking};
+    }
+    while (impl.run.has_cusp &&
+           projection.arc >= impl.arc_lengths[impl.run_last] - impl.run_end_slack) {
+      impl.take_up_run(impl.run_last);
+      projection = detail::project_on_path(
+        route, impl.arc_lengths, state.pose.position, impl.run_first, impl.run_last);
+      impl.progress = projection.index;
+    }
+  }
+
+  const double run_speed = impl.run.direction == Direction::Reverse
+                             ? std::min(params.max_linear_vel, -params.min_linear_vel)
+                             : params.max_linear_vel;
   detail::build_reference(
-    route, impl.arc_lengths, projection, params.prediction_dt, params.max_linear_vel, profile(),
-    impl.reference);
+    route, impl.arc_lengths, projection, params.prediction_dt, run_speed, profile(),
+    detail::ReferenceRun{impl.arc_lengths[impl.run_last], impl.run.direction}, impl.reference);
 
   const Pose2D & anchor = impl.reference.states.front();
   const double heading_error = shortest_angular_distance(anchor.yaw, state.pose.yaw);

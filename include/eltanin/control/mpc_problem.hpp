@@ -21,6 +21,7 @@
 #include <eltanin/core/types.hpp>
 
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -38,10 +39,10 @@ struct PathProjection
 /// Pose at `arc` along the polyline; the ends are clamped and the yaw takes the shortest rotation.
 Pose2D pose_at_arc(const Path & path, std::span<const double> arc_lengths, double arc);
 
-/// Nearest point of any segment at or after `from`; ties keep the earlier segment.
+/// Nearest point of any segment between `from` and `to`; ties keep the earlier segment.
 PathProjection project_on_path(
   const Path & path, std::span<const double> arc_lengths, const Eigen::Vector2d & position,
-  std::size_t from);
+  std::size_t from, std::size_t to = std::numeric_limits<std::size_t>::max());
 
 /// What the horizon is asked to follow: N+1 states and the N inputs that connect them.
 struct MpcReference
@@ -54,10 +55,17 @@ struct MpcReference
   void resize(int horizon);
 };
 
+/// The stretch of path the horizon may consume: the reference stops dead at `end_arc`.
+struct ReferenceRun
+{
+  double end_arc{std::numeric_limits<double>::infinity()};
+  Direction direction{Direction::Forward};
+};
+
 /// Fills the horizon by walking the path at the reference speed; a null profile means max speed.
 void build_reference(
   const Path & path, std::span<const double> arc_lengths, const PathProjection & start,
-  double prediction_dt, double max_linear_vel, const VelocityProfile * profile,
+  double prediction_dt, double run_speed, const VelocityProfile * profile, const ReferenceRun & run,
   MpcReference & reference);
 
 /// The sparse QP of §4.2: states and inputs are both variables, dynamics are equality rows.

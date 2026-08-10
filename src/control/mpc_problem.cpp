@@ -71,7 +71,7 @@ Pose2D pose_at_arc(const Path & path, std::span<const double> arc_lengths, doubl
 
 PathProjection project_on_path(
   const Path & path, std::span<const double> arc_lengths, const Eigen::Vector2d & position,
-  std::size_t from)
+  std::size_t from, std::size_t to)
 {
   PathProjection best{std::min(from, path.size() - 1), arc_lengths[std::min(from, path.size() - 1)]};
   if (path.size() < 2) {
@@ -80,7 +80,8 @@ PathProjection project_on_path(
 
   double best_distance = std::numeric_limits<double>::infinity();
   const std::size_t first = std::min(from, path.size() - 2);
-  for (std::size_t i = first; i + 1 < path.size(); ++i) {
+  const std::size_t last = std::min(to, path.size() - 1);
+  for (std::size_t i = first; i + 1 <= last; ++i) {
     const Eigen::Vector2d & a = path[i].position;
     const Eigen::Vector2d & b = path[i + 1].position;
     const double distance = distance_to_segment(position, a, b);
@@ -109,11 +110,12 @@ void MpcReference::resize(int horizon)
 
 void build_reference(
   const Path & path, std::span<const double> arc_lengths, const PathProjection & start,
-  double prediction_dt, double max_linear_vel, const VelocityProfile * profile,
+  double prediction_dt, double run_speed, const VelocityProfile * profile, const ReferenceRun & run,
   MpcReference & reference)
 {
   const std::size_t steps = reference.linear_vel.size();
-  const double total = arc_lengths.back();
+  const double ceiling = std::max(0.0, run_speed);
+  const double stop_arc = std::min(arc_lengths.back(), run.end_arc);
 
   double arc = start.arc;
   for (std::size_t k = 0; k <= steps; ++k) {
@@ -122,16 +124,18 @@ void build_reference(
     if (k == steps) {
       break;
     }
-    const double bound = profile != nullptr ? profile->at_arc(arc) : max_linear_vel;
-    const double speed = arc >= total ? 0.0 : std::min(max_linear_vel, bound);
-    reference.linear_vel[k] = speed;
-    arc += speed * prediction_dt;
+    const double bound = profile != nullptr ? profile->at_arc(arc) : ceiling;
+    // The arc is unsigned, so the run direction only decides the sign the follower is asked for.
+    const double magnitude = arc >= stop_arc ? 0.0 : std::min(ceiling, bound);
+    reference.linear_vel[k] = run.direction == Direction::Reverse ? -magnitude : magnitude;
+    arc += magnitude * prediction_dt;
   }
 
   for (std::size_t k = 0; k < steps; ++k) {
     const double turn =
       shortest_angular_distance(reference.states[k].yaw, reference.states[k + 1].yaw);
-    reference.angular_vel[k] = reference.linear_vel[k] > 0.0 ? turn / prediction_dt : 0.0;
+    reference.angular_vel[k] =
+      std::abs(reference.linear_vel[k]) > 0.0 ? turn / prediction_dt : 0.0;
   }
 }
 
