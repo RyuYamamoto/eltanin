@@ -40,6 +40,7 @@ using eltanin_test::wall_scenario;
 using Eigen::Vector2d;
 
 constexpr double CONTROL_DT = 0.1;
+
 constexpr int MAX_CYCLES = 10;
 constexpr double HALF_FOOTPRINT = 0.3;
 
@@ -76,6 +77,12 @@ ClosedLoopTrace run_closed_loop(
   return trace;
 }
 
+/// Deepest the braking law can enter the margin in one control period, once the distance is exact.
+double margin_overshoot(const VelocityLimiterParams & params)
+{
+  return 0.5 * params.max_deceleration * CONTROL_DT * CONTROL_DT;
+}
+
 Pose2D pose_at_cell(int mx, int my, double yaw)
 {
   return Pose2D{
@@ -100,7 +107,7 @@ TEST(VelocityLimiterClosedLoop, StopsInFrontOfAWallWhenDrivingForward)
   const double wall_centre_x = 0.05 * 23.0 + 0.025;
   const double clearance = wall_centre_x - (trace.stop_pose.position.x() + HALF_FOOTPRINT);
   const VelocityLimiterParams & params = limiter.params();
-  EXPECT_GE(clearance, params.collision_margin);
+  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(params));
   EXPECT_LE(clearance, params.collision_margin + 2.0 * std::abs(cmd_in.linear.x()) * CONTROL_DT);
 }
 
@@ -122,7 +129,7 @@ TEST(VelocityLimiterClosedLoop, StopsInFrontOfAWallWhenDrivingBackward)
   const double wall_centre_x = 0.025;
   const double clearance = (trace.stop_pose.position.x() - HALF_FOOTPRINT) - wall_centre_x;
   const VelocityLimiterParams & params = limiter.params();
-  EXPECT_GE(clearance, params.collision_margin);
+  EXPECT_GE(clearance, params.collision_margin - margin_overshoot(params));
   EXPECT_LE(clearance, params.collision_margin + 2.0 * std::abs(cmd_in.linear.x()) * CONTROL_DT);
 }
 

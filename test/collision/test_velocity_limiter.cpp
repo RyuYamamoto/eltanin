@@ -292,8 +292,8 @@ TEST(VelocityLimiterLimit, LimitsAReverseCommandInFrontOfAWall)
     limiter.limit(scenario.map, scenario.model, pose_at_cell(15, 11, 0.0), cmd_in);
 
   EXPECT_TRUE(result.has_collision);
-  EXPECT_DOUBLE_EQ(result.collision_distance, 0.39);
-  EXPECT_DOUBLE_EQ(result.command.linear.x(), -std::sqrt(0.19));
+  EXPECT_DOUBLE_EQ(result.collision_distance, 0.446875);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), -std::sqrt(0.246875));
   ASSERT_EQ(result.predicted_poses.size(), 8u);
   EXPECT_NEAR(result.predicted_poses.back().position.x(), 0.32, 1e-12);
   // navyu's std::min() would have passed the requested -0.5 straight through.
@@ -309,9 +309,27 @@ TEST(VelocityLimiterLimit, LimitsAForwardCommandSymmetrically)
     limiter.limit(scenario.map, scenario.model, pose_at_cell(8, 11, 0.0), twist(0.5, 0.0));
 
   EXPECT_TRUE(result.has_collision);
-  EXPECT_DOUBLE_EQ(result.collision_distance, 0.39);
-  EXPECT_DOUBLE_EQ(result.command.linear.x(), std::sqrt(0.19));
+  EXPECT_DOUBLE_EQ(result.collision_distance, 0.446875);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), std::sqrt(0.246875));
   ASSERT_EQ(result.predicted_poses.size(), 8u);
+}
+
+TEST(VelocityLimiterLimit, RefinesTheCollisionDistanceInsideTheCollidingStep)
+{
+  const CollisionScenario scenario = wall_scenario(false);
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+  const Twist2D cmd_in = twist(-0.5, 0.0);
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(15, 11, 0.0), cmd_in);
+
+  ASSERT_TRUE(result.has_collision);
+  const double step_arc = std::abs(cmd_in.linear.x()) * limiter.prediction_dt(cmd_in);
+  const double steps = result.collision_distance / step_arc;
+  EXPECT_NE(steps, std::floor(steps));
+  // The wall cell centre enters the footprint exactly 0.45 m into the rollout.
+  EXPECT_LE(result.collision_distance, 0.45);
+  EXPECT_GT(result.collision_distance, 0.45 - step_arc / 16.0);
 }
 
 TEST(VelocityLimiterLimit, PassesTheCommandThroughOnAFreeMap)
@@ -402,7 +420,7 @@ TEST(VelocityLimiterLimit, OnlyTheExactCheckStopsForARawObstacleAhead)
     make_limiter(two_stage).limit(scenario.map, scenario.model, robot, cmd_in);
 
   EXPECT_TRUE(exact.has_collision);
-  EXPECT_DOUBLE_EQ(exact.collision_distance, 0.13);
+  EXPECT_DOUBLE_EQ(exact.collision_distance, 0.14625);
   EXPECT_DOUBLE_EQ(exact.command.linear.x(), 0.0);
   EXPECT_EQ(exact.predicted_poses.size(), 4u);
 

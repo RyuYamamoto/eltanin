@@ -56,10 +56,46 @@ namespace detail
 /// Linear velocities below this magnitude [m/s] carry no ratio.
 inline constexpr double MIN_LINEAR_VEL = 1e-9;
 
+/// Bisections inside the colliding step; fixed, because the resolution of a stop is not a setting.
+inline constexpr int COLLISION_REFINEMENT_STEPS = 4;
+
 /// Braking-distance law applied to the magnitude of the command; the input sign is preserved.
 Twist2D limit_command(
   const VelocityLimiterParams & params, const Twist2D & cmd_in, bool has_collision,
   double collision_distance);
+
+/// Dispatches to the exact or the two-stage footprint check according to the parameters.
+template <map::CellMap Map, class Model>
+  requires TraversabilityModel<Model, typename Map::value_type> &&
+           ObstacleModel<Model, typename Map::value_type>
+CollisionCheck check_pose(
+  const VelocityLimiterParams & params, const Map & map, const Model & model, const Pose2D & pose)
+{
+  return params.exact_footprint_check ? check_footprint_exact(map, model, params.footprint, pose)
+                                      : check_footprint(map, model, params.footprint, pose);
+}
+
+/// Largest sub-step time in [0, dt] that is still free; leaving the map counts as colliding.
+template <map::CellMap Map, class Model>
+  requires TraversabilityModel<Model, typename Map::value_type> &&
+           ObstacleModel<Model, typename Map::value_type>
+double last_free_time(
+  const VelocityLimiterParams & params, const Map & map, const Model & model, const Pose2D & from,
+  const Twist2D & cmd_in, double dt)
+{
+  double free_time = 0.0;
+  double blocked_time = dt;
+  for (int step = 0; step < COLLISION_REFINEMENT_STEPS; ++step) {
+    const double middle = 0.5 * (free_time + blocked_time);
+    const Pose2D pose = integrate_differential_drive(from, cmd_in, middle);
+    if (check_pose(params, map, model, pose) == CollisionCheck::Free) {
+      free_time = middle;
+    } else {
+      blocked_time = middle;
+    }
+  }
+  return free_time;
+}
 
 }  // namespace detail
 
@@ -71,7 +107,7 @@ public:
   {
     Twist2D command{};
     bool has_collision{false};
-    /// Arc length to the last collision-free predicted pose; +inf when there is no collision.
+    /// Arc length to the last free point, bisected inside the colliding step; +inf when free.
     double collision_distance{std::numeric_limits<double>::infinity()};
     /// Current pose first, the colliding pose last; shorter than prediction_steps + 1 if truncated.
     std::vector<Pose2D> predicted_poses{};
@@ -128,26 +164,26 @@ VelocityLimiter::Result VelocityLimiter::limit(
   result.horizon = horizon(cmd_in);
 
   const double dt = prediction_dt(cmd_in);
-  const double step_distance = std::abs(cmd_in.linear.x()) * dt;
+  const double speed = std::abs(cmd_in.linear.x());
+  const double step_distance = speed * dt;
   Pose2D pose = robot;
   double travelled = 0.0;
   for (int step = 0; step < params_.prediction_steps; ++step) {
-    pose = integrate_differential_drive(pose, cmd_in, dt);
-    const CollisionCheck check =
-      params_.exact_footprint_check
-        ? check_footprint_exact(map, model, params_.footprint, pose)
-        : check_footprint(map, model, params_.footprint, pose);
+    const Pose2D next = integrate_differential_drive(pose, cmd_in, dt);
+    const CollisionCheck check = detail::check_pose(params_, map, model, next);
     // Leaving the map truncates the prediction instead of limiting; see docs/collision-design.md.
     if (check == CollisionCheck::OutsideMap) {
       break;
     }
-    result.predicted_poses.push_back(pose);
+    result.predicted_poses.push_back(next);
     if (check == CollisionCheck::Collision) {
       result.has_collision = true;
-      result.collision_distance = travelled;
+      result.collision_distance =
+        travelled + speed * detail::last_free_time(params_, map, model, pose, cmd_in, dt);
       break;
     }
     travelled += step_distance;
+    pose = next;
   }
 
   result.command =
