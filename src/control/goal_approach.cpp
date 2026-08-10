@@ -118,6 +118,9 @@ GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & pa
   }
 
   Result result;
+  // A manoeuvre shorter than xy_goal_tolerance sits entirely inside the arrival band, so arriving
+  // cannot be judged on distance alone: the body has to have reached the run that ends at the goal.
+  bool on_final_run = true;
   if (!path.empty()) {
     const Pose2D & goal = path[path.size() - 1];
     // The two legs of a cusp run within millimetres of each other, so the search has to be held
@@ -125,6 +128,7 @@ GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & pa
     progress_ = detail::nearest_index_from(
       path, robot.position, progress_, path.run_bounds(progress_).second);
     const std::size_t nearest = progress_;
+    on_final_run = path.run_bounds(nearest).second + 1 >= path.size();
     result.position_error = (goal.position - robot.position).norm();
     result.remaining_arc =
       std::max(remaining_arc_from(path, nearest), result.position_error);
@@ -145,7 +149,7 @@ GoalApproach::Result GoalApproach::compute(const Pose2D & robot, const Path & pa
     return result;
   }
 
-  if (result.position_error > params_.xy_goal_tolerance) {
+  if (result.position_error > params_.xy_goal_tolerance || !on_final_run) {
     align_elapsed_ = 0.0;
     result.state = State::Approaching;
     result.linear_vel_limit = std::sqrt(2.0 * params_.approach_decel * result.remaining_arc);

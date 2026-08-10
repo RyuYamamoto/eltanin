@@ -863,6 +863,57 @@ Pose2D on_outbound_leg(double x)
 
 }  // namespace
 
+namespace
+{
+
+/// A parking wiggle whose whole extent is inside xy_goal_tolerance: two cusps in 18 cm.
+Path make_tiny_cusp_path()
+{
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  for (int i = 1; i <= 12; ++i) {
+    path.push_back(Pose2D{Vector2d{0.01 * i, 0.0}, 0.0}, eltanin::Direction::Forward);
+  }
+  for (int i = 1; i <= 8; ++i) {
+    path.push_back(Pose2D{Vector2d{0.12 - 0.01 * i, 0.0}, 0.5}, eltanin::Direction::Reverse);
+  }
+  for (int i = 1; i <= 6; ++i) {
+    path.push_back(Pose2D{Vector2d{0.04 + 0.01 * i, 0.0}, 1.0}, eltanin::Direction::Forward);
+  }
+  return path;
+}
+
+}  // namespace
+
+TEST(GoalApproach, ArrivalWaitsWhileACuspIsStillAhead)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_tiny_cusp_path();
+  ASSERT_TRUE(path.is_cusp(12));
+  ASSERT_TRUE(path.is_cusp(20));
+
+  // Standing on the first cusp: 2 cm from the goal and already at its heading, but two runs are
+  // still to be driven. Judging on distance alone latches Reached and zeroes the command here.
+  const GoalApproach::Result at_cusp =
+    approach.compute(Pose2D{Vector2d{0.12, 0.0}, 1.0}, path, APPROACH_DT);
+  ASSERT_LT(at_cusp.position_error, GoalApproachParams{}.xy_goal_tolerance);
+  EXPECT_EQ(at_cusp.state, GoalApproach::State::Approaching);
+  EXPECT_GT(at_cusp.linear_vel_limit, 0.0);
+}
+
+TEST(GoalApproach, ArrivalIsDeclaredOnceTheLastRunIsDriven)
+{
+  GoalApproach approach = make_approach();
+  const Path path = make_tiny_cusp_path();
+
+  for (std::size_t i = 0; i < path.size(); ++i) {
+    static_cast<void>(approach.compute(path[i], path, APPROACH_DT));
+  }
+  const GoalApproach::Result result =
+    approach.compute(path[path.size() - 1], path, APPROACH_DT);
+  EXPECT_EQ(result.state, GoalApproach::State::Reached);
+}
+
 TEST(GoalApproach, ProgressDoesNotJumpOntoTheReturnLegOfACusp)
 {
   GoalApproach approach = make_approach();
