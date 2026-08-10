@@ -92,6 +92,34 @@ Path make_path(std::size_t poses)
   return path;
 }
 
+/// Returns whatever it is told to, so the base guard can be examined on its own.
+class ScriptedFollower : public PathFollower
+{
+public:
+  Twist2D next_command{};
+  bool accepts{true};
+  std::size_t follow_calls{0};
+
+  bool supports(const Path & path) const noexcept override
+  {
+    (void)path;
+    return accepts;
+  }
+
+protected:
+  FollowResult follow_on_path(
+    const FollowerState & state, const Path & path, double dt) override
+  {
+    (void)state;
+    (void)path;
+    (void)dt;
+    ++follow_calls;
+    return FollowResult{next_command, FollowStatus::Tracking};
+  }
+
+  void reset_derived() noexcept override {}
+};
+
 }  // namespace
 
 TEST(PathFollower, EmptyPathReportsNoPathAndResetsTheDerivedState)
@@ -220,9 +248,52 @@ TEST(PathFollower, EveryStatusHasAName)
 {
   for (const FollowStatus status :
        {FollowStatus::NoPath, FollowStatus::Tracking, FollowStatus::GoalReached,
-        FollowStatus::SolverFailed}) {
+        FollowStatus::SolverFailed, FollowStatus::PathNotSupported}) {
     EXPECT_FALSE(std::string(to_string(status)).empty());
     EXPECT_NE(std::string(to_string(status)), "unknown");
+  }
+}
+
+TEST(PathFollower, APathTheFollowerRefusesIsNeverPassedDown)
+{
+  ScriptedFollower follower;
+  follower.accepts = false;
+  const FollowResult result = follower.follow(FollowerState{}, make_path(6), kDt);
+
+  EXPECT_EQ(result.status, FollowStatus::PathNotSupported);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
+  EXPECT_DOUBLE_EQ(result.command.angular, 0.0);
+  EXPECT_EQ(follower.follow_calls, 0u);
+}
+
+TEST(PathFollower, ACommandThatWouldFlipSignInOneCycleIsReplacedByAStop)
+{
+  ScriptedFollower follower;
+  const Path path = make_path(6);
+
+  follower.next_command = Twist2D{Vector2d{0.4, 0.0}, 0.0};
+  EXPECT_DOUBLE_EQ(follower.follow(FollowerState{}, path, kDt).command.linear.x(), 0.4);
+
+  follower.next_command = Twist2D{Vector2d{-0.4, 0.0}, 0.7};
+  const FollowResult stopped = follower.follow(FollowerState{}, path, kDt);
+  EXPECT_DOUBLE_EQ(stopped.command.linear.x(), 0.0);
+  // Only the linear part is held back; the body still has to turn towards the next run.
+  EXPECT_DOUBLE_EQ(stopped.command.angular, 0.7);
+  EXPECT_EQ(stopped.status, FollowStatus::Tracking);
+
+  // Having passed through zero, the other direction is now allowed.
+  const FollowResult reversing = follower.follow(FollowerState{}, path, kDt);
+  EXPECT_DOUBLE_EQ(reversing.command.linear.x(), -0.4);
+}
+
+TEST(PathFollower, TheGuardDoesNotTouchACommandThatKeepsItsSign)
+{
+  ScriptedFollower follower;
+  const Path path = make_path(6);
+
+  for (const double speed : {0.4, 0.2, 0.0, 0.3}) {
+    follower.next_command = Twist2D{Vector2d{speed, 0.0}, 0.0};
+    EXPECT_DOUBLE_EQ(follower.follow(FollowerState{}, path, kDt).command.linear.x(), speed);
   }
 }
 

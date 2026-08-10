@@ -43,6 +43,11 @@ FollowResult PathFollower::follow(const FollowerState & state, const Path & path
     return FollowResult{Twist2D{}, FollowStatus::GoalReached};
   }
 
+  if (!supports(path)) {
+    last_command_ = Twist2D{};
+    return FollowResult{Twist2D{}, FollowStatus::PathNotSupported};
+  }
+
   if (profile_.has_value()) {
     if (!profile_->built()) {
       profile_->build(path);
@@ -51,7 +56,13 @@ FollowResult PathFollower::follow(const FollowerState & state, const Path & path
     assert(profile_path_size_ == path.size() && "a new path needs reset() before follow()");
   }
 
-  const FollowResult result = follow_on_path(state, path, dt);
+  FollowResult result = follow_on_path(state, path, dt);
+  // A differential drive cannot step across zero, so a command that would is replaced by a stop.
+  if (
+    result.command.linear.x() * last_command_.linear.x() < 0.0 &&
+    std::abs(last_command_.linear.x()) > STOPPED_SPEED) {
+    result.command.linear.x() = 0.0;
+  }
   last_command_ = result.command;
   return result;
 }

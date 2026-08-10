@@ -571,3 +571,45 @@ TEST(PurePursuit, TheMeasuredTwistIsIgnored)
     expect_same_result(with_twist, without);
   }
 }
+
+TEST(PurePursuit, AReversingPathIsRefusedRatherThanGuessedAt)
+{
+  PurePursuit tracker = make_tracker();
+  const Path path = eltanin_test::make_one_cusp_path(1.0, 0.5, 0.05);
+  Pose2D robot{Vector2d{0.0, 0.0}, 0.0};
+
+  for (int i = 0; i < 50; ++i) {
+    const Result result = compute(tracker, robot, path, SIMULATION_DT);
+    ASSERT_EQ(result.status, FollowStatus::PathNotSupported) << "cycle " << i;
+    EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
+    EXPECT_DOUBLE_EQ(result.command.angular, 0.0);
+    robot = eltanin::Pose2D{robot.position, robot.yaw};
+  }
+}
+
+TEST(PurePursuit, AllReverseAndTwoCuspPathsAreRefusedToo)
+{
+  for (const Path & path :
+       {eltanin_test::make_reverse_straight_path(1.0, 0.05),
+        eltanin_test::make_two_cusp_path(1.0, 0.05)}) {
+    PurePursuit tracker = make_tracker();
+    const Result result =
+      compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+    EXPECT_EQ(result.status, FollowStatus::PathNotSupported);
+    EXPECT_DOUBLE_EQ(result.command.linear.x(), 0.0);
+  }
+}
+
+TEST(PurePursuit, APathThatOnlyTurnsOnTheSpotIsStillFollowed)
+{
+  PurePursuit tracker = make_tracker();
+  Path path;
+  path.push_back(Pose2D{Vector2d{0.0, 0.0}, 0.0});
+  path.push_back(Pose2D{Vector2d{0.5, 0.0}, 0.0}, eltanin::Direction::Forward);
+  path.push_back(Pose2D{Vector2d{0.5, 0.0}, 1.0}, eltanin::Direction::InPlace);
+  path.push_back(Pose2D{Vector2d{0.5, 0.5}, 1.0}, eltanin::Direction::Forward);
+
+  ASSERT_FALSE(path.has_reverse());
+  const Result result = compute(tracker, Pose2D{Vector2d{0.0, 0.0}, 0.0}, path, SIMULATION_DT);
+  EXPECT_NE(result.status, FollowStatus::PathNotSupported);
+}

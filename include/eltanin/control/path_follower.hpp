@@ -30,10 +30,11 @@ namespace eltanin::control
 /// Every status but Tracking comes with a zero command, so the caller always has one to send.
 enum class FollowStatus
 {
-  NoPath,       ///< the path is empty
-  Tracking,     ///< the command steers the robot along the path
-  GoalReached,  ///< the last pose is the nearest one and the robot is on it
-  SolverFailed  ///< the follower could not compute a command and is decelerating
+  NoPath,            ///< the path is empty
+  Tracking,          ///< the command steers the robot along the path
+  GoalReached,       ///< the last pose is the nearest one and the robot is on it
+  SolverFailed,      ///< the follower could not compute a command and is decelerating
+  PathNotSupported   ///< this follower cannot execute this path and has not tried
 };
 
 constexpr const char * to_string(FollowStatus status) noexcept
@@ -47,9 +48,14 @@ constexpr const char * to_string(FollowStatus status) noexcept
       return "goal reached";
     case FollowStatus::SolverFailed:
       return "solver failed";
+    case FollowStatus::PathNotSupported:
+      return "path not supported";
   }
   return "unknown";
 }
+
+/// Linear speed [m/s] below which the body counts as stopped and may take up the other direction.
+inline constexpr double STOPPED_SPEED = 1e-6;
 
 /// What the follower is told about the robot; an absent twist means "use your own last command".
 struct FollowerState
@@ -78,6 +84,13 @@ public:
 
   /// nullopt when the profile is disabled or not built yet; the arc runs from the first pose.
   [[nodiscard]] std::optional<double> velocity_limit_at(double arc_length) const noexcept;
+
+  /// Whether this follower can execute `path` at all; a follower that cannot is not asked to try.
+  [[nodiscard]] virtual bool supports(const Path & path) const noexcept
+  {
+    (void)path;
+    return true;
+  }
 
 protected:
   PathFollower() = default;

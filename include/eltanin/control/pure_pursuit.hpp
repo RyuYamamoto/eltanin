@@ -63,6 +63,12 @@ public:
 
   const PurePursuitParams & params() const noexcept { return params_; }
 
+  /// The pursuit law is stable for forward travel only, so a reversing path is refused, not guessed.
+  [[nodiscard]] bool supports(const Path & path) const noexcept override
+  {
+    return !path.has_reverse();
+  }
+
 protected:
   [[nodiscard]] FollowResult follow_on_path(
     const FollowerState & state, const Path & path, double dt) override;

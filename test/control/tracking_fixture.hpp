@@ -132,6 +132,58 @@ inline eltanin::Path make_arc_path(double radius, double sweep, double spacing, 
   return path;
 }
 
+/// Straight path driven backwards along -x from the origin; every segment is declared Reverse.
+inline eltanin::Path make_reverse_straight_path(double length, double spacing)
+{
+  assert(length > 0.0 && spacing > 0.0);
+  const auto steps = static_cast<std::size_t>(std::llround(length / spacing));
+  eltanin::Path path;
+  path.push_back(eltanin::Pose2D{Eigen::Vector2d::Zero(), 0.0});
+  for (std::size_t i = 1; i <= steps; ++i) {
+    const double x = -length * static_cast<double>(i) / static_cast<double>(steps);
+    path.push_back(
+      eltanin::Pose2D{Eigen::Vector2d{x, 0.0}, 0.0}, eltanin::Direction::Reverse);
+  }
+  return path;
+}
+
+/// Appends `length` of straight travel from the last pose along its heading, driven `direction`.
+inline void append_straight_run(
+  eltanin::Path & path, double length, double spacing, eltanin::Direction direction)
+{
+  assert(!path.empty() && length > 0.0 && spacing > 0.0);
+  const eltanin::Pose2D from = path[path.size() - 1];
+  const double sign = direction == eltanin::Direction::Reverse ? -1.0 : 1.0;
+  const Eigen::Vector2d step{std::cos(from.yaw), std::sin(from.yaw)};
+  const auto steps = static_cast<std::size_t>(std::llround(length / spacing));
+  for (std::size_t i = 1; i <= steps; ++i) {
+    const double travelled = length * static_cast<double>(i) / static_cast<double>(steps);
+    path.push_back(
+      eltanin::Pose2D{from.position + sign * travelled * step, from.yaw}, direction);
+  }
+}
+
+/// Forward then backward along one line: one cusp, at the pose where the two runs meet.
+inline eltanin::Path make_one_cusp_path(double forward, double reverse, double spacing)
+{
+  eltanin::Path path;
+  path.push_back(eltanin::Pose2D{Eigen::Vector2d::Zero(), 0.0});
+  append_straight_run(path, forward, spacing, eltanin::Direction::Forward);
+  append_straight_run(path, reverse, spacing, eltanin::Direction::Reverse);
+  return path;
+}
+
+/// Forward, backward, forward along one line: two cusps.
+inline eltanin::Path make_two_cusp_path(double leg, double spacing)
+{
+  eltanin::Path path;
+  path.push_back(eltanin::Pose2D{Eigen::Vector2d::Zero(), 0.0});
+  append_straight_run(path, leg, spacing, eltanin::Direction::Forward);
+  append_straight_run(path, 0.5 * leg, spacing, eltanin::Direction::Reverse);
+  append_straight_run(path, leg, spacing, eltanin::Direction::Forward);
+  return path;
+}
+
 /// Global nearest pose, matching the tracker's tie-breaking (smallest index).
 inline std::size_t fixture_nearest_index(
   const eltanin::Path & path, const Eigen::Vector2d & position)
