@@ -3,6 +3,7 @@ add_executable(eltanin_test_map
   test_crop.cpp
   test_grid_map.cpp
   test_cost_model.cpp
+  test_distance_map.cpp
   test_static_layer.cpp
   test_obstacle_layer.cpp
   test_raytrace_layer.cpp

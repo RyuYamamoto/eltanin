@@ -1,5 +1,6 @@
 add_library(eltanin_map STATIC
   cost_model.cpp
+  distance_map.cpp
   layered_costmap.cpp
   layers/static_layer.cpp
   layers/obstacle_layer.cpp

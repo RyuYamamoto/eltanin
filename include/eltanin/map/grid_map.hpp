@@ -105,7 +105,7 @@ private:
 
 using Costmap = GridMap<std::uint8_t>;
 
-/// Reserved for a future Euclidean distance transform; no producer exists yet.
+/// Obstacle distance [m] per cell; build_distance_map() in map/distance_map.hpp produces it.
 using DistanceMap = GridMap<float>;
 
 }  // namespace eltanin::map
