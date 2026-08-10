@@ -19,12 +19,14 @@
 #include <eltanin/core/polygon.hpp>
 #include <eltanin/map/cost_model.hpp>
 #include <eltanin/map/cost_values.hpp>
+#include <eltanin/map/distance_map.hpp>
 #include <eltanin/map/grid_map.hpp>
 #include <eltanin/map/layers/inflation_layer.hpp>
 #include <eltanin/collision/velocity_limiter.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -117,6 +119,65 @@ inline CollisionScenario uninflated_scenario(int offset_x, int offset_y)
   map(11 + offset_x, 11 + offset_y) = eltanin::map::LETHAL_OBSTACLE;
   // Any threshold in (FREE_SPACE, INSCRIBED_INFLATED_OBSTACLE] classifies the three values alike.
   return CollisionScenario{std::move(map), eltanin::map::CostTraversabilityModel(1)};
+}
+
+/// Distance map plus its model; the shape collision_predictor actually runs the limiter on.
+struct DistanceScenario
+{
+  eltanin::map::DistanceMap map;
+  eltanin::DistanceTraversabilityModel model;
+};
+
+inline constexpr double CLEARANCE_MAX_DISTANCE = 1.0;
+
+inline DistanceScenario distance_scenario(
+  const eltanin::map::Costmap & costmap, const eltanin::Polygon2D & footprint)
+{
+  const auto distances = eltanin::map::build_distance_map(
+    costmap,
+    eltanin::map::CostTraversabilityModel(eltanin::map::INSCRIBED_INFLATED_OBSTACLE, false),
+    eltanin::map::DistanceMapParams{CLEARANCE_MAX_DISTANCE});
+  assert(distances.has_value());
+  const auto model =
+    eltanin::DistanceTraversabilityModel::from_footprint(footprint, CLEARANCE_MAX_DISTANCE);
+  assert(model.has_value());
+  return DistanceScenario{*distances, *model};
+}
+
+/// 0.24 m square, the order of the kachaka footprint; a 0.6 m corridor has to stay drivable.
+inline eltanin::Polygon2D narrow_footprint()
+{
+  return eltanin::Polygon2D{
+    Eigen::Vector2d{-0.12, 0.12}, Eigen::Vector2d{-0.12, -0.12}, Eigen::Vector2d{0.12, -0.12},
+    Eigen::Vector2d{0.12, 0.12}};
+}
+
+/// Raw 24 x 24 map at 0.05 m with one lethal wall column and no inflation at all.
+inline eltanin::map::Costmap raw_wall_map(bool wall_on_right)
+{
+  eltanin::map::Costmap map(
+    eltanin::map::MapGeometry(24, 24, 0.05, Eigen::Vector2d::Zero()), eltanin::map::FREE_SPACE);
+  const int wall_x = wall_on_right ? 23 : 0;
+  for (int my = 0; my < map.size_y(); ++my) {
+    map(wall_x, my) = eltanin::map::LETHAL_OBSTACLE;
+  }
+  return map;
+}
+
+/// Corridor of the given width [m] along x, walls lethal, no inflation; centred on y = 0.6 m.
+inline eltanin::map::Costmap raw_corridor_map(double width)
+{
+  eltanin::map::Costmap map(
+    eltanin::map::MapGeometry(40, 24, 0.05, Eigen::Vector2d::Zero()), eltanin::map::FREE_SPACE);
+  for (int my = 0; my < map.size_y(); ++my) {
+    const double y = 0.05 * static_cast<double>(my) + 0.025;
+    if (std::abs(y - 0.6) > 0.5 * width) {
+      for (int mx = 0; mx < map.size_x(); ++mx) {
+        map(mx, my) = eltanin::map::LETHAL_OBSTACLE;
+      }
+    }
+  }
+  return map;
 }
 
 /// F-C: 0.25 m cells so that every cell centre 0.125 + 0.25 * i is exact in binary.

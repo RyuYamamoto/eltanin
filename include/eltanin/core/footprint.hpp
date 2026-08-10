@@ -60,6 +60,9 @@ public:
   /// Occupancy for the exact footprint check; only a cell at zero distance is the obstacle itself.
   bool is_obstacle(double distance) const noexcept { return !(distance > 0.0); }
 
+  /// The cell value already is the obstacle distance [m]; this is what makes the proximity ramp work.
+  double clearance(double distance) const noexcept { return distance; }
+
 private:
   DistanceTraversabilityModel(double inscribed, double circumscribed, double inflation)
   : inscribed_(inscribed), circumscribed_(circumscribed), inflation_(inflation)
@@ -73,6 +76,8 @@ private:
 
 static_assert(TraversabilityModel<DistanceTraversabilityModel, double>);
 static_assert(ObstacleModel<DistanceTraversabilityModel, double>);
+static_assert(ClearanceModel<DistanceTraversabilityModel, double>);
+static_assert(ClearanceModel<DistanceTraversabilityModel, float>);
 
 }  // namespace eltanin
 

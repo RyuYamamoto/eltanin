@@ -40,6 +40,12 @@ concept ObstacleModel = requires(const Model & model, Cell cell) {
   { model.is_obstacle(cell) } -> std::same_as<bool>;
 };
 
+/// Optional contract for models whose cell value carries the obstacle distance [m] itself.
+template <class Model, class Cell>
+concept ClearanceModel = requires(const Model & model, Cell cell) {
+  { model.clearance(cell) } -> std::same_as<double>;
+};
+
 }  // namespace eltanin
 
 #endif  // ELTANIN__CORE__TRAVERSABILITY_HPP_

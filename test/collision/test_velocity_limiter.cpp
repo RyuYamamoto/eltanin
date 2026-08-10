@@ -33,7 +33,12 @@ using eltanin::Twist2D;
 using eltanin::collision::VelocityLimiter;
 using eltanin::collision::VelocityLimiterParams;
 using eltanin::collision::detail::limit_command;
+using eltanin::collision::detail::proximity_scale;
 using eltanin_test::default_footprint;
+using eltanin_test::distance_scenario;
+using eltanin_test::DistanceScenario;
+using eltanin_test::narrow_footprint;
+using eltanin_test::raw_wall_map;
 using eltanin_test::free_scenario;
 using eltanin_test::make_limiter;
 using eltanin_test::reversed_footprint;
@@ -52,6 +57,14 @@ Pose2D pose_at_cell(int mx, int my, double yaw)
 {
   return Pose2D{
     Vector2d{0.05 * static_cast<double>(mx) + 0.025, 0.05 * static_cast<double>(my) + 0.025}, yaw};
+}
+
+/// The narrow footprint keeps the braking law out of the way so the ramp can be observed alone.
+VelocityLimiter narrow_limiter()
+{
+  VelocityLimiterParams params;
+  params.footprint = narrow_footprint();
+  return make_limiter(params);
 }
 
 void expect_same_result(const VelocityLimiter::Result & a, const VelocityLimiter::Result & b)
@@ -143,6 +156,26 @@ TEST(VelocityLimiterCreate, RejectsInvalidScalars)
   EXPECT_FALSE(VelocityLimiter::create(zero_deceleration).has_value());
 }
 
+TEST(VelocityLimiterCreate, RejectsAnUnusableProximityRamp)
+{
+  VelocityLimiterParams negative_stop;
+  negative_stop.stop_clearance = -0.1;
+  EXPECT_FALSE(VelocityLimiter::create(negative_stop).has_value());
+
+  VelocityLimiterParams inverted;
+  inverted.slow_down_clearance = inverted.stop_clearance;
+  EXPECT_FALSE(VelocityLimiter::create(inverted).has_value());
+
+  // A floor of zero would let the ramp stop the robot, which only the longitudinal laws may do.
+  VelocityLimiterParams zero_floor;
+  zero_floor.min_proximity_scale = 0.0;
+  EXPECT_FALSE(VelocityLimiter::create(zero_floor).has_value());
+
+  VelocityLimiterParams above_one;
+  above_one.min_proximity_scale = 1.5;
+  EXPECT_FALSE(VelocityLimiter::create(above_one).has_value());
+}
+
 TEST(VelocityLimiterCreate, NormalizesTheFootprintToCounterClockwise)
 {
   VelocityLimiterParams clockwise;
@@ -186,6 +219,111 @@ TEST(VelocityLimiterLimit, ReportsTheHorizonItRolledOut)
   EXPECT_LT(slow.horizon, fast.horizon);
 }
 
+TEST(ProximityScale, RampsBetweenTheTwoClearancesAndNeverReachesZero)
+{
+  const VelocityLimiterParams params;
+
+  EXPECT_DOUBLE_EQ(proximity_scale(params, INFINITE_DISTANCE), 1.0);
+  EXPECT_DOUBLE_EQ(proximity_scale(params, params.slow_down_clearance), 1.0);
+  EXPECT_DOUBLE_EQ(proximity_scale(params, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(proximity_scale(params, params.stop_clearance), params.min_proximity_scale);
+  EXPECT_DOUBLE_EQ(proximity_scale(params, 0.0), params.min_proximity_scale);
+  EXPECT_DOUBLE_EQ(proximity_scale(params, -1.0), params.min_proximity_scale);
+
+  const double middle =
+    0.5 * (params.stop_clearance + params.slow_down_clearance);
+  EXPECT_DOUBLE_EQ(
+    proximity_scale(params, middle), 0.5 * (params.min_proximity_scale + 1.0));
+
+  double previous = params.min_proximity_scale;
+  for (int step = 0; step <= 20; ++step) {
+    const double clearance = 0.05 * static_cast<double>(step);
+    const double scale = proximity_scale(params, clearance);
+    EXPECT_GE(scale, params.min_proximity_scale);
+    EXPECT_LE(scale, 1.0);
+    EXPECT_GE(scale, previous);
+    previous = scale;
+  }
+}
+
+TEST(VelocityLimiterLimit, ADistanceMapCarriesAClearanceAndAnOpenMapDoesNotScale)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(false), narrow_footprint());
+  const VelocityLimiter limiter = narrow_limiter();
+  const Twist2D cmd_in = twist(0.3, 0.0);
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(20, 11, 0.0), cmd_in);
+
+  ASSERT_TRUE(result.clearance.has_value());
+  EXPECT_NEAR(
+    *result.clearance, eltanin_test::CLEARANCE_MAX_DISTANCE - limiter.circumscribed_radius(), 1e-6);
+  EXPECT_DOUBLE_EQ(result.proximity_scale, 1.0);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), cmd_in.linear.x());
+}
+
+TEST(VelocityLimiterLimit, TheProximityRampSlowsDownWithoutStopping)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(false), narrow_footprint());
+  const VelocityLimiter limiter = narrow_limiter();
+  const Twist2D cmd_in = twist(-0.3, 0.0);
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(9, 11, 0.0), cmd_in);
+
+  ASSERT_FALSE(result.has_collision);
+  ASSERT_TRUE(result.clearance.has_value());
+  // The sweep runs one braking distance towards the wall, so it is closer than the robot itself.
+  EXPECT_LT(*result.clearance, 0.45 - limiter.circumscribed_radius());
+  EXPECT_LT(result.proximity_scale, 1.0);
+  EXPECT_GT(result.proximity_scale, limiter.params().min_proximity_scale);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), cmd_in.linear.x() * result.proximity_scale);
+  EXPECT_LT(result.command.linear.x(), 0.0);
+}
+
+TEST(VelocityLimiterLimit, ACostMapCarriesNoClearanceAndKeepsTheLawItHad)
+{
+  const CollisionScenario scenario = wall_scenario(false);
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(9, 11, 0.0), twist(-0.3, 0.0));
+
+  EXPECT_FALSE(result.clearance.has_value());
+  EXPECT_DOUBLE_EQ(result.proximity_scale, 1.0);
+}
+
+TEST(VelocityLimiterLimit, TheProximityRampKeepsTheSignAndTheCurvature)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(false), narrow_footprint());
+  const VelocityLimiter limiter = narrow_limiter();
+  const Twist2D cmd_in = twist(-0.3, 0.4);
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(9, 11, 0.0), cmd_in);
+
+  ASSERT_TRUE(result.clearance.has_value());
+  ASSERT_LT(result.proximity_scale, 1.0);
+  EXPECT_LT(result.command.linear.x(), 0.0);
+  EXPECT_GT(result.command.angular, 0.0);
+  EXPECT_DOUBLE_EQ(
+    result.command.angular / result.command.linear.x(), cmd_in.angular / cmd_in.linear.x());
+}
+
+TEST(VelocityLimiterLimit, TheProximityRampSlowsInPlaceRotationWithoutBlockingIt)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(false), narrow_footprint());
+  const VelocityLimiter limiter = narrow_limiter();
+
+  const VelocityLimiter::Result result =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(9, 11, 0.0), twist(0.0, 0.5));
+
+  ASSERT_FALSE(result.has_collision);
+  ASSERT_LT(result.proximity_scale, 1.0);
+  EXPECT_DOUBLE_EQ(result.command.angular, 0.5 * result.proximity_scale);
+  EXPECT_GT(result.command.angular, 0.0);
+}
+
 TEST(VelocityLimiter, RejectsAnEmptyMap)
 {
   const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
@@ -199,7 +337,7 @@ TEST(LimitCommand, LimitsAReverseCommandByItsMagnitude)
 {
   const VelocityLimiterParams params;
   const double v_in = -0.5;
-  const Twist2D limited = limit_command(params, twist(v_in, 0.0), true, 0.4);
+  const Twist2D limited = limit_command(params, twist(v_in, 0.0), true, 0.4, 1.0);
 
   const double v_max = std::sqrt(2.0 * params.max_deceleration * (0.4 - params.collision_margin));
   EXPECT_DOUBLE_EQ(limited.linear.x(), -v_max);
@@ -213,8 +351,8 @@ TEST(LimitCommand, LimitsAReverseCommandByItsMagnitude)
 TEST(LimitCommand, LimitsForwardAndReverseSymmetrically)
 {
   const VelocityLimiterParams params;
-  const Twist2D forward = limit_command(params, twist(0.5, 0.0), true, 0.4);
-  const Twist2D reverse = limit_command(params, twist(-0.5, 0.0), true, 0.4);
+  const Twist2D forward = limit_command(params, twist(0.5, 0.0), true, 0.4, 1.0);
+  const Twist2D reverse = limit_command(params, twist(-0.5, 0.0), true, 0.4, 1.0);
 
   EXPECT_DOUBLE_EQ(forward.linear.x(), std::sqrt(0.2));
   EXPECT_DOUBLE_EQ(reverse.linear.x(), -forward.linear.x());
@@ -225,7 +363,7 @@ TEST(LimitCommand, KeepsTheCurvatureAndTheAngularSign)
   const VelocityLimiterParams params;
   for (const double w_in : {0.4, -0.4}) {
     const Twist2D cmd_in = twist(-0.5, w_in);
-    const Twist2D limited = limit_command(params, cmd_in, true, 0.4);
+    const Twist2D limited = limit_command(params, cmd_in, true, 0.4, 1.0);
 
     EXPECT_DOUBLE_EQ(
       limited.angular, w_in * (limited.linear.x() / cmd_in.linear.x()));
@@ -240,7 +378,7 @@ TEST(LimitCommand, StopsWhenTheCollisionIsInsideTheMargin)
 {
   const VelocityLimiterParams params;
   for (const double v_in : {0.5, -0.5}) {
-    const Twist2D limited = limit_command(params, twist(v_in, 0.3), true, 0.1);
+    const Twist2D limited = limit_command(params, twist(v_in, 0.3), true, 0.1, 1.0);
     EXPECT_DOUBLE_EQ(std::abs(limited.linear.x()), 0.0);
     EXPECT_DOUBLE_EQ(limited.angular, 0.0);
   }
@@ -253,17 +391,17 @@ TEST(LimitCommand, TheReactionTimeBindsInsideTheCrossover)
     2.0 * params.max_deceleration * params.reaction_time * params.reaction_time;
   EXPECT_DOUBLE_EQ(crossover, 0.09);
 
-  const Twist2D near = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.04);
+  const Twist2D near = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.04, 1.0);
   EXPECT_DOUBLE_EQ(near.linear.x(), 0.04 / params.reaction_time);
   EXPECT_LT(near.linear.x(), std::sqrt(2.0 * params.max_deceleration * 0.04));
 
   const Twist2D at_crossover =
-    limit_command(params, twist(0.5, 0.0), true, params.collision_margin + crossover);
+    limit_command(params, twist(0.5, 0.0), true, params.collision_margin + crossover, 1.0);
   EXPECT_DOUBLE_EQ(at_crossover.linear.x(), crossover / params.reaction_time);
   EXPECT_DOUBLE_EQ(
     at_crossover.linear.x(), std::sqrt(2.0 * params.max_deceleration * crossover));
 
-  const Twist2D far = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.25);
+  const Twist2D far = limit_command(params, twist(0.5, 0.0), true, params.collision_margin + 0.25, 1.0);
   EXPECT_DOUBLE_EQ(far.linear.x(), std::sqrt(2.0 * params.max_deceleration * 0.25));
   EXPECT_LT(far.linear.x(), 0.25 / params.reaction_time);
 }
@@ -272,7 +410,7 @@ TEST(LimitCommand, TheReactionTimeCapKeepsTheSignAndTheCurvature)
 {
   const VelocityLimiterParams params;
   const Twist2D cmd_in = twist(-0.5, 0.4);
-  const Twist2D limited = limit_command(params, cmd_in, true, params.collision_margin + 0.04);
+  const Twist2D limited = limit_command(params, cmd_in, true, params.collision_margin + 0.04, 1.0);
 
   EXPECT_DOUBLE_EQ(limited.linear.x(), -0.04 / params.reaction_time);
   EXPECT_DOUBLE_EQ(limited.angular / limited.linear.x(), cmd_in.angular / cmd_in.linear.x());
@@ -282,7 +420,7 @@ TEST(LimitCommand, PassesTheCommandThroughWhenThereIsNoCollision)
 {
   const VelocityLimiterParams params;
   const Twist2D cmd_in = twist(0.05, 0.3);
-  const Twist2D limited = limit_command(params, cmd_in, false, INFINITE_DISTANCE);
+  const Twist2D limited = limit_command(params, cmd_in, false, INFINITE_DISTANCE, 1.0);
 
   EXPECT_DOUBLE_EQ(limited.linear.x(), cmd_in.linear.x());
   EXPECT_DOUBLE_EQ(limited.angular, cmd_in.angular);
@@ -291,7 +429,7 @@ TEST(LimitCommand, PassesTheCommandThroughWhenThereIsNoCollision)
 TEST(LimitCommand, PassesInPlaceRotationThroughWhenThereIsNoCollision)
 {
   const Twist2D limited =
-    limit_command(VelocityLimiterParams{}, twist(0.0, 0.5), false, INFINITE_DISTANCE);
+    limit_command(VelocityLimiterParams{}, twist(0.0, 0.5), false, INFINITE_DISTANCE, 1.0);
 
   EXPECT_DOUBLE_EQ(limited.linear.x(), 0.0);
   EXPECT_DOUBLE_EQ(limited.angular, 0.5);
@@ -299,7 +437,7 @@ TEST(LimitCommand, PassesInPlaceRotationThroughWhenThereIsNoCollision)
 
 TEST(LimitCommand, ZeroesInPlaceRotationOnACollision)
 {
-  const Twist2D limited = limit_command(VelocityLimiterParams{}, twist(0.0, 0.5), true, 0.0);
+  const Twist2D limited = limit_command(VelocityLimiterParams{}, twist(0.0, 0.5), true, 0.0, 1.0);
 
   EXPECT_DOUBLE_EQ(limited.linear.x(), 0.0);
   EXPECT_DOUBLE_EQ(limited.angular, 0.0);
@@ -308,7 +446,7 @@ TEST(LimitCommand, ZeroesInPlaceRotationOnACollision)
 TEST(LimitCommand, IgnoresTheLateralInputAndNeverEmitsIt)
 {
   const Twist2D omni{Vector2d{-0.5, 0.7}, 0.4};
-  const Twist2D limited = limit_command(VelocityLimiterParams{}, omni, true, 0.4);
+  const Twist2D limited = limit_command(VelocityLimiterParams{}, omni, true, 0.4, 1.0);
 
   EXPECT_DOUBLE_EQ(limited.linear.y(), 0.0);
   EXPECT_DOUBLE_EQ(limited.linear.x(), -std::sqrt(0.2));

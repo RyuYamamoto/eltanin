@@ -34,6 +34,10 @@ using eltanin::collision::VelocityLimiter;
 using eltanin::collision::VelocityLimiterParams;
 using eltanin::sim::SimpleSimulator;
 using eltanin_test::default_footprint;
+using eltanin_test::distance_scenario;
+using eltanin_test::DistanceScenario;
+using eltanin_test::narrow_footprint;
+using eltanin_test::raw_corridor_map;
 using eltanin_test::make_limiter;
 using eltanin_test::CollisionScenario;
 using eltanin_test::wall_scenario;
@@ -190,4 +194,28 @@ TEST(VelocityLimiterClosedLoop, InPlaceRotationIsNotBlockedByTheWall)
     plant.update(result.command, CONTROL_DT);
   }
   EXPECT_DOUBLE_EQ(plant.pose().position.x(), pose_at_cell(15, 11, 0.0).position.x());
+}
+
+TEST(VelocityLimiterClosedLoop, ANarrowCorridorIsNotAStop)
+{
+  const DistanceScenario scenario = distance_scenario(raw_corridor_map(0.6), narrow_footprint());
+  VelocityLimiterParams params;
+  params.footprint = narrow_footprint();
+  const VelocityLimiter limiter = make_limiter(params);
+  const Twist2D cmd_in{Vector2d{0.3, 0.0}, 0.0};
+
+  SimpleSimulator plant(Pose2D{Vector2d{0.2, 0.6}, 0.0});
+  for (int cycle = 0; cycle < 30; ++cycle) {
+    const VelocityLimiter::Result result =
+      limiter.limit(scenario.map, scenario.model, plant.pose(), cmd_in);
+    ASSERT_TRUE(result.clearance.has_value()) << "cycle " << cycle;
+    EXPECT_FALSE(result.has_collision) << "cycle " << cycle;
+    EXPECT_GE(result.proximity_scale, params.min_proximity_scale) << "cycle " << cycle;
+    EXPECT_LT(result.proximity_scale, 1.0) << "cycle " << cycle;
+    EXPECT_GT(result.command.linear.x(), 0.0) << "cycle " << cycle;
+    plant.update(result.command, CONTROL_DT);
+  }
+
+  EXPECT_GT(plant.pose().position.x(), 0.4);
+  EXPECT_NEAR(plant.pose().position.y(), 0.6, 1e-12);
 }
