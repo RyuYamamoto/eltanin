@@ -1,7 +1,8 @@
 add_executable(eltanin_test_collision
   test_collision_checker.cpp
   test_velocity_limiter.cpp
-  test_velocity_limiter_closed_loop.cpp)
+  test_velocity_limiter_closed_loop.cpp
+  test_velocity_governor.cpp)
 
 target_link_libraries(eltanin_test_collision PRIVATE
   eltanin::collision eltanin::sim eltanin::map GTest::gtest_main)

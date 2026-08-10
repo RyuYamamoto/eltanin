@@ -1,6 +1,7 @@
 add_library(eltanin_collision STATIC
   collision_checker.cpp
-  velocity_limiter.cpp)
+  velocity_limiter.cpp
+  velocity_governor.cpp)
 add_library(eltanin::collision ALIAS eltanin_collision)
 
 target_compile_features(eltanin_collision PUBLIC cxx_std_20)
