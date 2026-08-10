@@ -32,11 +32,13 @@
 #include <memory>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace
 {
 
 using Eigen::Vector2d;
+using eltanin::Direction;
 using eltanin::Path;
 using eltanin::Pose2D;
 using eltanin::shortest_angular_distance;
@@ -613,7 +615,122 @@ int reversing_steps(const Path & path)
   return count;
 }
 
+/// The same question `reversing_steps` answers, asked of what the search recorded instead.
+int declared_reverse_segments(const Path & path)
+{
+  int count = 0;
+  for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+    if (path.direction_of(i) == Direction::Reverse) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 }  // namespace
+
+TEST(HybridAStarPlanner, TheDeclaredDirectionMatchesWhatTheGeometryShows)
+{
+  // A corridor narrower than the turning diameter, so the drive is a mix of both directions.
+  Costmap map(MapGeometry(120, 60, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 5; mx < 90; ++mx) {
+    for (int my = 26; my < 34; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  const Pose2D start = at_cell(map, 70, 30, 0.0);
+  const Pose2D goal = at_cell(map, 20, 30, std::numbers::pi);
+
+  HybridAStarParams params;
+  params.motion_model.reverse = true;
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(path.has_value());
+  ASSERT_TRUE(path->has_directions());
+  ASSERT_EQ(path->directions().size(), path->size() - 1);
+  ASSERT_GT(declared_reverse_segments(*path), 0);
+  // The search is the answer; the geometric guess only has to agree with it.
+  for (std::size_t i = 0; i + 1 < path->size(); ++i) {
+    const Vector2d delta = (*path)[i + 1].position - (*path)[i].position;
+    if (delta.norm() <= TOLERANCE) {
+      EXPECT_EQ(path->direction_of(i), Direction::InPlace) << "segment " << i;
+      continue;
+    }
+    const Vector2d heading{std::cos((*path)[i].yaw), std::sin((*path)[i].yaw)};
+    const Direction guessed = delta.dot(heading) < 0.0 ? Direction::Reverse : Direction::Forward;
+    EXPECT_EQ(path->direction_of(i), guessed) << "segment " << i;
+  }
+  EXPECT_EQ(declared_reverse_segments(*path), reversing_steps(*path));
+}
+
+TEST(HybridAStarPlanner, AGoalStraightBehindIsDeclaredEntirelyReverse)
+{
+  const Costmap map = open_map(120, 120);
+  const Pose2D start = at_cell(map, 60, 60, 0.0);
+  // Two metres straight behind, facing the same way: every segment of it is driven backwards.
+  const Pose2D goal = at_cell(map, 40, 60, 0.0);
+
+  HybridAStarParams params;
+  params.motion_model.reverse = true;
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(path.has_value());
+  ASSERT_TRUE(path->has_directions());
+  EXPECT_TRUE(path->has_reverse());
+  for (std::size_t i = 0; i + 1 < path->size(); ++i) {
+    EXPECT_EQ(path->direction_of(i), Direction::Reverse) << "segment " << i;
+  }
+  for (std::size_t i = 0; i < path->size(); ++i) {
+    EXPECT_FALSE(path->is_cusp(i)) << "pose " << i;
+  }
+  EXPECT_EQ(path->run_bounds(0), std::make_pair(std::size_t{0}, path->size() - 1));
+}
+
+TEST(HybridAStarPlanner, AForwardOnlyDriveDeclaresNoReverse)
+{
+  const Costmap map = open_map(120, 120);
+  const Pose2D start = at_cell(map, 30, 60, 0.0);
+  const Pose2D goal = at_cell(map, 70, 60, 0.0);
+
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, HybridAStarParams{});
+
+  ASSERT_TRUE(path.has_value());
+  EXPECT_FALSE(path->has_reverse());
+  EXPECT_EQ(declared_reverse_segments(*path), 0);
+}
+
+TEST(HybridAStarPlanner, AReedsSheppDriveDeclaresACuspWhereItSwitches)
+{
+  // A corridor narrower than the turning diameter, so the drive has to switch direction in it.
+  Costmap map(MapGeometry(120, 60, RESOLUTION, Vector2d::Zero()), LETHAL_OBSTACLE);
+  for (int mx = 5; mx < 90; ++mx) {
+    for (int my = 26; my < 34; ++my) {
+      map(mx, my) = FREE_SPACE;
+    }
+  }
+  const Pose2D start = at_cell(map, 70, 30, 0.0);
+  const Pose2D goal = at_cell(map, 20, 30, std::numbers::pi);
+
+  HybridAStarParams params;
+  params.motion_model.reverse = true;
+  const auto path = plan_hybrid_astar(map, make_cost_model(), start, goal, params);
+
+  ASSERT_TRUE(path.has_value()) << to_string(path.error());
+  ASSERT_TRUE(path->has_directions());
+  int cusps = 0;
+  for (std::size_t i = 0; i < path->size(); ++i) {
+    cusps += path->is_cusp(i) ? 1 : 0;
+  }
+  EXPECT_GT(cusps, 0);
+  // A cusp is a pose, so the run it opens starts exactly there.
+  for (std::size_t i = 0; i < path->size(); ++i) {
+    if (!path->is_cusp(i)) {
+      continue;
+    }
+    EXPECT_EQ(path->run_bounds(i).first, i);
+    EXPECT_NE(path->direction_of(i - 1), path->direction_of(i));
+  }
+}
 
 TEST(HybridAStarPlanner, AReedsSheppDriveBacksUpInsteadOfLoopingRound)
 {

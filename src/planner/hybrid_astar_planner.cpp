@@ -198,14 +198,34 @@ bool interior_is_free(
   return true;
 }
 
-std::vector<Pose2D> reconstruct_poses(const std::vector<Node> & nodes, std::uint32_t goal_node)
+Direction direction_of(const Motion & motion) noexcept
+{
+  if (motion.travel_scale > 0.0) {
+    return Direction::Forward;
+  }
+  return motion.travel_scale < 0.0 ? Direction::Reverse : Direction::InPlace;
+}
+
+/// Poses and how each segment between consecutive ones is driven; `directions` is one shorter.
+struct DirectedPoses
 {
   std::vector<Pose2D> poses;
+  std::vector<Direction> directions;
+};
+
+DirectedPoses reconstruct_poses(
+  const std::vector<Node> & nodes, std::uint32_t goal_node, std::span<const Motion> motions)
+{
+  DirectedPoses out;
   for (std::uint32_t node = goal_node; node != INVALID_NODE; node = nodes[node].parent) {
-    poses.push_back(nodes[node].pose);
+    out.poses.push_back(nodes[node].pose);
+    if (nodes[node].mode != START_MODE) {
+      out.directions.push_back(direction_of(motions[nodes[node].mode]));
+    }
   }
-  std::reverse(poses.begin(), poses.end());
-  return poses;
+  std::reverse(out.poses.begin(), out.poses.end());
+  std::reverse(out.directions.begin(), out.directions.end());
+  return out;
 }
 
 template <class Curve>
@@ -224,10 +244,18 @@ bool curve_is_clear(
   return true;
 }
 
+/// The analytic tail; `arrivals[i]` is how the segment that ends at `poses[i]` is driven.
+struct AnalyticTail
+{
+  std::vector<Pose2D> poses;
+  std::vector<Direction> arrivals;
+};
+
 /// Emits poses over (from, to]; rounding the count keeps each interval near output_step.
 template <class Curve>
 void append_segment(
-  std::vector<Pose2D> & samples, const Curve & curve, double from, double to, double output_step)
+  AnalyticTail & tail, const Curve & curve, double from, double to, double output_step,
+  Direction direction)
 {
   const double span = to - from;
   // A run of no length would emit a pose on top of the previous one, which is not a primitive.
@@ -236,8 +264,9 @@ void append_segment(
   }
   const int count = std::max(1, static_cast<int>(std::lround(span / output_step)));
   for (int i = 1; i <= count; ++i) {
-    samples.push_back(
+    tail.poses.push_back(
       curve.sample(from + span * static_cast<double>(i) / static_cast<double>(count)));
+    tail.arrivals.push_back(direction);
   }
 }
 
@@ -255,37 +284,37 @@ double penalised_length(
 }
 
 /// Checked at collision_check_step but emitted at output_step, so the output stays evenly spaced.
-std::optional<std::vector<Pose2D>> try_analytic_expansion(
+std::optional<AnalyticTail> try_analytic_expansion(
   const TraversabilityView & grid, const Pose2D & start, const Pose2D & goal,
   const HybridAStarParams & params, double collision_check_step, double output_step)
 {
   const auto dubins = solve_dubins_path(start, goal, params.motion_model.minimum_turning_radius);
-  const auto forward_tail = [&]() -> std::optional<std::vector<Pose2D>> {
-    std::vector<Pose2D> samples;
+  const auto forward_tail = [&]() -> std::optional<AnalyticTail> {
+    AnalyticTail tail;
     if (!dubins.has_value()) {
       return std::nullopt;
     }
     if (dubins->length() == 0.0) {
-      return samples;
+      return tail;
     }
     if (!curve_is_clear(grid, params.common.footprint, *dubins, collision_check_step)) {
       return std::nullopt;
     }
-    append_segment(samples, *dubins, 0.0, dubins->length(), output_step);
-    return samples;
+    append_segment(tail, *dubins, 0.0, dubins->length(), output_step, Direction::Forward);
+    return tail;
   };
   if (!params.motion_model.reverse) {
     return forward_tail();
   }
 
   const auto reeds_shepp = solve_reeds_shepp_path(start, goal, params.motion_model.minimum_turning_radius);
-  const auto reversing_tail = [&]() -> std::optional<std::vector<Pose2D>> {
-    std::vector<Pose2D> samples;
+  const auto reversing_tail = [&]() -> std::optional<AnalyticTail> {
+    AnalyticTail tail;
     if (!reeds_shepp.has_value()) {
       return std::nullopt;
     }
     if (reeds_shepp->length() == 0.0) {
-      return samples;
+      return tail;
     }
     if (!curve_is_clear(grid, params.common.footprint, *reeds_shepp, collision_check_step)) {
       return std::nullopt;
@@ -300,14 +329,18 @@ std::optional<std::vector<Pose2D>> try_analytic_expansion(
       }
       const int sign = segment.length > 0.0 ? 1 : -1;
       if (direction != 0 && sign != direction) {
-        append_segment(samples, *reeds_shepp, run_start, consumed, output_step);
+        append_segment(
+          tail, *reeds_shepp, run_start, consumed, output_step,
+          direction > 0 ? Direction::Forward : Direction::Reverse);
         run_start = consumed;
       }
       direction = sign;
       consumed += std::abs(segment.length);
     }
-    append_segment(samples, *reeds_shepp, run_start, consumed, output_step);
-    return samples;
+    append_segment(
+      tail, *reeds_shepp, run_start, consumed, output_step,
+      direction < 0 ? Direction::Reverse : Direction::Forward);
+    return tail;
   };
 
   const double infinity = std::numeric_limits<double>::infinity();
@@ -447,26 +480,32 @@ double analytic_expansion_cost(
 
 /// Merges the search poses with the analytic tail, dropping a final segment that came out too short.
 Path attach_analytic_expansion(
-  std::vector<Pose2D> poses, const std::vector<Pose2D> & connection, const Pose2D & goal,
-  double motion_step, bool emit_goal_rotation)
+  DirectedPoses searched, const AnalyticTail & connection, const Pose2D & goal, double motion_step,
+  bool emit_goal_rotation)
 {
-  if (connection.empty()) {
+  std::vector<Pose2D> & poses = searched.poses;
+  std::vector<Direction> & directions = searched.directions;
+  if (connection.poses.empty()) {
     poses[poses.size() - 1] = goal;
-    return Path{std::move(poses)};
+    return Path{std::move(poses), std::move(directions)};
   }
-  const double seam = (connection.front().position - poses.back().position).norm();
-  if (connection.size() == 1 && poses.size() >= 2 && seam < 0.5 * motion_step) {
+  const double seam = (connection.poses.front().position - poses.back().position).norm();
+  if (connection.poses.size() == 1 && poses.size() >= 2 && seam < 0.5 * motion_step) {
     poses.pop_back();
+    directions.pop_back();
   }
-  poses.insert(poses.end(), connection.begin(), connection.end());
+  // The seam is driven the way the tail starts, so its direction comes from the tail, not the search.
+  poses.insert(poses.end(), connection.poses.begin(), connection.poses.end());
+  directions.insert(directions.end(), connection.arrivals.begin(), connection.arrivals.end());
   // Reaching the requested heading is a turn on the spot, so it gets a pose of its own.
   if (emit_goal_rotation && std::abs(shortest_angular_distance(poses.back().yaw, goal.yaw)) >
                            SAME_HEADING) {
     poses.push_back(goal);
+    directions.push_back(Direction::InPlace);
   } else {
     poses[poses.size() - 1] = goal;
   }
-  return Path{std::move(poses)};
+  return Path{std::move(poses), std::move(directions)};
 }
 
 PlanResult search(
@@ -662,11 +701,12 @@ PlanResult search(
         }
         // Scored rather than taken: a tail that hugs a wall must lose to a search that does not.
         const double cost =
-          current.g + analytic_expansion_cost(*connection, current.pose, grid, clearance, params);
+          current.g +
+          analytic_expansion_cost(connection->poses, current.pose, grid, clearance, params);
         if (cost < best_cost) {
           best_cost = cost;
           best_path = attach_analytic_expansion(
-            reconstruct_poses(nodes, current_id), *connection, query.goal, motion_step,
+            reconstruct_poses(nodes, current_id, motions), *connection, query.goal, motion_step,
             params.emit_goal_rotation);
         }
         break;
