@@ -311,9 +311,12 @@ int main(int argc, char ** argv)
        << "cost_scaling_factor " << COST_SCALING_FACTOR << '\n'
        << "requested_speed " << REQUESTED_SPEED << '\n'
        << "control_dt " << CONTROL_DT << '\n'
-       << "prediction_dt " << limiter->prediction_dt() << '\n'
+       << "prediction_dt "
+       << limiter->prediction_dt(Twist2D{Eigen::Vector2d{REQUESTED_SPEED, 0.0}, 0.0}) << '\n'
        << "prediction_steps " << limiter->params().prediction_steps << '\n'
-       << "prediction_time " << limiter->params().prediction_time << '\n'
+       << "reaction_time " << limiter->params().reaction_time << '\n'
+       << "horizon "
+       << limiter->horizon(Twist2D{Eigen::Vector2d{REQUESTED_SPEED, 0.0}, 0.0}) << '\n'
        << "collision_margin " << limiter->params().collision_margin << '\n'
        << "max_deceleration " << limiter->params().max_deceleration << '\n';
 

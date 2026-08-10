@@ -38,10 +38,10 @@ struct VelocityLimiterParams
   Polygon2D footprint{
     Eigen::Vector2d{-0.3, 0.3}, Eigen::Vector2d{-0.3, -0.3}, Eigen::Vector2d{0.3, -0.3},
     Eigen::Vector2d{0.3, 0.3}};
-  /// Number of prediction steps spread over prediction_time.
+  /// Number of prediction steps spread over the derived horizon; the only resolution knob.
   int prediction_steps{10};
-  /// Prediction horizon [s].
-  double prediction_time{2.0};
+  /// Latency budget [s]; the horizon floor at rest and the closing-speed cap near an obstacle.
+  double reaction_time{0.3};
   /// Distance kept in front of the predicted collision [m].
   double collision_margin{0.2};
   /// Deceleration used by the braking-distance law [m/s^2].
@@ -75,6 +75,8 @@ public:
     double collision_distance{std::numeric_limits<double>::infinity()};
     /// Current pose first, the colliding pose last; shorter than prediction_steps + 1 if truncated.
     std::vector<Pose2D> predicted_poses{};
+    /// Prediction horizon [s] this command was rolled out over; see horizon().
+    double horizon{0.0};
   };
 
   /// nullopt when the footprint is degenerate, non-convex, excludes the origin, or a value is bad.
@@ -93,9 +95,15 @@ public:
   /// Counter-clockwise footprint in the base frame; transform() it for visualization.
   const Polygon2D & footprint() const noexcept { return params_.footprint; }
 
-  double prediction_dt() const noexcept
+  /// Horizon [s] derived from physics: the latency budget plus the time this command needs to stop.
+  double horizon(const Twist2D & cmd) const noexcept
   {
-    return params_.prediction_time / static_cast<double>(params_.prediction_steps);
+    return params_.reaction_time + std::abs(cmd.linear.x()) / params_.max_deceleration;
+  }
+
+  double prediction_dt(const Twist2D & cmd) const noexcept
+  {
+    return horizon(cmd) / static_cast<double>(params_.prediction_steps);
   }
 
 private:
@@ -117,8 +125,9 @@ VelocityLimiter::Result VelocityLimiter::limit(
   Result result;
   result.predicted_poses.reserve(static_cast<std::size_t>(params_.prediction_steps) + 1);
   result.predicted_poses.push_back(robot);
+  result.horizon = horizon(cmd_in);
 
-  const double dt = prediction_dt();
+  const double dt = prediction_dt(cmd_in);
   const double step_distance = std::abs(cmd_in.linear.x()) * dt;
   Pose2D pose = robot;
   double travelled = 0.0;

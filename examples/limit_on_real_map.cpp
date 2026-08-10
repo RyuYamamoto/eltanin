@@ -285,6 +285,9 @@ int main(int argc, char ** argv)
     return EXIT_FAILURE;
   }
 
+  // The horizon is derived from the command, so the meta reports it at the speed the tracker aims for.
+  const Twist2D desired_command{Eigen::Vector2d{PurePursuitParams{}.desired_linear_vel, 0.0}, 0.0};
+
   std::vector<VelocityLimiter::Result> dumped;
   std::vector<std::size_t> dumped_cycles;
   const std::vector<Sample> samples =
@@ -345,8 +348,9 @@ int main(int argc, char ** argv)
   meta << "control_dt " << CONTROL_DT << '\n'
        << "dump_every " << DUMP_EVERY << '\n'
        << "prediction_steps " << limiter->params().prediction_steps << '\n'
-       << "prediction_time " << limiter->params().prediction_time << '\n'
-       << "prediction_dt " << limiter->prediction_dt() << '\n'
+       << "reaction_time " << limiter->params().reaction_time << '\n'
+       << "horizon " << limiter->horizon(desired_command) << '\n'
+       << "prediction_dt " << limiter->prediction_dt(desired_command) << '\n'
        << "collision_margin " << limiter->params().collision_margin << '\n'
        << "max_deceleration " << limiter->params().max_deceleration << '\n'
        << "path_poses " << path.size() << '\n'

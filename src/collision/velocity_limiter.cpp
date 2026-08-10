@@ -39,7 +39,7 @@ std::optional<VelocityLimiter> VelocityLimiter::create(const VelocityLimiterPara
   if (params.prediction_steps < 1) {
     return std::nullopt;
   }
-  if (!std::isfinite(params.prediction_time) || params.prediction_time <= 0.0) {
+  if (!std::isfinite(params.reaction_time) || params.reaction_time <= 0.0) {
     return std::nullopt;
   }
   if (!std::isfinite(params.collision_margin) || params.collision_margin < 0.0) {

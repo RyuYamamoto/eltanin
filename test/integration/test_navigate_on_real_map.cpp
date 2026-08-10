@@ -253,7 +253,7 @@ TEST_F(NavigateOnRealMap, WritesEveryOutputFile)
         "circumscribed_cost", "inscribed_radius", "circumscribed_radius", "inflation_radius",
         "planner",
         "control_dt", "sensor_decimation", "local_window_size", "lidar_beams", "lidar_range_max",
-        "raycast_step", "prediction_steps", "prediction_time", "prediction_dt", "collision_margin",
+        "raycast_step", "prediction_steps", "reaction_time", "prediction_dt_at_rest", "collision_margin",
         "max_deceleration", "goal_tolerance", "max_replans", "stop_cycles_to_replan",
         "stall_min_progress", "replan_on_blocked_path", "path_check_distance", "legs",
         "leg", "cycles", "replans", "replans_on_blocked_path", "global_updates",

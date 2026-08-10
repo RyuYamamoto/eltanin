@@ -971,9 +971,9 @@ inline bool write_output_files(
        << "lidar_range_max " << config.lidar_range_max << '\n'
        << "raycast_step " << config.raycast_step_scale * crop.geometry().resolution() << '\n'
        << "prediction_steps " << limits.prediction_steps << '\n'
-       << "prediction_time " << limits.prediction_time << '\n'
-       << "prediction_dt " << limits.prediction_time / static_cast<double>(limits.prediction_steps)
-       << '\n'
+       << "reaction_time " << limits.reaction_time << '\n'
+       << "prediction_dt_at_rest "
+       << limits.reaction_time / static_cast<double>(limits.prediction_steps) << '\n'
        << "collision_margin " << limits.collision_margin << '\n'
        << "max_deceleration " << limits.max_deceleration << '\n'
        << "goal_tolerance " << config.goal_tolerance << '\n'

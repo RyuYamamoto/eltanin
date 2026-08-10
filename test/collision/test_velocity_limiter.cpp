@@ -126,13 +126,13 @@ TEST(VelocityLimiterCreate, RejectsInvalidScalars)
   zero_steps.prediction_steps = 0;
   EXPECT_FALSE(VelocityLimiter::create(zero_steps).has_value());
 
-  VelocityLimiterParams negative_time;
-  negative_time.prediction_time = -1.0;
-  EXPECT_FALSE(VelocityLimiter::create(negative_time).has_value());
+  VelocityLimiterParams negative_reaction;
+  negative_reaction.reaction_time = -1.0;
+  EXPECT_FALSE(VelocityLimiter::create(negative_reaction).has_value());
 
-  VelocityLimiterParams infinite_time;
-  infinite_time.prediction_time = INFINITE_DISTANCE;
-  EXPECT_FALSE(VelocityLimiter::create(infinite_time).has_value());
+  VelocityLimiterParams infinite_reaction;
+  infinite_reaction.reaction_time = INFINITE_DISTANCE;
+  EXPECT_FALSE(VelocityLimiter::create(infinite_reaction).has_value());
 
   VelocityLimiterParams negative_margin;
   negative_margin.collision_margin = -0.1;
@@ -157,9 +157,33 @@ TEST(VelocityLimiterCreate, NormalizesTheFootprintToCounterClockwise)
   EXPECT_DOUBLE_EQ(eltanin::signed_area(unchanged.footprint()), 0.36);
 }
 
-TEST(VelocityLimiterCreate, PredictionStepIsTheHorizonOverTheStepCount)
+TEST(VelocityLimiterCreate, PredictionStepIsTheDerivedHorizonOverTheStepCount)
 {
-  EXPECT_DOUBLE_EQ(make_limiter(VelocityLimiterParams{}).prediction_dt(), 0.2);
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+  const VelocityLimiterParams & params = limiter.params();
+
+  EXPECT_DOUBLE_EQ(limiter.horizon(twist(0.0, 0.9)), params.reaction_time);
+  EXPECT_DOUBLE_EQ(limiter.horizon(twist(0.5, 0.0)), 1.3);
+  EXPECT_DOUBLE_EQ(limiter.horizon(twist(-0.5, 0.0)), limiter.horizon(twist(0.5, 0.0)));
+  EXPECT_LT(limiter.horizon(twist(0.1, 0.0)), limiter.horizon(twist(0.5, 0.0)));
+  EXPECT_DOUBLE_EQ(
+    limiter.prediction_dt(twist(0.5, 0.0)),
+    limiter.horizon(twist(0.5, 0.0)) / static_cast<double>(params.prediction_steps));
+}
+
+TEST(VelocityLimiterLimit, ReportsTheHorizonItRolledOut)
+{
+  const CollisionScenario scenario = free_scenario();
+  const VelocityLimiter limiter = make_limiter(VelocityLimiterParams{});
+
+  const VelocityLimiter::Result slow =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(11, 11, 0.0), twist(0.1, 0.0));
+  const VelocityLimiter::Result fast =
+    limiter.limit(scenario.map, scenario.model, pose_at_cell(11, 11, 0.0), twist(0.3, 0.0));
+
+  EXPECT_DOUBLE_EQ(slow.horizon, limiter.horizon(twist(0.1, 0.0)));
+  EXPECT_DOUBLE_EQ(fast.horizon, limiter.horizon(twist(0.3, 0.0)));
+  EXPECT_LT(slow.horizon, fast.horizon);
 }
 
 TEST(VelocityLimiter, RejectsAnEmptyMap)
@@ -268,10 +292,10 @@ TEST(VelocityLimiterLimit, LimitsAReverseCommandInFrontOfAWall)
     limiter.limit(scenario.map, scenario.model, pose_at_cell(15, 11, 0.0), cmd_in);
 
   EXPECT_TRUE(result.has_collision);
-  EXPECT_DOUBLE_EQ(result.collision_distance, 0.4);
-  EXPECT_DOUBLE_EQ(result.command.linear.x(), -std::sqrt(0.2));
-  ASSERT_EQ(result.predicted_poses.size(), 6u);
-  EXPECT_NEAR(result.predicted_poses.back().position.x(), 0.275, 1e-12);
+  EXPECT_DOUBLE_EQ(result.collision_distance, 0.39);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), -std::sqrt(0.19));
+  ASSERT_EQ(result.predicted_poses.size(), 8u);
+  EXPECT_NEAR(result.predicted_poses.back().position.x(), 0.32, 1e-12);
   // navyu's std::min() would have passed the requested -0.5 straight through.
   EXPECT_LT(std::abs(result.command.linear.x()), std::abs(cmd_in.linear.x()));
 }
@@ -285,9 +309,9 @@ TEST(VelocityLimiterLimit, LimitsAForwardCommandSymmetrically)
     limiter.limit(scenario.map, scenario.model, pose_at_cell(8, 11, 0.0), twist(0.5, 0.0));
 
   EXPECT_TRUE(result.has_collision);
-  EXPECT_DOUBLE_EQ(result.collision_distance, 0.4);
-  EXPECT_DOUBLE_EQ(result.command.linear.x(), std::sqrt(0.2));
-  ASSERT_EQ(result.predicted_poses.size(), 6u);
+  EXPECT_DOUBLE_EQ(result.collision_distance, 0.39);
+  EXPECT_DOUBLE_EQ(result.command.linear.x(), std::sqrt(0.19));
+  ASSERT_EQ(result.predicted_poses.size(), 8u);
 }
 
 TEST(VelocityLimiterLimit, PassesTheCommandThroughOnAFreeMap)
@@ -365,7 +389,7 @@ TEST(VelocityLimiterLimit, ZeroesInPlaceRotationTowardsAnObstacle)
 
 TEST(VelocityLimiterLimit, OnlyTheExactCheckStopsForARawObstacleAhead)
 {
-  const CollisionScenario scenario = uninflated_scenario(5, 0);
+  const CollisionScenario scenario = uninflated_scenario(5, 5);
   const Pose2D robot = pose_at_cell(7, 11, 0.0);
   const Twist2D cmd_in = twist(0.5, 0.0);
 
@@ -378,11 +402,11 @@ TEST(VelocityLimiterLimit, OnlyTheExactCheckStopsForARawObstacleAhead)
     make_limiter(two_stage).limit(scenario.map, scenario.model, robot, cmd_in);
 
   EXPECT_TRUE(exact.has_collision);
-  EXPECT_DOUBLE_EQ(exact.collision_distance, 0.1);
+  EXPECT_DOUBLE_EQ(exact.collision_distance, 0.13);
   EXPECT_DOUBLE_EQ(exact.command.linear.x(), 0.0);
-  EXPECT_EQ(exact.predicted_poses.size(), 3u);
+  EXPECT_EQ(exact.predicted_poses.size(), 4u);
 
-  // No predicted pose lands on the lethal cell (16, 11), so the Free gate hides it every step.
+  // No predicted pose lands on the lethal cell (16, 16), so the Free gate hides it every step.
   EXPECT_FALSE(lenient.has_collision);
   EXPECT_EQ(lenient.collision_distance, INFINITE_DISTANCE);
   EXPECT_DOUBLE_EQ(lenient.command.linear.x(), cmd_in.linear.x());
