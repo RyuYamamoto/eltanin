@@ -592,3 +592,75 @@ TEST(MpcFollower, AReverseRunDoesNotSendItTurningOnTheSpot)
   EXPECT_LE(stationary, 2u);
   EXPECT_NEAR(follower.prediction().yaw_error, 0.0, 0.2);
 }
+
+namespace
+{
+
+/// Forward along x, a turn on the spot at the corner, then reverse back the way it came.
+Path make_spin_between_runs(double spin)
+{
+  std::vector<Pose2D> poses;
+  std::vector<eltanin::Direction> directions;
+  for (std::size_t i = 0; i <= 10; ++i) {
+    poses.push_back(Pose2D{Eigen::Vector2d{0.05 * static_cast<double>(i), 0.0}, 0.0});
+    if (i > 0) {
+      directions.push_back(eltanin::Direction::Forward);
+    }
+  }
+  // The spin shares its position with the pose before it; only the yaw changes.
+  poses.push_back(Pose2D{poses.back().position, spin});
+  directions.push_back(eltanin::Direction::InPlace);
+  for (std::size_t i = 1; i <= 10; ++i) {
+    const double back = 0.5 - 0.05 * static_cast<double>(i);
+    poses.push_back(Pose2D{Eigen::Vector2d{back * std::cos(spin), back * std::sin(spin)}, spin});
+    directions.push_back(eltanin::Direction::Reverse);
+  }
+  return Path{std::move(poses), std::move(directions)};
+}
+
+}  // namespace
+
+TEST(MpcFollowerInPlaceRun, ExecutesTheTurnOnTheSpotInsteadOfSteppingOverIt)
+{
+  // A turn on the spot is a run of zero arc length, which the arc-based cusp test reports as
+  // reached the moment it is taken up. Stepping over it starts the next run a half turn off.
+  const double spin = 1.2;
+  const Path path = make_spin_between_runs(spin);
+  eltanin::control::MpcFollowerParams params;
+  params.min_linear_vel = -0.3;
+  eltanin_test::MpcDriver drive(eltanin_test::make_mpc(params), path);
+
+  Pose2D robot{Eigen::Vector2d{0.5, 0.0}, 0.0};
+  bool turned = false;
+  for (int cycle = 0; cycle < 200; ++cycle) {
+    const std::optional<Twist2D> command = drive(robot, 0.05);
+    if (!command.has_value()) {
+      break;
+    }
+    robot = integrate_differential_drive(robot, *command, 0.05);
+    if (std::abs(normalize_angle(robot.yaw - spin)) <= params.yaw_tolerance) {
+      turned = true;
+      break;
+    }
+  }
+
+  EXPECT_TRUE(turned) << "the body never reached the yaw the in-place run asks for; it is at "
+                      << robot.yaw << " instead of " << spin;
+  EXPECT_NEAR(robot.position.x(), 0.5, 0.02);
+  EXPECT_NEAR(robot.position.y(), 0.0, 0.02);
+}
+
+TEST(MpcFollowerInPlaceRun, TheCommandDuringTheTurnIsAPureRotation)
+{
+  const Path path = make_spin_between_runs(1.2);
+  eltanin::control::MpcFollowerParams params;
+  params.min_linear_vel = -0.3;
+  eltanin_test::MpcDriver drive(eltanin_test::make_mpc(params), path);
+
+  Pose2D robot{Eigen::Vector2d{0.5, 0.0}, 0.0};
+  const std::optional<Twist2D> command = drive(robot, 0.05);
+
+  ASSERT_TRUE(command.has_value());
+  EXPECT_DOUBLE_EQ(command->linear.x(), 0.0);
+  EXPECT_GT(std::abs(command->angular), 0.0);
+}

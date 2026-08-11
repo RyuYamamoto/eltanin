@@ -265,6 +265,36 @@ FollowResult MpcFollower::follow_on_path(
     route, impl.arc_lengths, state.pose.position, impl.progress, impl.run_last);
   impl.progress = projection.index;
 
+  // A turn on the spot has no arc to advance along, so the arc test below is satisfied the moment
+  // the run is taken up and the rotation would be stepped over. It ends on yaw and is driven as one.
+  const auto drive_in_place = [&]() -> std::optional<FollowResult> {
+    if (impl.run.direction != Direction::InPlace) {
+      return std::nullopt;
+    }
+    const double speed = twist_of(state).linear.x();
+    if (std::abs(speed) > STOPPED_SPEED) {
+      const double magnitude = std::max(0.0, std::abs(speed) - params.max_linear_accel * dt);
+      return FollowResult{
+        Twist2D{Eigen::Vector2d{std::copysign(magnitude, speed), 0.0}, 0.0},
+        FollowStatus::Tracking};
+    }
+    const double turn = shortest_angular_distance(route[impl.run_last].yaw, state.pose.yaw);
+    if (!impl.run.has_cusp || std::abs(turn) > params.yaw_tolerance) {
+      impl.observation.yaw_error = turn;
+      return FollowResult{
+        alignment_command(turn, params.max_angular_vel), FollowStatus::Tracking};
+    }
+    impl.take_up_run(impl.run_last);
+    projection = detail::project_on_path(
+      route, impl.arc_lengths, state.pose.position, impl.run_first, impl.run_last);
+    impl.progress = projection.index;
+    return std::nullopt;
+  };
+
+  if (const std::optional<FollowResult> rotating = drive_in_place(); rotating.has_value()) {
+    return *rotating;
+  }
+
   // A cusp is a full stop: the body gives up its speed before it is handed the next run.
   if (impl.run.has_cusp && projection.arc >= impl.arc_lengths[impl.run_last] - impl.run_end_slack) {
     const double speed = twist_of(state).linear.x();
@@ -274,13 +304,20 @@ FollowResult MpcFollower::follow_on_path(
         Twist2D{Eigen::Vector2d{std::copysign(magnitude, speed), 0.0}, 0.0},
         FollowStatus::Tracking};
     }
-    while (impl.run.has_cusp &&
+    // The loop stops at a turn on the spot; the branch above is what executes that one.
+    while (impl.run.has_cusp && impl.run.direction != Direction::InPlace &&
            projection.arc >= impl.arc_lengths[impl.run_last] - impl.run_end_slack) {
       impl.take_up_run(impl.run_last);
       projection = detail::project_on_path(
         route, impl.arc_lengths, state.pose.position, impl.run_first, impl.run_last);
       impl.progress = projection.index;
     }
+  }
+
+  // The loop above stops on a turn on the spot rather than stepping over it; this drives that one
+  // in the cycle it was taken up, instead of spending a cycle commanding nothing.
+  if (const std::optional<FollowResult> rotating = drive_in_place(); rotating.has_value()) {
+    return *rotating;
   }
 
   const double run_speed = impl.run.direction == Direction::Reverse
