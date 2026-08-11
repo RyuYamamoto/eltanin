@@ -314,12 +314,13 @@ FollowResult MpcFollower::follow_on_path(
   }
 
   const Twist2D & measured = twist_of(state);
+  // Into the box the run is driven with, not the union of both gears; update() rejects the rest.
+  const std::pair<double, double> linear_box = impl.problem.linear_bounds(impl.run.direction);
   const Twist2D clamped{
-    Eigen::Vector2d{
-      std::clamp(measured.linear.x(), params.min_linear_vel, params.max_linear_vel), 0.0},
+    Eigen::Vector2d{std::clamp(measured.linear.x(), linear_box.first, linear_box.second), 0.0},
     std::clamp(measured.angular, -params.max_angular_vel, params.max_angular_vel)};
 
-  impl.problem.update(impl.reference, state.pose, clamped);
+  impl.problem.update(impl.reference, state.pose, clamped, impl.run.direction);
   const detail::QpStats stats = impl.solver->solve(
     impl.problem.p_values(), impl.problem.q(), impl.problem.a_values(), impl.problem.lower(),
     impl.problem.upper(), impl.solution);
@@ -338,9 +339,9 @@ FollowResult MpcFollower::follow_on_path(
   impl.stats.consecutive_failures = 0;
 
   const std::size_t input = impl.problem.input_index(0);
+  // The same box the QP was given, so a solution that crossed zero cannot survive the clamp.
   const double linear = std::clamp(
-    impl.reference.linear_vel.front() + impl.solution[input], params.min_linear_vel,
-    params.max_linear_vel);
+    impl.reference.linear_vel.front() + impl.solution[input], linear_box.first, linear_box.second);
   const double angular = std::clamp(
     impl.reference.angular_vel.front() + impl.solution[input + 1], -params.max_angular_vel,
     params.max_angular_vel);

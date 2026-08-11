@@ -227,9 +227,26 @@ void MpcProblem::build_structure()
   }
 }
 
-void MpcProblem::update(
-  const MpcReference & reference, const Pose2D & robot, const Twist2D & measured)
+std::pair<double, double> MpcProblem::linear_bounds(Direction direction) const noexcept
 {
+  // The run says which way the body drives it, so the box must not let the solver cross zero: a
+  // forward run reached by backing up is a plan the planner did not make.
+  switch (direction) {
+    case Direction::Forward:
+      return {0.0, params_.max_linear_vel};
+    case Direction::Reverse:
+      return {std::min(0.0, params_.min_linear_vel), 0.0};
+    case Direction::InPlace:
+      return {0.0, 0.0};
+  }
+  return {params_.min_linear_vel, params_.max_linear_vel};
+}
+
+void MpcProblem::update(
+  const MpcReference & reference, const Pose2D & robot, const Twist2D & measured,
+  Direction direction)
+{
+  const std::pair<double, double> linear = linear_bounds(direction);
   const int n = horizon_;
   const double dt = params_.prediction_dt;
   const double input_weight[2] = {params_.weight_linear_vel, params_.weight_angular_vel};
@@ -339,8 +356,8 @@ void MpcProblem::update(
   for (int j = 0; j < n; ++j) {
     for (int c = 0; c < 2; ++c) {
       const double reference_value = reference_input(j, c);
-      const double low = c == 0 ? params_.min_linear_vel : -params_.max_angular_vel;
-      const double high = c == 0 ? params_.max_linear_vel : params_.max_angular_vel;
+      const double low = c == 0 ? linear.first : -params_.max_angular_vel;
+      const double high = c == 0 ? linear.second : params_.max_angular_vel;
       const auto box = box_row + static_cast<std::size_t>(2 * j + c);
       lower_[box] = low - reference_value;
       upper_[box] = high - reference_value;

@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace eltanin::control::detail
@@ -89,7 +90,12 @@ public:
   }
 
   /// Rewrites every value array in place; `measured` must already sit inside the input box.
-  void update(const MpcReference & reference, const Pose2D & robot, const Twist2D & measured);
+  void update(
+    const MpcReference & reference, const Pose2D & robot, const Twist2D & measured,
+    Direction direction);
+
+  /// Lowest and highest linear velocity the run being driven may be commanded [m/s].
+  [[nodiscard]] std::pair<double, double> linear_bounds(Direction direction) const noexcept;
 
   [[nodiscard]] std::span<const double> p_values() const noexcept { return p_values_; }
   [[nodiscard]] std::span<const double> q() const noexcept { return q_; }

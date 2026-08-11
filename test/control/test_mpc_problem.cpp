@@ -33,6 +33,7 @@ namespace
 using eltanin::cumulative_arc_length;
 using eltanin::integrate_differential_drive;
 using eltanin::Path;
+using eltanin::Direction;
 using eltanin::Pose2D;
 using eltanin::shortest_angular_distance;
 using eltanin::Twist2D;
@@ -229,7 +230,7 @@ TEST(MpcProblem, ThePatternDoesNotMoveWhenTheValuesDo)
   const Path curved = make_arc_path(0.5, std::numbers::pi, 0.05, -1.0);
 
   problem.update(
-    reference_on(straight, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{});
+    reference_on(straight, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{}, Direction::Forward);
   const std::vector<int> p_indices = problem.structure().p_indices;
   const std::vector<int> a_indices = problem.structure().a_indices;
   const std::size_t p_size = problem.p_values().size();
@@ -237,7 +238,7 @@ TEST(MpcProblem, ThePatternDoesNotMoveWhenTheValuesDo)
 
   problem.update(
     reference_on(curved, params, Vector2d{0.1, -0.2}),
-    Pose2D{Vector2d{0.1, -0.2}, 0.4}, Twist2D{Vector2d{0.3, 0.0}, 0.2});
+    Pose2D{Vector2d{0.1, -0.2}, 0.4}, Twist2D{Vector2d{0.3, 0.0}, 0.2}, Direction::Forward);
 
   EXPECT_EQ(problem.structure().p_indices, p_indices);
   EXPECT_EQ(problem.structure().a_indices, a_indices);
@@ -253,7 +254,7 @@ TEST(MpcProblem, TheDynamicsRowsAcceptTheRolledOutReference)
   const Path path = make_arc_path(1.0, std::numbers::pi, 0.05, 1.0);
   const MpcReference reference = reference_on(path, params, Vector2d{0.02, -0.03});
   const Pose2D robot{Vector2d{0.02, -0.03}, 0.05};
-  problem.update(reference, robot, Twist2D{Vector2d{0.2, 0.0}, 0.1});
+  problem.update(reference, robot, Twist2D{Vector2d{0.2, 0.0}, 0.1}, Direction::Forward);
 
   const int n = params.prediction_horizon;
   std::vector<double> z(static_cast<std::size_t>(problem.structure().variables), 0.0);
@@ -300,7 +301,7 @@ TEST(MpcProblem, TheInputBoxIsTheBodyLimitMinusTheReference)
   MpcProblem problem(params);
   const Path path = make_arc_path(1.0, std::numbers::pi, 0.05, 1.0);
   const MpcReference reference = reference_on(path, params, Vector2d{0.0, 0.0});
-  problem.update(reference, Pose2D{}, Twist2D{});
+  problem.update(reference, Pose2D{}, Twist2D{}, Direction::Forward);
 
   const int n = params.prediction_horizon;
   const auto box = static_cast<std::size_t>(3 + 3 * n);
@@ -325,7 +326,7 @@ TEST(MpcProblem, TheFirstRateRowIsMeasuredAgainstTheMeasuredCommand)
   const Path path = make_straight_path(5.0, 0.05);
   const MpcReference reference = reference_on(path, params, Vector2d{0.0, 0.0});
   const Twist2D measured{Vector2d{0.2, 0.0}, -0.1};
-  problem.update(reference, Pose2D{}, measured);
+  problem.update(reference, Pose2D{}, measured, Direction::Forward);
 
   const int n = params.prediction_horizon;
   const auto rate = static_cast<std::size_t>(3 + 5 * n);
@@ -346,7 +347,7 @@ TEST(MpcProblem, TheStateWeightRotatesWithTheReferenceHeading)
   params.terminal_weight_scale = 1.0;
   MpcProblem problem(params);
   const Path path = make_straight_path(5.0, 0.05);
-  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{});
+  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{}, Direction::Forward);
 
   const int first = static_cast<int>(problem.state_index(1));
   EXPECT_NEAR(dense_p(problem, first, first), 2.0 * params.weight_longitudinal, 1e-9);
@@ -357,7 +358,7 @@ TEST(MpcProblem, TheStateWeightRotatesWithTheReferenceHeading)
   const Path sideways{
     Pose2D{Vector2d{0.0, 0.0}, 0.5 * std::numbers::pi},
     Pose2D{Vector2d{0.0, 5.0}, 0.5 * std::numbers::pi}};
-  problem.update(reference_on(sideways, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{});
+  problem.update(reference_on(sideways, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{}, Direction::Forward);
   EXPECT_NEAR(dense_p(problem, first, first), 2.0 * params.weight_lateral, 1e-9);
   EXPECT_NEAR(dense_p(problem, first + 1, first + 1), 2.0 * params.weight_longitudinal, 1e-9);
 }
@@ -367,7 +368,7 @@ TEST(MpcProblem, TheTerminalStateCarriesTheScaledWeight)
   const MpcFollowerParams params = small_params();
   MpcProblem problem(params);
   const Path path = make_straight_path(5.0, 0.05);
-  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{});
+  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{}, Direction::Forward);
 
   const int terminal = static_cast<int>(problem.state_index(params.prediction_horizon));
   EXPECT_NEAR(
@@ -383,7 +384,7 @@ TEST(MpcProblem, TheInputBlockCarriesTheRateCoupling)
   const MpcFollowerParams params = small_params();
   MpcProblem problem(params);
   const Path path = make_straight_path(5.0, 0.05);
-  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{});
+  problem.update(reference_on(path, params, Vector2d{0.0, 0.0}), Pose2D{}, Twist2D{}, Direction::Forward);
 
   const int n = params.prediction_horizon;
   const int first = static_cast<int>(problem.input_index(0));
@@ -474,4 +475,32 @@ TEST(MpcProblem, AReverseRunKeepsTheFeedForwardTurnRate)
     EXPECT_NEAR(reference.angular_vel[index], -reference.linear_vel[index] / 2.0, 1e-3)
       << "step " << k;
   }
+}
+
+TEST(MpcProblemBounds, TheLinearBoxFollowsTheRunAndNeverCrossesZero)
+{
+  MpcFollowerParams params = small_params();
+  params.min_linear_vel = -0.3;
+  params.max_linear_vel = 0.5;
+  const MpcProblem problem(params);
+
+  // A forward run reached by backing up is a plan the planner did not make.
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Forward).first, 0.0);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Forward).second, 0.5);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Reverse).first, -0.3);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Reverse).second, 0.0);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::InPlace).first, 0.0);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::InPlace).second, 0.0);
+}
+
+TEST(MpcProblemBounds, AForwardOnlyConfigurationIsUnchangedByTheRunDirection)
+{
+  MpcFollowerParams params = small_params();
+  params.min_linear_vel = 0.0;
+  const MpcProblem problem(params);
+
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Forward).first, 0.0);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Forward).second, params.max_linear_vel);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Reverse).first, 0.0);
+  EXPECT_DOUBLE_EQ(problem.linear_bounds(Direction::Reverse).second, 0.0);
 }
