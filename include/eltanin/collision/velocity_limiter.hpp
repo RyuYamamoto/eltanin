@@ -110,11 +110,11 @@ double last_free_time(
   return free_time;
 }
 
-/// Smallest clearance outside the circumscribed circle along the braking sweep of this command.
+/// Smallest clearance outside the inscribed circle along the braking sweep of this command.
 template <map::CellMap Map, class Model>
   requires ClearanceModel<Model, typename Map::value_type>
 double swept_clearance(
-  const VelocityLimiterParams & params, double circumscribed_radius, const Map & map,
+  const VelocityLimiterParams & params, double clearance_radius, const Map & map,
   const Model & model, const Pose2D & robot, const Twist2D & cmd_in)
 {
   const map::MapGeometry & geometry = map.geometry();
@@ -135,8 +135,7 @@ double swept_clearance(
     if (!index.has_value()) {
       break;
     }
-    clearance =
-      std::min(clearance, model.clearance(map(index->x, index->y)) - circumscribed_radius);
+    clearance = std::min(clearance, model.clearance(map(index->x, index->y)) - clearance_radius);
   }
   return clearance;
 }
@@ -159,7 +158,7 @@ public:
     double horizon{0.0};
     /// Seconds the requested command would still take to reach the margin; +inf when free or at rest.
     double time_to_collision{std::numeric_limits<double>::infinity()};
-    /// Swept clearance [m] outside the circumscribed circle; nullopt when the map carries no distance.
+    /// Swept clearance [m] outside the inscribed circle; nullopt when the map carries no distance.
     std::optional<double> clearance{};
     /// Factor the proximity ramp applied to the command; 1.0 when nothing slowed it down.
     double proximity_scale{1.0};
@@ -181,8 +180,8 @@ public:
   /// Counter-clockwise footprint in the base frame; transform() it for visualization.
   const Polygon2D & footprint() const noexcept { return params_.footprint; }
 
-  /// Radius [m] of the circle the footprint fits in; the offset the proximity ramp measures from.
-  double circumscribed_radius() const noexcept { return circumscribed_radius_; }
+  /// Radius [m] of the circle inside the footprint; what the proximity ramp measures clearance from.
+  double clearance_radius() const noexcept { return clearance_radius_; }
 
   /// Horizon [s] derived from physics: the latency budget plus the time this command needs to stop.
   double horizon(const Twist2D & cmd) const noexcept
@@ -196,13 +195,13 @@ public:
   }
 
 private:
-  VelocityLimiter(const VelocityLimiterParams & params, double circumscribed_radius)
-  : params_(params), circumscribed_radius_(circumscribed_radius)
+  VelocityLimiter(const VelocityLimiterParams & params, double clearance_radius)
+  : params_(params), clearance_radius_(clearance_radius)
   {
   }
 
   VelocityLimiterParams params_{};
-  double circumscribed_radius_{0.0};
+  double clearance_radius_{0.0};
 };
 
 template <map::CellMap Map, class Model>
@@ -246,7 +245,7 @@ VelocityLimiter::Result VelocityLimiter::limit(
   // Only a distance-valued map carries a clearance, so the cost-map path keeps the law it had.
   if constexpr (ClearanceModel<Model, typename Map::value_type>) {
     result.clearance =
-      detail::swept_clearance(params_, circumscribed_radius_, map, model, robot, cmd_in);
+      detail::swept_clearance(params_, clearance_radius_, map, model, robot, cmd_in);
     result.proximity_scale = detail::proximity_scale(params_, *result.clearance);
   }
 

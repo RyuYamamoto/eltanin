@@ -156,6 +156,21 @@ TEST(VelocityLimiterCreate, RejectsInvalidScalars)
   EXPECT_FALSE(VelocityLimiter::create(zero_deceleration).has_value());
 }
 
+TEST(VelocityLimiterCreate, MeasuresClearanceFromTheInscribedCircle)
+{
+  // The circumscribed circle would read a corridor the body fits through as no room at all: for
+  // the kachaka outline it is 0.266 m against a half width of 0.120 m, so a 0.5 m corridor is
+  // already at the floor of the ramp however the thresholds are set.
+  VelocityLimiterParams params;
+  params.footprint = narrow_footprint();
+  const VelocityLimiter limiter = make_limiter(params);
+
+  const std::optional<double> inscribed = eltanin::inscribed_radius(narrow_footprint());
+  ASSERT_TRUE(inscribed.has_value());
+  EXPECT_DOUBLE_EQ(limiter.clearance_radius(), *inscribed);
+  EXPECT_LT(limiter.clearance_radius(), *eltanin::circumscribed_radius(narrow_footprint()));
+}
+
 TEST(VelocityLimiterCreate, RejectsAnUnusableProximityRamp)
 {
   VelocityLimiterParams negative_stop;
@@ -257,7 +272,7 @@ TEST(VelocityLimiterLimit, ADistanceMapCarriesAClearanceAndAnOpenMapDoesNotScale
 
   ASSERT_TRUE(result.clearance.has_value());
   EXPECT_NEAR(
-    *result.clearance, eltanin_test::CLEARANCE_MAX_DISTANCE - limiter.circumscribed_radius(), 1e-6);
+    *result.clearance, eltanin_test::CLEARANCE_MAX_DISTANCE - limiter.clearance_radius(), 1e-6);
   EXPECT_DOUBLE_EQ(result.proximity_scale, 1.0);
   EXPECT_DOUBLE_EQ(result.command.linear.x(), cmd_in.linear.x());
 }
@@ -274,7 +289,7 @@ TEST(VelocityLimiterLimit, TheProximityRampSlowsDownWithoutStopping)
   ASSERT_FALSE(result.has_collision);
   ASSERT_TRUE(result.clearance.has_value());
   // The sweep runs one braking distance towards the wall, so it is closer than the robot itself.
-  EXPECT_LT(*result.clearance, 0.45 - limiter.circumscribed_radius());
+  EXPECT_LT(*result.clearance, 0.45 - limiter.clearance_radius());
   EXPECT_LT(result.proximity_scale, 1.0);
   EXPECT_GT(result.proximity_scale, limiter.params().min_proximity_scale);
   EXPECT_DOUBLE_EQ(result.command.linear.x(), cmd_in.linear.x() * result.proximity_scale);

@@ -64,14 +64,17 @@ std::optional<VelocityLimiter> VelocityLimiter::create(const VelocityLimiterPara
     return std::nullopt;
   }
 
-  const std::optional<double> circumscribed = eltanin::circumscribed_radius(params.footprint);
-  if (!circumscribed.has_value()) {
+  // The ramp measures the room beside the body, so the circle inside the footprint is the offset.
+  // A circumscribed circle would read a corridor the body fits through as no room at all: on
+  // kachaka it is 0.266 m against a half width of 0.120 m, so a 0.5 m corridor floors the ramp.
+  const std::optional<double> inscribed = eltanin::inscribed_radius(params.footprint);
+  if (!inscribed.has_value()) {
     return std::nullopt;
   }
 
   VelocityLimiterParams normalized = params;
   normalized.footprint = to_counter_clockwise(params.footprint);
-  return VelocityLimiter(normalized, *circumscribed);
+  return VelocityLimiter(normalized, *inscribed);
 }
 
 namespace detail
