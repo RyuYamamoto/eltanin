@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -36,6 +37,10 @@ using eltanin::collision::detail::FirstStage;
 using eltanin_test::boundary_footprint;
 using eltanin_test::boundary_scenario;
 using eltanin_test::default_footprint;
+using eltanin_test::distance_scenario;
+using eltanin_test::DistanceScenario;
+using eltanin_test::narrow_footprint;
+using eltanin_test::raw_wall_map;
 using eltanin_test::free_scenario;
 using eltanin_test::reversed_footprint;
 using eltanin_test::CollisionScenario;
@@ -409,4 +414,41 @@ TEST(ContainsOccupiedCell, ReportsFreeWhenThePolygonMissesTheMap)
     eltanin::transform(default_footprint(), Pose2D{Vector2d{-9.0, -9.0}, 0.0});
 
   EXPECT_FALSE(eltanin::collision::contains_occupied_cell(scenario.map, scenario.model, far_away));
+}
+
+TEST(FootprintClearance, IsZeroWhenTheFootprintCoversTheObstacle)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(true), narrow_footprint());
+  const eltanin::Polygon2D on_wall =
+    eltanin::transform(narrow_footprint(), pose_at_cell(23, 11, 0.05, 0.0));
+
+  EXPECT_DOUBLE_EQ(
+    eltanin::collision::footprint_clearance(scenario.map, scenario.model, on_wall), 0.0);
+}
+
+TEST(FootprintClearance, SeesTheFrontWallACircleAroundTheBodyWouldMiss)
+{
+  // The front reaches 0.237 m ahead of centre, so a wall the inscribed circle (0.12 m) still calls
+  // clear is under the bumper; measuring under the footprint is what makes the markers turn red.
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(true), default_footprint());
+  const eltanin::Polygon2D approaching =
+    eltanin::transform(default_footprint(), pose_at_cell(17, 11, 0.05, 0.0));
+
+  const double under_footprint =
+    eltanin::collision::footprint_clearance(scenario.map, scenario.model, approaching);
+  const double at_centre =
+    scenario.map.get(17, 11).value() - eltanin::inscribed_radius(default_footprint()).value();
+
+  EXPECT_LT(under_footprint, at_centre);
+}
+
+TEST(FootprintClearance, IsInfiniteWhenTheFootprintMissesTheMap)
+{
+  const DistanceScenario scenario = distance_scenario(raw_wall_map(true), narrow_footprint());
+  const eltanin::Polygon2D far_away =
+    eltanin::transform(narrow_footprint(), Pose2D{Vector2d{-9.0, -9.0}, 0.0});
+
+  EXPECT_EQ(
+    eltanin::collision::footprint_clearance(scenario.map, scenario.model, far_away),
+    std::numeric_limits<double>::infinity());
 }

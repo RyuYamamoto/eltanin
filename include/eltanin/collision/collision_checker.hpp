@@ -21,6 +21,8 @@
 #include <eltanin/map/cell_map.hpp>
 #include <eltanin/map/map_geometry.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <span>
 
@@ -89,6 +91,28 @@ bool contains_occupied_cell(const Map & map, const Model & model, const Polygon2
     }
   }
   return false;
+}
+
+/// Smallest obstacle clearance [m] under a world-frame footprint; +inf when it covers no cell.
+template <map::CellMap Map, class Model>
+  requires ClearanceModel<Model, typename Map::value_type>
+double footprint_clearance(const Map & map, const Model & model, const Polygon2D & polygon)
+{
+  const map::MapGeometry & geometry = map.geometry();
+  const std::optional<map::CellRect> rect = cells_covering(geometry, polygon);
+  if (!rect.has_value()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  double clearance = std::numeric_limits<double>::infinity();
+  for (int my = rect->min_y; my <= rect->max_y; ++my) {
+    for (int mx = rect->min_x; mx <= rect->max_x; ++mx) {
+      // The rectangle is already clamped, so the raw accessor replaces the bounds-checked one here.
+      if (contains(polygon, geometry.map_to_world(mx, my))) {
+        clearance = std::min(clearance, model.clearance(map(mx, my)));
+      }
+    }
+  }
+  return clearance;
 }
 
 namespace detail
