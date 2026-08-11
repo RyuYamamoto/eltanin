@@ -605,26 +605,33 @@ PlanResult search(
              ? static_cast<double>(motion.spin_bins) * bin_width
              : travel_of(motion) * motion.curvature_scale / params.motion_model.minimum_turning_radius;
   };
+  // Every full stop costs the same, and a turn on the spot is two of them: the body stops to spin
+  // and stops again to leave. Charging only forward-to-reverse let a spin launder the swap, so the
+  // search could reverse for free by spinning first and cusps piled up in one place.
+  const auto stops_between = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
+    if (previous_mode == START_MODE) {
+      return false;
+    }
+    return detail::motion_stops_between(
+      motions[previous_mode].travel_scale, motions[next_mode].travel_scale);
+  };
   const auto transition_cost = [&](std::uint8_t previous_mode, std::uint8_t next_mode) {
     const Motion & next = motions[next_mode];
+    const double gear_change =
+      stops_between(previous_mode, next_mode) ? params.direction_change_penalty * motion_step : 0.0;
     // A turn on the spot is charged the arc it would have cost at the minimum turning radius.
     if (next.travel_scale == 0.0) {
-      return std::abs(turn_of(next)) * params.motion_model.minimum_turning_radius;
+      return std::abs(turn_of(next)) * params.motion_model.minimum_turning_radius + gear_change;
     }
     // Any curvature costs the same, so a gentle primitive is not a cheaper way to travel.
     double multiplier = 1.0;
     if (next.curvature_scale != 0.0) {
       multiplier += params.steering_penalty;
     }
-    double gear_change = 0.0;
     if (previous_mode != START_MODE && motions[previous_mode].travel_scale != 0.0) {
       const Motion & previous = motions[previous_mode];
       multiplier += params.steering_change_penalty *
                     std::abs(next.curvature_scale - previous.curvature_scale);
-      // Swapping between forward and reverse costs a full stop whatever the geometry says.
-      if (previous.travel_scale * next.travel_scale < 0.0) {
-        gear_change = params.direction_change_penalty * motion_step;
-      }
     }
     if (next.travel_scale < 0.0) {
       multiplier *= params.reverse_penalty;

@@ -72,7 +72,8 @@ struct HybridAStarParams
   double steering_change_penalty{0.10};
   /// Multiplies the cost of driving in reverse; 1 makes it as cheap as going forward.
   double reverse_penalty{2.0};
-  /// Charged once per switch between forward and reverse, as a multiple of one motion step.
+  /// Charged once per full stop, as a multiple of one motion step: a swap between forward and
+  /// reverse is one, and entering or leaving a turn on the spot is one each.
   double direction_change_penalty{2.0};
   ClearanceCost clearance{0.5, 0.4};
   /// Extra cost per metre of travel through the circumscribed band, once the outline lets it in.
@@ -104,6 +105,22 @@ private:
 };
 
 /// Convenience wrapper around HybridAStarPlanner.
+namespace detail
+{
+
+/// Whether the body has to come to a stop between two primitives, given the signed travel of each.
+/// A swap between forward and reverse is one stop, and so is entering or leaving a turn on the
+/// spot: the body cannot spin while it is moving, nor drive off while it is spinning.
+constexpr bool motion_stops_between(double previous_travel, double next_travel) noexcept
+{
+  if (previous_travel * next_travel < 0.0) {
+    return true;
+  }
+  return (previous_travel == 0.0) != (next_travel == 0.0);
+}
+
+}  // namespace detail
+
 template <map::CellMap Map, class Model>
   requires TraversabilityModel<Model, typename Map::value_type>
 PlanResult plan_hybrid_astar(

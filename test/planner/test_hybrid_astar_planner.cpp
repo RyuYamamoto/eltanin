@@ -834,3 +834,24 @@ TEST(HybridAStarPlanner, PlansAtRadiiOneTurnCannotResolveIntoAHeadingBin)
     expect_follows_control_set(*path, params, RESOLUTION);
   }
 }
+
+TEST(HybridAStarStops, ASpinCostsAStopAtEachEndAndCannotLaunderAGearSwap)
+{
+  using eltanin::planner::detail::motion_stops_between;
+  constexpr double forward = 1.0;
+  constexpr double reverse = -1.0;
+  constexpr double spin = 0.0;
+
+  EXPECT_FALSE(motion_stops_between(forward, forward));
+  EXPECT_FALSE(motion_stops_between(reverse, reverse));
+  EXPECT_FALSE(motion_stops_between(spin, spin));
+  EXPECT_TRUE(motion_stops_between(forward, reverse));
+  EXPECT_TRUE(motion_stops_between(reverse, forward));
+
+  // The pair that used to cost nothing: forward -> spin -> reverse charged no stop at all, so a
+  // spin was a free way to change gear and the search piled cusps into one place.
+  EXPECT_TRUE(motion_stops_between(forward, spin));
+  EXPECT_TRUE(motion_stops_between(spin, reverse));
+  EXPECT_TRUE(motion_stops_between(reverse, spin));
+  EXPECT_TRUE(motion_stops_between(spin, forward));
+}

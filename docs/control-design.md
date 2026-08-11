@@ -1339,6 +1339,53 @@ A\* ・costmap・collision・既存テストは 1 行も変わらない。`Pose2
 ### 14.6 検証しなかったこと
 
 - **実機 (kachaka) での後退走行。**§13.16 の項目 3 を参照
-- **経路途中のその場旋回の能動実行。**`Direction::InPlace` は表現できるが回す制御モードは作っていない
 - **`PurePursuit` の後退対応。**拒否するところまでで、後退版の制御則は別の設計になる
 - **`GoalApproach` のオーバーシュート後退リカバリ。**G-4 は維持している
+
+## 15. 実機で見つかった 2 件 (後退走行の続き)
+
+kachaka で `allow_reverse` と `turn_in_place` を両方有効にして走らせたときに出た欠陥である。
+どちらも§14 の設計が「run はすべて正の弧長を持つ」「向きは参照軌道の符号だけで表せる」と
+暗黙に仮定していたことに帰着する。
+
+### 15.1 その場旋回の run は飛び越されていた
+
+§14.6 は「`Direction::InPlace` は表現できるが回す制御モードは作っていない」を**やらなかったこと**
+として挙げていた。ところがプランナは `turn_in_place` が有効なら InPlace セグメントを出すので、
+この欠落はそのまま実行時の欠陥になっていた。
+
+`is_cusp()` は隣接セグメントの向きが違えば cusp なので、`Forward | InPlace | Reverse` は
+**InPlace が独立した run** になる。そしてその run は**弧長がゼロ**である。
+
+```cpp
+run_end_slack = 0.5 * (arc_lengths[run_last] - arc_lengths[run_last - 1]);   // -> 0
+if (run.has_cusp && projection.arc >= arc_lengths[run_last] - run_end_slack) // -> 取り上げた瞬間に真
+```
+
+`take_up_run()` した瞬間に「cusp に着いた」が成立し、直後の `while` が**旋回を実行しないまま
+次の run へ飛び越す**。結果として後退 run を約 π の方位誤差で始め、面内整列が飽和したまま
+参照方位が run 間で飛ぶ。実機では `raw_w` が ±`max_angular_vel` で不連続に符号反転した。
+
+**弧長ゼロの run は弧ではなく yaw で終わらせる。**`drive_in_place()` が InPlace run を
+`alignment_command()` で回し、`route[run_last].yaw` に `yaw_tolerance` 以内で入ったら次の run を
+取り上げる。arc ベースの `while` は InPlace run で止まり、飛び越さない。
+
+### 15.2 QP の線速度箱が run の向きを見ていなかった
+
+`MpcProblem::update()` には run の向きが渡されておらず、入力の箱は常に
+`[min_linear_vel, max_linear_vel]` だった。向きが表現されているのは参照軌道の符号だけである。
+
+**`min_linear_vel < 0` にした瞬間、前進 run の上でも QP は後退を選べる。**ゴール手前で少し
+行き過ぎると下がった方が誤差が小さいので下がり、下がると前に出る。実機では停止時の前後動として
+現れた。後退を有効にした構成でしか出ないのと一致する。
+
+箱は run の向きが決める。
+
+| run の向き | 線速度の箱 |
+|---|---|
+| `Forward` | `[0, max_linear_vel]` |
+| `Reverse` | `[min(0, min_linear_vel), 0]` |
+| `InPlace` | `[0, 0]` |
+
+**セグメントごとの向きを経路に載せた意味は、QP の中でも保たれていなければならない。**
+解を切り戻す最後の `clamp` にも同じ箱を使う。

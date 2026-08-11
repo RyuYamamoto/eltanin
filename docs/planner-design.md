@@ -1020,7 +1020,17 @@ Theta\* は今の基底に載る。視線判定は `TraversabilityView::free(wor
 
 **尖点 (cusp) は必ず 1 つの姿勢として出力する。** 解析接続の出力サンプリングを進行方向が変わる区間ごとに分けたので、隣接 2 姿勢が「進みながら向きも反転する」ことはない。これは §13.15 で導入した `expect_follows_control_set()` が検査している契約そのもので、区間内に尖点を飲み込むと弦長に対して旋回が過大になり検出される。
 
-**後退のコスト。** `reverse_penalty` (既定 2.0) は後退 primitive のコストに掛かる**乗数**である (nav2 SmacPlannerHybrid と同じ意味)。`direction_change_penalty` (既定 2.0) は前後の切り替え 1 回につき `motion_step` の倍数で加算する。
+**後退のコスト。** `reverse_penalty` (既定 2.0) は後退 primitive のコストに掛かる**乗数**である (nav2 SmacPlannerHybrid と同じ意味)。`direction_change_penalty` (既定 2.0) は**停止 1 回につき** `motion_step` の倍数で加算する。
+
+**「停止 1 回」にその場旋回の出入りを含める** (`detail::motion_stops_between`)。当初は前進 ↔ 後退の切り替えだけを課金していたが、その場旋回は `travel_scale == 0` なので
+
+```
+Forward -> InPlace -> Reverse
+```
+
+がどちらの遷移でも「前進 x 後退 < 0」を満たさず、**方向転換ペナルティを 1 度も払わなかった**。`turn_in_place` と `reverse` を両方有効にすると、探索にとって「一度回ってから後退する」方が「そのまま後退する」より安くなり、同じ場所に切り返しが積み上がる。実機で観測された症状がこれである。
+
+物理的には旋回は両端が停止なので、**入るときと出るときにそれぞれ 1 回**課金するのが正しい。結果として `Forward -> InPlace -> Reverse` は停止 2 回、`Forward -> Reverse` は 1 回となり、旋回は後退への近道ではなくなる。
 
 解析接続にも同じ料率を適用した。**ここは実装中に見つけた欠陥である**: 解析接続は探索を打ち切って即座に返すため、素の最短 Reeds-Shepp 解をそのまま採ると `reverse_penalty` が末尾で無視される。`reverse_penalty = 1000` にしても 2 m の後退経路が返ってきた。現在は Dubins 接続と Reeds-Shepp 接続の**ペナルティ込みコストを比較して安い方を先に試す**。
 
