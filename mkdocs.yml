@@ -1,0 +1,60 @@
+site_name: eltanin
+site_description: A non-ROS C++20 library for 2D autonomous navigation
+site_url: https://ryuyamamoto.github.io/eltanin/
+repo_url: https://github.com/RyuYamamoto/eltanin
+repo_name: RyuYamamoto/eltanin
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Guide:
+      - Build and test: build-and-test.md
+      - Examples: examples.md
+      - Using the planners: planner-usage.md
+      - Navigation demo: navigation-demo.md
+
+# Under `mkdocs build --strict` these warnings become errors, so a broken cross-link fails CI.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+plugins:
+  - search:
+      lang:
+        - en
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+
+# The published site is English only. The *-design.md notes are Japanese, so they stay out of the
+# site and are read on GitHub instead; add them back to nav once they are translated.
+exclude_docs: |
+  requirements.txt
+  *-design.md
